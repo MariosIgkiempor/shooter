@@ -14,7 +14,14 @@ Rect :: rl.Rectangle
 PIXEL_WINDOW_HEIGHT :: 180
 SAVE_GAME_PATH :: "data/game_save.json"
 
+ProgramMode :: enum {
+	Playing,
+	Editing,
+}
+
 game: struct {
+	program_mode:  ProgramMode,
+	mouse:         MouseState,
 	window_width:  f32,
 	window_height: f32,
 	window_title:  cstring,
@@ -22,6 +29,10 @@ game: struct {
 	ui_camera:     Camera,
 	player:        Player,
 	tilemap:       Tilemap,
+}
+
+MouseState :: struct {
+	using position: Vec2,
 }
 
 main :: proc() {
@@ -57,18 +68,30 @@ load_game :: proc() {
 		return
 	}
 
+	// the unmarshal above allocates into the temp allocator, which is freed
+	// every frame — re-home the tiles array so the editor can mutate it
+	tiles := make([dynamic]Tile, len(game.tilemap.tiles))
+	copy(tiles[:], game.tilemap.tiles[:])
+	game.tilemap.tiles = tiles
+
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
 		game = {
+			program_mode = .Playing,
 			window_width = 1920 / 2,
 			window_height = 1080 / 2,
 			window_title = "Game",
-			player = {rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32}, animation = animation_create(.Player_Walk)},
-			camera = Camera{target = Vec2{1920 / 4, 1080 / 4}, offset = Vec2{1920 / 4, 1080 / 4}, zoom = 1.0},
-			tilemap = {
-				tile_size = Vec2{16, 16},
-			}
+			player = {
+				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
+				animation = animation_create(.Player_Walk),
+			},
+			camera = Camera {
+				target = Vec2{1920 / 4, 1080 / 4},
+				offset = Vec2{1920 / 4, 1080 / 4},
+				zoom = 1.0,
+			},
+			tilemap = {tile_size = Vec2{16, 16}},
 		}
 	}
 }
@@ -95,13 +118,14 @@ initialize_program :: proc() -> runtime.Context {
 	ctx := context
 	initialize_logger(&ctx)
 	context = ctx // so the rest of initialize_program can log too
-	
+
 	load_game()
-	
+
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
-	
+
 	initialize_renderer()
+	initialize_editor()
 
 	return ctx
 }
@@ -115,34 +139,52 @@ deinitialize_program :: proc() {
 update_game :: proc() {
 	{
 		// update platform state
-		game.window_width = f32(rl.GetScreenWidth())
-		game.window_height = f32(rl.GetScreenHeight())
+		game.window_width = get_screen_width()
+		game.window_height = get_screen_height()
+		game.mouse.position = get_mouse_position()
 	}
 
-	input: Vec2
-
-	if is_key_down(.LEFT) || is_key_down(.A) {
-		input.x -= 1
-	}
-	if is_key_down(.RIGHT) || is_key_down(.D) {
-		input.x += 1
-	}
-	if is_key_down(.UP) || is_key_down(.W) {
-		input.y -= 1
-	}
-	if is_key_down(.DOWN) || is_key_down(.S) {
-		input.y += 1
+	switch game.program_mode {
+	case .Playing:
+		update_game_state()
+	case .Editing:
+		update_editor()
 	}
 
-	if input.x != 0 || input.y != 0 {
-		// Only update animation if there is input.
-		animation_update(&game.player.animation, rl.GetFrameTime())
-		game.player.flip_x = input.x < 0
-	}
+	update_game_state :: proc() {
+		input: Vec2
 
-	input = linalg.normalize0(input)
-	game.player.rect.x += input.x * rl.GetFrameTime() * 100
-	game.player.rect.y += input.y * rl.GetFrameTime() * 100
+		if is_key_down(.LEFT) || is_key_down(.A) {
+			input.x -= 1
+		}
+		if is_key_down(.RIGHT) || is_key_down(.D) {
+			input.x += 1
+		}
+		if is_key_down(.UP) || is_key_down(.W) {
+			input.y -= 1
+		}
+		if is_key_down(.DOWN) || is_key_down(.S) {
+			input.y += 1
+		}
+
+		if input.x != 0 || input.y != 0 {
+			// Only update animation if there is input.
+			animation_update(&game.player.animation, rl.GetFrameTime())
+			game.player.flip_x = input.x < 0
+		}
+
+		if is_key_pressed(.F1) {
+			if game.program_mode == .Playing {
+				game.program_mode = .Editing
+			} else {
+				game.program_mode = .Playing
+			}
+		}
+
+		input = linalg.normalize0(input)
+		game.player.rect.x += input.x * rl.GetFrameTime() * 100
+		game.player.rect.y += input.y * rl.GetFrameTime() * 100
+	}
 }
 
 Player :: struct {
@@ -177,6 +219,10 @@ draw_game :: proc() {
 	{
 		draw_tilemap(&game.tilemap)
 		draw_player(&game.player)
+
+		if game.program_mode == .Editing {
+			draw_editor_world_overlay()
+		}
 	}
 	end_using_camera()
 
@@ -186,9 +232,18 @@ draw_game :: proc() {
 
 	begin_using_camera(game.ui_camera)
 	{
-		draw_text("This would be the UI", {10, 10}, 10)
+		switch game.program_mode {
+		case .Playing:
+			draw_text("Playing", 10, 10, 0, rl.GREEN)
+		case .Editing:
+			draw_text("Editing", 10, 10, 0, rl.ORANGE)
+		}
 	}
 	end_using_camera()
+
+	if game.program_mode == .Editing {
+		draw_editor()
+	}
 
 	end_drawing()
 

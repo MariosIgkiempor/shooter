@@ -50,6 +50,10 @@ draw_rectangle :: proc(rect: Rect, color: Color, origin: Vec2 = {}, rotation: f3
 	rl.DrawRectanglePro(rect, origin, rotation, color)
 }
 
+draw_rectangle_lines :: proc(rect: Rect, color: Color, thickness: f32 = 1) {
+	rl.DrawRectangleLinesEx(rect, thickness, color)
+}
+
 draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2) {
 	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, 0, rl.WHITE)
 }
