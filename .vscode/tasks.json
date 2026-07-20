@@ -15,6 +15,21 @@
         "clear": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Build game (debug)",
+      "type": "shell",
+      "command": "odin run vendor/atlas-builder -out:atlas-builder.bin && odin build . -debug -out:shooter-debug.bin",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }
