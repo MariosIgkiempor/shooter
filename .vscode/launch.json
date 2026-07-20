@@ -5,7 +5,7 @@
       "name": "Debug game",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/shooter-debug.bin",
+      "program": "${workspaceFolder}/build/shooter-debug.bin",
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "Build game (debug)"
     }

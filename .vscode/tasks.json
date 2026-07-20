@@ -19,7 +19,7 @@
     {
       "label": "Build game (debug)",
       "type": "shell",
-      "command": "odin run vendor/atlas-builder -out:atlas-builder.bin && odin build . -debug -out:shooter-debug.bin",
+      "command": "mkdir -p build && odin run vendor/atlas-builder -out:build/atlas-builder.bin && odin build . -debug -out:build/shooter-debug.bin",
       "options": {
         "cwd": "${workspaceFolder}"
       },
