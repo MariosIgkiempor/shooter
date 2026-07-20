@@ -13,7 +13,7 @@ ATLAS_DATA :: #load("data/atlas.png")
 atlas: Texture
 font: Font
 
-init_renderer :: proc() {
+initialize_renderer :: proc() {
 	atlas_image := rl.LoadImageFromMemory(".png", raw_data(ATLAS_DATA), i32(len(ATLAS_DATA)))
 	atlas = rl.LoadTextureFromImage(atlas_image)
 	rl.UnloadImage(atlas_image)
@@ -21,7 +21,7 @@ init_renderer :: proc() {
 	rl.SetShapesTexture(atlas, SHAPES_TEXTURE_RECT)
 }
 
-deinit_renderer :: proc() {
+deinitialize_renderer :: proc() {
 	rl.UnloadTexture(atlas)
 	delete_atlased_font(font)
 }
