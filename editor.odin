@@ -14,6 +14,12 @@ import ui "vendor/ui/ui"
 // commands, so the atlas tiles inside the palette are overlaid afterwards
 // using the rects the layout resolved this frame (layout.element_rects).
 
+// what the editor is editing: tiles themselves, or their collision flags
+EditorMode :: enum {
+	Tiles,
+	Collisions,
+}
+
 EditorTool :: enum {
 	Pencil,
 	Rectangle,
@@ -30,6 +36,7 @@ Palette_Cell :: struct {
 }
 
 editor: struct {
+	mode:          EditorMode,
 	tool:          EditorTool,
 	selected_tile: Vec2i,
 	// whether the pointer was over an editor window last frame; world
@@ -145,6 +152,11 @@ update_editor :: proc() {
 
 	hovered_coord := hovered_tile_coords()
 
+	if editor.mode == .Collisions {
+		update_collisions_mode(hovered_coord)
+		return
+	}
+
 	if editor.tool == .Rectangle {
 		update_rectangle_tool(hovered_coord)
 		return
@@ -165,6 +177,28 @@ update_editor :: proc() {
 		}
 	} else if is_mouse_button_down(.RIGHT) {
 		tilemap_remove_tile(&game.tilemap, hovered_coord)
+	}
+}
+
+// left-drag marks tiles as colliding, right-drag clears them. only existing
+// tiles can collide: painting over an empty spot does nothing
+update_collisions_mode :: proc(hovered_coord: Vec2i) {
+	if editor.ui_hovered {
+		return
+	}
+
+	collides: bool
+	if is_mouse_button_down(.LEFT) {
+		collides = true
+	} else if !is_mouse_button_down(.RIGHT) {
+		return
+	}
+
+	for &tile in game.tilemap.tiles {
+		if tile.world_coords == hovered_coord {
+			tile.collides = collides
+			return
+		}
 	}
 }
 
@@ -241,10 +275,40 @@ tilemap_remove_tile :: proc(tilemap: ^Tilemap, world_coords: Vec2i) {
 	}
 }
 
-// outline of the tile under the cursor, or of the in-flight rectangle drag;
-// call inside the world camera
+COLLIDER_SHADE_COLOR :: Color{230, 41, 55, 110}
+
+tile_world_rect :: proc(coords: Vec2i) -> Rect {
+	tile_size := game.tilemap.tile_size
+
+	return {
+		f32(coords.x) * tile_size.x,
+		f32(coords.y) * tile_size.y,
+		tile_size.x,
+		tile_size.y,
+	}
+}
+
+// collider shading, plus the outline of the tile under the cursor or of the
+// in-flight rectangle drag; call inside the world camera
 draw_editor_world_overlay :: proc() {
 	tile_size := game.tilemap.tile_size
+
+	// the player's collision box, so collider alignment can be eyeballed
+	draw_rectangle_lines(player_collision_rect(&game.player), rl.SKYBLUE, 1)
+
+	if editor.mode == .Collisions {
+		for tile in game.tilemap.tiles {
+			if tile.collides {
+				draw_rectangle(tile_world_rect(tile.world_coords), COLLIDER_SHADE_COLOR)
+			}
+		}
+
+		if !editor.ui_hovered {
+			draw_rectangle_lines(tile_world_rect(hovered_tile_coords()), rl.ORANGE, 1)
+		}
+
+		return
+	}
 
 	if editor.tool == .Rectangle && editor.dragging {
 		min_coord, max_coord := coord_rect(editor.drag_start, hovered_tile_coords())
@@ -263,14 +327,7 @@ draw_editor_world_overlay :: proc() {
 		return
 	}
 
-	coords := hovered_tile_coords()
-	rect := Rect {
-		f32(coords.x) * tile_size.x,
-		f32(coords.y) * tile_size.y,
-		tile_size.x,
-		tile_size.y,
-	}
-
+	rect := tile_world_rect(hovered_tile_coords())
 	draw_rectangle_lines(rect, editor.tool == .Erase ? rl.RED : rl.YELLOW, 1)
 }
 
@@ -326,21 +383,15 @@ editor_window :: proc() {
 		record_ui_hover()
 
 		if ui.row({gap = ui.theme.gap}) {
-			tool_button("Pencil", .Pencil)
-			tool_button("Rect", .Rectangle)
-			tool_button("Erase", .Erase)
-			ui.spacer()
-			ui.text("Tile [{}, {}]", editor.selected_tile.x, editor.selected_tile.y)
+			mode_button("Tiles", .Tiles)
+			mode_button("Collisions", .Collisions)
 		}
 
-		if ui.column({gap = 1}) {
-			for y in 0 ..< TILESET_ROWS {
-				if ui.row({gap = 1}) {
-					for x in 0 ..< TILESET_COLS {
-						palette_cell(x, y)
-					}
-				}
-			}
+		switch editor.mode {
+		case .Tiles:
+			tiles_mode_ui()
+		case .Collisions:
+			collisions_mode_ui()
 		}
 
 		if ui.row({gap = ui.theme.gap}) {
@@ -358,17 +409,46 @@ editor_window :: proc() {
 	}
 }
 
-// like ui.button, but stays highlighted while its tool is selected
-tool_button :: proc(label: string, tool: EditorTool) {
-	selected := editor.tool == tool
+tiles_mode_ui :: proc() {
+	if ui.row({gap = ui.theme.gap}) {
+		tool_button("Pencil", .Pencil)
+		tool_button("Rect", .Rectangle)
+		tool_button("Erase", .Erase)
+		ui.spacer()
+		ui.text("Tile [{}, {}]", editor.selected_tile.x, editor.selected_tile.y)
+	}
+
+	if ui.column({gap = 1}) {
+		for y in 0 ..< TILESET_ROWS {
+			if ui.row({gap = 1}) {
+				for x in 0 ..< TILESET_COLS {
+					palette_cell(x, y)
+				}
+			}
+		}
+	}
+}
+
+collisions_mode_ui :: proc() {
+	collider_count := 0
+	for tile in game.tilemap.tiles {
+		if tile.collides {
+			collider_count += 1
+		}
+	}
+
+	ui.text("Drag to mark colliders, right-drag to clear.")
+	ui.text("Empty spots never collide.")
+	ui.text("Colliders: {}", collider_count)
+}
+
+// like ui.button, but stays highlighted while selected
+selectable_button :: proc(label: string, selected: bool) -> (clicked: bool) {
 	base := selected ? ui.theme.button_active : ui.theme.button
 
 	if layout.node({key = label, padding = {6, 12, 6, 12}, background_color = base}) {
-		hot, active, clicked := layout.get_node_mouse_state()
-
-		if clicked {
-			editor.tool = tool
-		}
+		hot, active: bool
+		hot, active, clicked = layout.get_node_mouse_state()
 
 		if active {
 			layout.get_node(layout.current_open_node()).background_color = ui.theme.button_active
@@ -384,6 +464,20 @@ tool_button :: proc(label: string, tool: EditorTool) {
 				background_color = ui.theme.button_text,
 			},
 		)
+	}
+
+	return
+}
+
+mode_button :: proc(label: string, mode: EditorMode) {
+	if selectable_button(label, editor.mode == mode) {
+		editor.mode = mode
+	}
+}
+
+tool_button :: proc(label: string, tool: EditorTool) {
+	if selectable_button(label, editor.tool == tool) {
+		editor.tool = tool
 	}
 }
 

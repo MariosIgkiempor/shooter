@@ -184,9 +184,65 @@ update_game :: proc() {
 		}
 
 		input = linalg.normalize0(input)
-		game.player.rect.x += input.x * rl.GetFrameTime() * 100
-		game.player.rect.y += input.y * rl.GetFrameTime() * 100
+		move_player(&game.player, &game.tilemap, input * rl.GetFrameTime() * 100)
 	}
+}
+
+// the sprite is drawn with a bottom-center origin, so player.rect.x/y is the
+// anchor at the sprite's feet; the collision box is the drawn sprite's bounds
+// around that anchor, not a top-left rect hanging below it
+player_collision_rect :: proc(player: ^Player) -> Rect {
+	doc := animation_atlas_texture(player.animation).document_size
+
+	return {player.rect.x - doc.x / 2, player.rect.y - doc.y, doc.x, doc.y}
+}
+
+// moves the player, resolving against colliding tiles one axis at a time so
+// the player slides along walls instead of stopping dead on diagonal input
+move_player :: proc(player: ^Player, tilemap: ^Tilemap, delta: Vec2) {
+	box := player_collision_rect(player)
+
+	box.x += delta.x
+
+	for tile in tilemap.tiles {
+		if !tile.collides {
+			continue
+		}
+
+		tile_rect := tile_world_rect(tile.world_coords)
+		if !rl.CheckCollisionRecs(box, tile_rect) {
+			continue
+		}
+
+		if delta.x > 0 {
+			box.x = tile_rect.x - box.width
+		} else if delta.x < 0 {
+			box.x = tile_rect.x + tile_rect.width
+		}
+	}
+
+	box.y += delta.y
+
+	for tile in tilemap.tiles {
+		if !tile.collides {
+			continue
+		}
+
+		tile_rect := tile_world_rect(tile.world_coords)
+		if !rl.CheckCollisionRecs(box, tile_rect) {
+			continue
+		}
+
+		if delta.y > 0 {
+			box.y = tile_rect.y - box.height
+		} else if delta.y < 0 {
+			box.y = tile_rect.y + tile_rect.height
+		}
+	}
+
+	// resolved box back to the bottom-center anchor
+	player.rect.x = box.x + box.width / 2
+	player.rect.y = box.y + box.height
 }
 
 Player :: struct {
@@ -198,6 +254,7 @@ Player :: struct {
 Tile :: struct {
 	atlas_coords: Vec2i,
 	world_coords: Vec2i,
+	collides:     bool,
 }
 
 Tilemap :: struct {
