@@ -11,14 +11,14 @@ deinitialize_logger :: proc() {
 	log.destroy_console_logger(context.logger)
 }
 
-log_info :: proc(args: ..any, loc := #caller_location) {
-	log.info(..args, location = loc)
+log_info :: proc(fmt_str: string, args: ..any, loc := #caller_location) {
+	log.infof(fmt_str, ..args, location = loc)
 }
 
-log_warning :: proc(args: ..any, loc := #caller_location) {
-	log.warn(..args, location = loc)
+log_warning :: proc(fmt_str: string, args: ..any, loc := #caller_location) {
+	log.warnf(fmt_str, ..args, location = loc)
 }
 
-log_error :: proc(args: ..any, loc := #caller_location) {
-	log.error(..args, location = loc)
+log_error :: proc(fmt_str: string, args: ..any, loc := #caller_location) {
+	log.errorf(fmt_str, ..args, location = loc)
 }
