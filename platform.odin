@@ -20,10 +20,21 @@ is_key_pressed :: proc(key: KeyCode) -> bool {
 	return rl.IsKeyPressed(key)
 }
 
+MouseButton :: rl.MouseButton
+
 get_mouse_position :: proc() -> Vec2 {
 	return rl.GetMousePosition()
 }
 
-is_mouse_button_down :: proc(button: rl.MouseButton) -> bool {
+is_mouse_button_down :: proc(button: MouseButton) -> bool {
 	return rl.IsMouseButtonDown(button)
+}
+
+is_mouse_button_pressed :: proc(button: MouseButton) -> bool {
+	return rl.IsMouseButtonPressed(button)
+}
+
+// smooth per-frame scroll deltas; a macbook two-finger swipe lands here
+get_mouse_wheel_move :: proc() -> Vec2 {
+	return rl.GetMouseWheelMoveV()
 }

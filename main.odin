@@ -12,6 +12,7 @@ Vec2i :: [2]i32
 Rect :: rl.Rectangle
 
 PIXEL_WINDOW_HEIGHT :: 180
+GAMEPLAY_ZOOM :: 1.0
 SAVE_GAME_PATH :: "data/game_save.json"
 
 ProgramMode :: enum {
@@ -144,6 +145,15 @@ update_game :: proc() {
 		game.mouse.position = get_mouse_position()
 	}
 
+	// mode toggle lives outside the mode switch so it works in both modes
+	if is_key_pressed(.F1) {
+		if game.program_mode == .Playing {
+			game.program_mode = .Editing
+		} else {
+			game.program_mode = .Playing
+		}
+	}
+
 	switch game.program_mode {
 	case .Playing:
 		update_game_state()
@@ -173,14 +183,6 @@ update_game :: proc() {
 			game.player.flip_x = input.x < 0
 		}
 
-		if is_key_pressed(.F1) {
-			if game.program_mode == .Playing {
-				game.program_mode = .Editing
-			} else {
-				game.program_mode = .Playing
-			}
-		}
-
 		input = linalg.normalize0(input)
 		game.player.rect.x += input.x * rl.GetFrameTime() * 100
 		game.player.rect.y += input.y * rl.GetFrameTime() * 100
@@ -207,13 +209,16 @@ draw_game :: proc() {
 	begin_drawing()
 	clear_background(rl.DARKGRAY)
 
-	update_camera_center_smooth_follow(
-		&game.camera,
-		&game.player,
-		rl.GetFrameTime(),
-		int(game.window_width),
-		int(game.window_height),
-	)
+	// in editor mode the camera is driven by update_editor_camera instead
+	if game.program_mode == .Playing {
+		update_camera_center_smooth_follow(
+			&game.camera,
+			&game.player,
+			rl.GetFrameTime(),
+			int(game.window_width),
+			int(game.window_height),
+		)
+	}
 
 	begin_using_camera(game.camera)
 	{
@@ -306,4 +311,8 @@ update_camera_center_smooth_follow :: proc(
 		speed := max(fractionSpeed * length * (0.1 * length), minSpeed)
 		camera.target = camera.target + diff * (speed * delta / length)
 	}
+
+	// gameplay zoom is independent of the editor's: ease back to it, so
+	// leaving the editor animates the zoom as well as the position
+	camera.zoom = exp_approach(camera.zoom, GAMEPLAY_ZOOM, 8, delta)
 }
