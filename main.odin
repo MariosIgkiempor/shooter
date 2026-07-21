@@ -61,19 +61,13 @@ load_game :: proc() {
 		return
 	}
 
-	json_error := json.unmarshal(file_contents, &game, allocator = context.temp_allocator)
+	json_error := json.unmarshal(file_contents, &game)
 	if json_error != nil {
 		log_error("Couldn't unmarshal save file at `{}`: {}", SAVE_GAME_PATH, json_error)
 		log_info("Initialising new game state instead.")
 		initialize_default_game_state()
 		return
 	}
-
-	// the unmarshal above allocates into the temp allocator, which is freed
-	// every frame — re-home the tiles array so the editor can mutate it
-	tiles := make([dynamic]Tile, len(game.tilemap.tiles))
-	copy(tiles[:], game.tilemap.tiles[:])
-	game.tilemap.tiles = tiles
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
