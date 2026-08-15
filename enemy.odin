@@ -9,6 +9,7 @@ import rl "vendor:raylib"
 MAX_ENEMIES :: 24
 ENEMY_SIZE: i32 = 12
 DEFAULT_SPAWNER_INTERVAL :: 3
+ENEMY_MAX_HEALTH :: 50
 
 Enemy :: struct {
 	using rect: Rect, // bottom-center "feet" anchor, same convention as Player
@@ -16,6 +17,7 @@ Enemy :: struct {
 	flip_x:     bool,
 	behaviour:  Enemy_Behaviour,
 	path:       Path,
+	health:     f32,
 }
 
 // the union variant is the enemy kind; nil means inert (stands still).
@@ -85,6 +87,7 @@ spawn_enemy :: proc(spawner: Spawner) {
 		rect      = {spawner.position.x, spawner.position.y, 0, 0},
 		animation = animation_create(spawner.animation),
 		behaviour = spawner.template,
+		health    = ENEMY_MAX_HEALTH,
 	}
 
 	// fix up template state that is relative to the spawner's position

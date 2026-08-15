@@ -3,6 +3,8 @@ package shooter
 import "base:runtime"
 import "core:c"
 import "core:encoding/json"
+import "core:fmt"
+import "core:math"
 import "core:math/linalg"
 import "core:os"
 import rl "vendor:raylib"
@@ -35,6 +37,7 @@ game: struct {
 	// state spawned from them, so they're never saved
 	spawners:      [dynamic]Spawner,
 	enemies:       [dynamic]Enemy `json:"-"`,
+	bullets:       [dynamic]Bullet `json:"-"`,
 }
 
 MouseState :: struct {
@@ -85,6 +88,7 @@ load_game :: proc() {
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
 				animation = animation_create(.Player_Walk),
+				weapon = weapon_create(.SMG),
 			},
 			camera = Camera {
 				target = Vec2{1920 / 4, 1080 / 4},
@@ -121,6 +125,7 @@ initialize_program :: proc() -> runtime.Context {
 
 	load_game()
 	reset_enemies()
+	reset_bullets()
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -184,6 +189,24 @@ update_game :: proc() {
 
 		input = linalg.normalize0(input)
 		move_actor(&game.player.rect, game.player.animation, &game.tilemap, input * rl.GetFrameTime() * 100)
+
+		update_weapon(&game.player.weapon, rl.GetFrameTime())
+
+		if is_key_pressed(.R) {
+			start_reload(&game.player.weapon)
+		}
+
+		mouse_world := rl.GetScreenToWorld2D(game.mouse.position, game.camera)
+		player_pos := Vec2{game.player.x, game.player.y}
+		game.player.aim_dir = linalg.normalize0(mouse_world - player_pos)
+
+		fire_pressed := game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
+
+		if fire_pressed {
+			try_fire_weapon(&game.player.weapon, player_pos, game.player.aim_dir)
+		}
+
+		update_bullets(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
@@ -251,6 +274,8 @@ Player :: struct {
 	using rect: Rect,
 	animation:  Animation,
 	flip_x:     bool,
+	weapon:     Weapon,
+	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
 }
 
 Tile :: struct {
@@ -285,9 +310,12 @@ draw_game :: proc() {
 		for enemy in game.enemies {
 			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
 			draw_path(enemy.path)
+			draw_health_bar(enemy)
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
+		draw_weapon(game.player)
 		draw_spawners(game.spawners[:])
+		draw_bullets(game.bullets[:])
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()
@@ -304,6 +332,7 @@ draw_game :: proc() {
 		switch game.program_mode {
 		case .Playing:
 			draw_text("Playing", 10, 10, 0, rl.GREEN)
+			draw_weapon_hud(game.player.weapon)
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
@@ -362,6 +391,52 @@ draw_game :: proc() {
 		for spawner in spawners {
 			rl.DrawCircleLinesV(spawner.position, 8, rl.RED)
 			rl.DrawCircleV(spawner.position, 2, rl.RED)
+		}
+	}
+
+	draw_bullets :: proc(bullets: []Bullet) {
+		for bullet in bullets {
+			rl.DrawCircleV(bullet.position, BULLET_RADIUS, rl.YELLOW)
+		}
+	}
+
+	// a short barrel pivoting at roughly chest height, rotated to face the
+	// player's current aim direction - stands in for a weapon sprite until one exists
+	draw_weapon :: proc(player: Player) {
+		WEAPON_LENGTH: f32 = 10
+		WEAPON_THICKNESS: f32 = 3
+
+		doc := animation_atlas_texture(player.animation).document_size
+		pivot := Vec2{player.x, player.y - doc.y / 2}
+		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
+
+		draw_rectangle(
+			{pivot.x, pivot.y, WEAPON_LENGTH, WEAPON_THICKNESS},
+			rl.DARKGRAY,
+			{0, WEAPON_THICKNESS / 2},
+			angle,
+		)
+	}
+
+	draw_health_bar :: proc(enemy: Enemy) {
+		WIDTH: f32 = 16
+		HEIGHT: f32 = 2
+		GAP_ABOVE_SPRITE: f32 = 5
+
+		doc := animation_atlas_texture(enemy.animation).document_size
+		pos := Vec2{enemy.x - WIDTH / 2, enemy.y - doc.y - GAP_ABOVE_SPRITE}
+		fill := WIDTH * clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
+
+		draw_rectangle({pos.x, pos.y, WIDTH, HEIGHT}, rl.BLACK)
+		draw_rectangle({pos.x, pos.y, fill, HEIGHT}, rl.RED)
+	}
+
+	draw_weapon_hud :: proc(weapon: Weapon) {
+		ammo_text := fmt.tprintf("Ammo: {}/{}", weapon.ammo_in_clip, weapon.clip_size)
+		draw_text(ammo_text, {10, 25}, 10, 0, rl.WHITE)
+
+		if weapon.reload_timer > 0 {
+			draw_text("Reloading...", {10, 40}, 10, 0, rl.ORANGE)
 		}
 	}
 }
