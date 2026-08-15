@@ -18,6 +18,7 @@ import ui "vendor/ui/ui"
 EditorMode :: enum {
 	Tiles,
 	Collisions,
+	Spawners,
 }
 
 EditorTool :: enum {
@@ -39,6 +40,8 @@ editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
 	selected_tile: Vec2i,
+	// index into game.spawners; -1 = none selected
+	selected_spawner: int,
 	// whether the pointer was over an editor window last frame; world
 	// painting is suppressed while true
 	ui_hovered:    bool,
@@ -62,6 +65,8 @@ initialize_editor :: proc() {
 
 	// heap, not temp: the array outlives the per-frame free_all
 	editor.palette_cells = make([dynamic]Palette_Cell, 0, TILESET_COLS * TILESET_ROWS)
+
+	editor.selected_spawner = -1
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
@@ -157,6 +162,11 @@ update_editor :: proc() {
 		return
 	}
 
+	if editor.mode == .Spawners {
+		update_spawners_mode(hovered_coord)
+		return
+	}
+
 	if editor.tool == .Rectangle {
 		update_rectangle_tool(hovered_coord)
 		return
@@ -200,6 +210,60 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 			return
 		}
 	}
+}
+
+// left-drag places a Chaser spawner on each cell passed over, right-drag
+// removes the spawner on the hovered cell. one spawner per cell, like tiles
+update_spawners_mode :: proc(hovered_coord: Vec2i) {
+	if editor.ui_hovered {
+		return
+	}
+
+	if is_mouse_button_down(.LEFT) {
+		spawner_place(hovered_coord)
+	} else if is_mouse_button_down(.RIGHT) {
+		spawner_remove(hovered_coord)
+	}
+}
+
+spawner_place :: proc(cell: Vec2i) {
+	for spawner, i in game.spawners {
+		if world_to_cell_coord(spawner.position) == cell {
+			editor.selected_spawner = i
+			return
+		}
+	}
+
+	append(
+		&game.spawners,
+		Spawner {
+			position = cell_center_to_world(cell),
+			interval = DEFAULT_SPAWNER_INTERVAL,
+			animation = .Player_Walk,
+			template = Chaser{speed = 40},
+		},
+	)
+
+	editor.selected_spawner = len(game.spawners) - 1
+}
+
+spawner_remove :: proc(cell: Vec2i) {
+	for spawner, i in game.spawners {
+		if world_to_cell_coord(spawner.position) == cell {
+			last := len(game.spawners) - 1
+			unordered_remove(&game.spawners, i)
+
+			if editor.selected_spawner == i {
+				editor.selected_spawner = -1
+			} else if editor.selected_spawner == last {
+				editor.selected_spawner = i
+			}
+			return
+		}
+	}
+
+	// right-click on empty space with nothing to remove: deselect
+	editor.selected_spawner = -1
 }
 
 // left-drag fills a rectangle with the selected tile, right-drag erases one.
@@ -249,10 +313,8 @@ coord_rect :: proc(a, b: Vec2i) -> (min_coord, max_coord: Vec2i) {
 hovered_tile_coords :: proc() -> Vec2i {
 	world := rl.GetScreenToWorld2D(game.mouse, game.camera)
 
-	return {
-		i32(math.floor(world.x / game.tilemap.tile_size.x)),
-		i32(math.floor(world.y / game.tilemap.tile_size.y)),
-	}
+	cel := world_to_cell_coord(world)
+	return {i32(cel.x), i32(cel.y)}
 }
 
 tilemap_place_tile :: proc(tilemap: ^Tilemap, world_coords, atlas_coords: Vec2i) {
@@ -294,7 +356,7 @@ draw_editor_world_overlay :: proc() {
 	tile_size := game.tilemap.tile_size
 
 	// the player's collision box, so collider alignment can be eyeballed
-	draw_rectangle_lines(player_collision_rect(&game.player), rl.SKYBLUE, 1)
+	draw_rectangle_lines(actor_collision_rect(game.player.rect, game.player.animation), rl.SKYBLUE, 1)
 
 	if editor.mode == .Collisions {
 		for tile in game.tilemap.tiles {
@@ -305,6 +367,18 @@ draw_editor_world_overlay :: proc() {
 
 		if !editor.ui_hovered {
 			draw_rectangle_lines(tile_world_rect(hovered_tile_coords()), rl.ORANGE, 1)
+		}
+
+		return
+	}
+
+	if editor.mode == .Spawners {
+		if !editor.ui_hovered {
+			rl.DrawCircleLinesV(cell_center_to_world(hovered_tile_coords()), 8, rl.ORANGE)
+		}
+
+		if editor.selected_spawner >= 0 && editor.selected_spawner < len(game.spawners) {
+			rl.DrawCircleLinesV(game.spawners[editor.selected_spawner].position, 10, rl.YELLOW)
 		}
 
 		return
@@ -385,6 +459,7 @@ editor_window :: proc() {
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
+			mode_button("Spawners", .Spawners)
 		}
 
 		switch editor.mode {
@@ -392,6 +467,8 @@ editor_window :: proc() {
 			tiles_mode_ui()
 		case .Collisions:
 			collisions_mode_ui()
+		case .Spawners:
+			spawners_mode_ui()
 		}
 
 		if ui.row({gap = ui.theme.gap}) {
@@ -440,6 +517,93 @@ collisions_mode_ui :: proc() {
 	ui.text("Drag to mark colliders, right-drag to clear.")
 	ui.text("Empty spots never collide.")
 	ui.text("Colliders: {}", collider_count)
+}
+
+spawners_mode_ui :: proc() {
+	ui.text("Click to place a spawner, right-click to remove.")
+	ui.text("Spawners: {}", len(game.spawners))
+
+	if editor.selected_spawner < 0 || editor.selected_spawner >= len(game.spawners) {
+		return
+	}
+
+	spawner := &game.spawners[editor.selected_spawner]
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Interval")
+		ui.slider("interval", &spawner.interval, 0.1, 10)
+		ui.text("{:.2f}", spawner.interval)
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Animation")
+		animation_button("None", spawner, .None)
+		animation_button("Walk", spawner, .Player_Walk)
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Template")
+		template_button("Chaser", spawner, Chaser{speed = 40})
+		template_button("Patrol", spawner, Patrol{speed = 40})
+		template_button("Sine Flyer", spawner, Sine_Flyer{speed = 40, amplitude = 20, frequency = 1})
+	}
+
+	switch &b in spawner.template {
+	case Chaser:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("chaser_speed", &b.speed, 0, 300)
+			ui.text("{:.0f}", b.speed)
+		}
+	case Patrol:
+		vec2_slider_row("From", &b.from, -500, 500)
+		vec2_slider_row("To", &b.to, -500, 500)
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("patrol_speed", &b.speed, 0, 300)
+			ui.text("{:.0f}", b.speed)
+		}
+	case Sine_Flyer:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("flyer_speed", &b.speed, 0, 300)
+			ui.text("{:.0f}", b.speed)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Amplitude")
+			ui.slider("flyer_amplitude", &b.amplitude, 0, 200)
+			ui.text("{:.0f}", b.amplitude)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Frequency")
+			ui.slider("flyer_frequency", &b.frequency, 0, 10)
+			ui.text("{:.1f}", b.frequency)
+		}
+	}
+}
+
+// like mode_button/tool_button, but bound to a spawner field rather than
+// editor state
+animation_button :: proc(label: string, spawner: ^Spawner, value: Animation_Name) {
+	if selectable_button(label, spawner.animation == value) {
+		spawner.animation = value
+	}
+}
+
+template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
+	_, is_active := spawner.template.(T)
+	if selectable_button(label, is_active) {
+		spawner.template = value
+	}
+}
+
+vec2_slider_row :: proc(label: string, v: ^Vec2, min, max: f32) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{} X", label)
+		ui.slider(fmt.tprintf("%s_x", label), &v.x, min, max)
+		ui.text("{} Y", label)
+		ui.slider(fmt.tprintf("%s_y", label), &v.y, min, max)
+	}
 }
 
 // like ui.button, but stays highlighted while selected

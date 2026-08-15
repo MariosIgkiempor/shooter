@@ -30,6 +30,11 @@ game: struct {
 	ui_camera:     Camera,
 	player:        Player,
 	tilemap:       Tilemap,
+
+	// spawners are level data and persist; enemies are transient runtime
+	// state spawned from them, so they're never saved
+	spawners:      [dynamic]Spawner,
+	enemies:       [dynamic]Enemy `json:"-"`,
 }
 
 MouseState :: struct {
@@ -115,6 +120,7 @@ initialize_program :: proc() -> runtime.Context {
 	context = ctx // so the rest of initialize_program can log too
 
 	load_game()
+	reset_enemies()
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -139,7 +145,6 @@ update_game :: proc() {
 		game.mouse.position = get_mouse_position()
 	}
 
-	// mode toggle lives outside the mode switch so it works in both modes
 	if is_key_pressed(.F1) {
 		if game.program_mode == .Playing {
 			game.program_mode = .Editing
@@ -178,23 +183,26 @@ update_game :: proc() {
 		}
 
 		input = linalg.normalize0(input)
-		move_player(&game.player, &game.tilemap, input * rl.GetFrameTime() * 100)
+		move_actor(&game.player.rect, game.player.animation, &game.tilemap, input * rl.GetFrameTime() * 100)
+
+		update_spawners(rl.GetFrameTime())
+		update_enemies(rl.GetFrameTime())
 	}
 }
 
-// the sprite is drawn with a bottom-center origin, so player.rect.x/y is the
-// anchor at the sprite's feet; the collision box is the drawn sprite's bounds
-// around that anchor, not a top-left rect hanging below it
-player_collision_rect :: proc(player: ^Player) -> Rect {
-	doc := animation_atlas_texture(player.animation).document_size
+// sprites are drawn with a bottom-center origin, so rect.x/y is the anchor at
+// the actor's feet; the collision box is the drawn sprite's bounds around that
+// anchor, not a top-left rect hanging below it
+actor_collision_rect :: proc(rect: Rect, animation: Animation) -> Rect {
+	doc := animation_atlas_texture(animation).document_size
 
-	return {player.rect.x - doc.x / 2, player.rect.y - doc.y, doc.x, doc.y}
+	return {rect.x - doc.x / 2, rect.y - doc.y, doc.x, doc.y}
 }
 
-// moves the player, resolving against colliding tiles one axis at a time so
-// the player slides along walls instead of stopping dead on diagonal input
-move_player :: proc(player: ^Player, tilemap: ^Tilemap, delta: Vec2) {
-	box := player_collision_rect(player)
+// moves an actor (player or enemy), resolving against colliding tiles one axis
+// at a time so it slides along walls instead of stopping dead on diagonal input
+move_actor :: proc(rect: ^Rect, animation: Animation, tilemap: ^Tilemap, delta: Vec2) {
+	box := actor_collision_rect(rect^, animation)
 
 	box.x += delta.x
 
@@ -235,8 +243,8 @@ move_player :: proc(player: ^Player, tilemap: ^Tilemap, delta: Vec2) {
 	}
 
 	// resolved box back to the bottom-center anchor
-	player.rect.x = box.x + box.width / 2
-	player.rect.y = box.y + box.height
+	rect.x = box.x + box.width / 2
+	rect.y = box.y + box.height
 }
 
 Player :: struct {
@@ -274,7 +282,12 @@ draw_game :: proc() {
 	begin_using_camera(game.camera)
 	{
 		draw_tilemap(&game.tilemap)
-		draw_player(&game.player)
+		for enemy in game.enemies {
+			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
+			draw_path(enemy.path)
+		}
+		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
+		draw_spawners(game.spawners[:])
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()
@@ -303,19 +316,19 @@ draw_game :: proc() {
 
 	end_drawing()
 
-	draw_player :: proc(player: ^Player) {
-		anim_texture := animation_atlas_texture(player.animation)
+	draw_actor :: proc(rect: Rect, animation: Animation, flip_x: bool) {
+		anim_texture := animation_atlas_texture(animation)
 		atlas_rect := anim_texture.rect
 		offset := Vec2{anim_texture.offset_left, anim_texture.offset_top}
 
-		if player.flip_x {
+		if flip_x {
 			atlas_rect.width = -atlas_rect.width
 			offset.x = anim_texture.offset_right
 		}
 
 		dest := Rect {
-			player.rect.x + offset.x,
-			player.rect.y + offset.y,
+			rect.x + offset.x,
+			rect.y + offset.y,
 			anim_texture.rect.width,
 			anim_texture.rect.height,
 		}
@@ -335,6 +348,20 @@ draw_game :: proc() {
 				tilemap.tile_size.y,
 			}
 			draw_atlas_tile(atlas_rect, world_rect, 0)
+		}
+	}
+
+	draw_path :: proc(path: [dynamic]Vec2i) {
+		for cell in path {
+			world := cell_center_to_world(cell)
+			rl.DrawCircleV(world, 4, rl.YELLOW)
+		}
+	}
+
+	draw_spawners :: proc(spawners: []Spawner) {
+		for spawner in spawners {
+			rl.DrawCircleLinesV(spawner.position, 8, rl.RED)
+			rl.DrawCircleV(spawner.position, 2, rl.RED)
 		}
 	}
 }
