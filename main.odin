@@ -7,7 +7,11 @@ import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:os"
+import "core:strings"
 import rl "vendor:raylib"
+
+import layout "vendor/ui"
+import ui "vendor/ui/ui"
 
 Vec2 :: rl.Vector2
 Vec2i :: [2]i32
@@ -33,11 +37,19 @@ game: struct {
 	player:        Player,
 	tilemap:       Tilemap,
 
-	// spawners are level data and persist; enemies are transient runtime
-	// state spawned from them, so they're never saved
+	// spawners are level data and persist; enemies/bullets/xp_orbs are
+	// transient runtime state spawned/created during play, so they're
+	// never saved
 	spawners:      [dynamic]Spawner,
 	enemies:       [dynamic]Enemy `json:"-"`,
 	bullets:       [dynamic]Bullet `json:"-"`,
+	xp_orbs:       [dynamic]Xp_Orb `json:"-"`,
+
+	// true while the level-up modal is open; simulation is paused and only
+	// draw_level_up_ui's buttons are live. never saved - a save taken
+	// mid-modal simply reopens closed, which is fine since no run state is
+	// lost (xp/level are already committed by collect_xp).
+	leveling_up:   bool `json:"-"`,
 }
 
 MouseState :: struct {
@@ -89,6 +101,7 @@ load_game :: proc() {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
 				animation = animation_create(.Player_Walk),
 				weapon = weapon_create(.SMG),
+				level = 1,
 			},
 			camera = Camera {
 				target = Vec2{1920 / 4, 1080 / 4},
@@ -126,6 +139,7 @@ initialize_program :: proc() -> runtime.Context {
 	load_game()
 	reset_enemies()
 	reset_bullets()
+	reset_xp_orbs()
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -166,6 +180,10 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
+		if game.leveling_up {
+			return
+		}
+
 		input: Vec2
 
 		if is_key_down(.LEFT) || is_key_down(.A) {
@@ -207,6 +225,7 @@ update_game :: proc() {
 		}
 
 		update_bullets(rl.GetFrameTime())
+		update_xp_orbs(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
@@ -276,6 +295,32 @@ Player :: struct {
 	flip_x:     bool,
 	weapon:     Weapon,
 	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
+	xp:         int, // progress toward next level; persisted run progression
+	level:      int, // persisted run progression, starts at 1
+}
+
+XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
+XP_LEVEL_GROWTH :: 1.25 // multiplicative growth per level
+
+// xp required to advance from `level` to `level + 1`
+xp_required_for_level :: proc(level: int) -> int {
+	return int(f32(XP_LEVEL_BASE) * math.pow(f32(XP_LEVEL_GROWTH), f32(level - 1)))
+}
+
+// adds xp and, if it crosses the current threshold, levels up and opens the
+// choice modal. XP_ORB_VALUE is always well under XP_LEVEL_BASE, the curve's
+// smallest threshold, so at most one level lands per call - if that
+// invariant ever changes (e.g. a bigger orb value), turn the `if` below into
+// a `for` loop to handle multiple crossings.
+collect_xp :: proc(amount: int) {
+	game.player.xp += amount
+
+	required := xp_required_for_level(game.player.level)
+	if game.player.xp >= required {
+		game.player.xp -= required
+		game.player.level += 1
+		game.leveling_up = true
+	}
 }
 
 Tile :: struct {
@@ -316,6 +361,7 @@ draw_game :: proc() {
 		draw_weapon(game.player)
 		draw_spawners(game.spawners[:])
 		draw_bullets(game.bullets[:])
+		draw_xp_orbs(game.xp_orbs[:])
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()
@@ -333,6 +379,18 @@ draw_game :: proc() {
 		case .Playing:
 			draw_text("Playing", 10, 10, 0, rl.GREEN)
 			draw_weapon_hud(game.player.weapon)
+			draw_text(
+				fmt.tprintf(
+					"Lv {}  XP {}/{}",
+					game.player.level,
+					game.player.xp,
+					xp_required_for_level(game.player.level),
+				),
+				{10, 55},
+				10,
+				0,
+				rl.WHITE,
+			)
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
@@ -341,6 +399,10 @@ draw_game :: proc() {
 
 	if game.program_mode == .Editing {
 		draw_editor()
+	}
+
+	if game.leveling_up {
+		draw_level_up_ui()
 	}
 
 	end_drawing()
@@ -400,6 +462,53 @@ draw_game :: proc() {
 		}
 	}
 
+	draw_xp_orbs :: proc(orbs: []Xp_Orb) {
+		for orb in orbs {
+			rl.DrawCircleV(orb.position, XP_ORB_RADIUS, rl.SKYBLUE)
+		}
+	}
+
+	draw_level_up_ui :: proc() {
+		ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+		ui.begin_frame(game.window_width, game.window_height)
+
+		if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+			if ui.begin("Level Up!") {
+				ui.text("Level {} - choose an upgrade", game.player.level)
+
+				if ui.button("Upgrade Weapon") {
+					upgrade_weapon(&game.player.weapon)
+					game.leveling_up = false
+				}
+				if ui.button("Refill Ammo") {
+					refill_weapon_reserve(&game.player.weapon)
+					game.leveling_up = false
+				}
+				if ui.button("Skip") {
+					game.leveling_up = false
+				}
+			}
+		}
+
+		render_commands := ui.end_frame()
+
+		for cmd in render_commands {
+			switch cmd.kind {
+			case .Rectangle:
+				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
+			case .Text:
+				rl.DrawTextEx(
+					font,
+					strings.clone_to_cstring(cmd.text, context.temp_allocator),
+					rl.Vector2(cmd.pos),
+					f32(cmd.font_size),
+					0,
+					rl.Color(cmd.color),
+				)
+			}
+		}
+	}
+
 	// a short barrel pivoting at roughly chest height, rotated to face the
 	// player's current aim direction - stands in for a weapon sprite until one exists
 	draw_weapon :: proc(player: Player) {
@@ -432,11 +541,18 @@ draw_game :: proc() {
 	}
 
 	draw_weapon_hud :: proc(weapon: Weapon) {
-		ammo_text := fmt.tprintf("Ammo: {}/{}", weapon.ammo_in_clip, weapon.clip_size)
+		ammo_text := fmt.tprintf(
+			"Ammo: {}/{}  Reserve: {}",
+			weapon.ammo_in_clip,
+			weapon.clip_size,
+			weapon.reserve_ammo,
+		)
 		draw_text(ammo_text, {10, 25}, 10, 0, rl.WHITE)
 
 		if weapon.reload_timer > 0 {
 			draw_text("Reloading...", {10, 40}, 10, 0, rl.ORANGE)
+		} else if weapon.ammo_in_clip <= 0 && weapon.reserve_ammo <= 0 {
+			draw_text("Out of ammo!", {10, 40}, 10, 0, rl.RED)
 		}
 	}
 }

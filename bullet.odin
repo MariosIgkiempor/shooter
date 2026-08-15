@@ -65,6 +65,7 @@ update_bullets :: proc(dt: f32) {
 
 			enemy.health -= bullet.damage
 			if enemy.health <= 0 {
+				spawn_xp_orb(Vec2{enemy.x, enemy.y})
 				delete(enemy.path)
 				unordered_remove(&game.enemies, j)
 			}

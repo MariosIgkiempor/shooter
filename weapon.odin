@@ -20,6 +20,7 @@ Weapon :: struct {
 	cooldown_timer:   f32,
 	clip_size:        int,
 	ammo_in_clip:     int,
+	reserve_ammo:     int, // ammo available to reload from; depletes and is not auto-refilled
 	reload_time:      f32,
 	reload_timer:     f32, // > 0 while reloading
 	pellet_count:     int, // 1 for pistol/SMG, >1 for shotgun-style spread
@@ -66,9 +67,12 @@ weapon_presets: [Weapon_Kind]Weapon = {
 	},
 }
 
+WEAPON_STARTING_RESERVE_CLIPS :: 3 // clips worth of reserve ammo a fresh weapon starts with
+
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	w := weapon_presets[kind]
 	w.ammo_in_clip = w.clip_size
+	w.reserve_ammo = w.clip_size * WEAPON_STARTING_RESERVE_CLIPS
 	return w
 }
 
@@ -80,17 +84,38 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32) {
 	if weapon.reload_timer > 0 {
 		weapon.reload_timer -= dt
 		if weapon.reload_timer <= 0 {
-			weapon.ammo_in_clip = weapon.clip_size
+			new_ammo := min(weapon.clip_size, weapon.ammo_in_clip + weapon.reserve_ammo)
+			weapon.reserve_ammo -= new_ammo - weapon.ammo_in_clip
+			weapon.ammo_in_clip = new_ammo
 		}
 	}
 }
 
 start_reload :: proc(weapon: ^Weapon) {
-	if weapon.reload_timer > 0 || weapon.ammo_in_clip == weapon.clip_size {
+	if weapon.reload_timer > 0 || weapon.ammo_in_clip == weapon.clip_size || weapon.reserve_ammo <= 0 {
 		return
 	}
 
 	weapon.reload_timer = weapon.reload_time
+}
+
+WEAPON_UPGRADE_DAMAGE_MULT :: 1.15 // +15% damage per pick
+WEAPON_UPGRADE_FIRE_RATE_MULT :: 1.10 // +10% fire rate per pick
+WEAPON_UPGRADE_CLIP_BONUS :: 1 // +1 clip capacity per pick
+
+// boosts the current weapon's stats in place; stacks across multiple picks
+// over a run (mutation persists via game.player.weapon)
+upgrade_weapon :: proc(weapon: ^Weapon) {
+	weapon.damage *= WEAPON_UPGRADE_DAMAGE_MULT
+	weapon.fire_rate *= WEAPON_UPGRADE_FIRE_RATE_MULT
+	weapon.clip_size += WEAPON_UPGRADE_CLIP_BONUS
+	weapon.ammo_in_clip += WEAPON_UPGRADE_CLIP_BONUS
+}
+
+WEAPON_REFILL_RESERVE_CLIPS :: 2 // clips worth of reserve ammo granted per "Refill Ammo" pick
+
+refill_weapon_reserve :: proc(weapon: ^Weapon) {
+	weapon.reserve_ammo += weapon.clip_size * WEAPON_REFILL_RESERVE_CLIPS
 }
 
 try_fire_weapon :: proc(weapon: ^Weapon, origin, aim_dir: Vec2) {
