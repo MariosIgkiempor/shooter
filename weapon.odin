@@ -67,7 +67,7 @@ weapon_presets: [Weapon_Kind]Weapon = {
 	},
 }
 
-WEAPON_STARTING_RESERVE_CLIPS :: 3 // clips worth of reserve ammo a fresh weapon starts with
+WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
 
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	w := weapon_presets[kind]

@@ -18,7 +18,7 @@ Vec2i :: [2]i32
 Rect :: rl.Rectangle
 
 PIXEL_WINDOW_HEIGHT :: 180
-GAMEPLAY_ZOOM :: 1.0
+GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
 ProgramMode :: enum {
@@ -45,6 +45,7 @@ game: struct {
 	bullets:       [dynamic]Bullet `json:"-"`,
 	enemy_bullets: [dynamic]Enemy_Bullet `json:"-"`,
 	xp_orbs:       [dynamic]Xp_Orb `json:"-"`,
+	particles:     [dynamic]Particle `json:"-"`,
 
 	// true while the level-up modal is open; simulation is paused and only
 	// draw_level_up_ui's buttons are live. never saved - a save taken
@@ -146,6 +147,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_bullets()
 	reset_enemy_bullets()
 	reset_xp_orbs()
+	reset_particles()
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
 	game.player.health = PLAYER_MAX_HEALTH
@@ -236,6 +238,7 @@ update_game :: proc() {
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
 		update_xp_orbs(rl.GetFrameTime())
+		update_particles(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
@@ -317,6 +320,8 @@ PLAYER_MAX_HEALTH :: 100
 
 // applies enemy damage to the player, opening the game-over modal at 0 hp
 damage_player :: proc(amount: f32) {
+	spawn_damage_burst(Vec2{game.player.x, game.player.y})
+
 	game.player.health -= amount
 	if game.player.health <= 0 {
 		game.player.health = 0
@@ -388,6 +393,7 @@ draw_game :: proc() {
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_xp_orbs(game.xp_orbs[:])
+		draw_particles(game.particles[:])
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()
@@ -565,6 +571,7 @@ draw_game :: proc() {
 					clear(&game.bullets)
 					clear(&game.enemy_bullets)
 					clear(&game.xp_orbs)
+					clear(&game.particles)
 					game.player.health = PLAYER_MAX_HEALTH
 					game.game_over = false
 				}
@@ -593,8 +600,8 @@ draw_game :: proc() {
 	// a short barrel pivoting at roughly chest height, rotated to face the
 	// player's current aim direction - stands in for a weapon sprite until one exists
 	draw_weapon :: proc(player: Player) {
-		WEAPON_LENGTH: f32 = 10
-		WEAPON_THICKNESS: f32 = 3
+		WEAPON_LENGTH: f32 = 16
+		WEAPON_THICKNESS: f32 = 5
 
 		doc := animation_atlas_texture(player.animation).document_size
 		pivot := Vec2{player.x, player.y - doc.y / 2}
