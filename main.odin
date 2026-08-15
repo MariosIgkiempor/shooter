@@ -43,6 +43,7 @@ game: struct {
 	spawners:      [dynamic]Spawner,
 	enemies:       [dynamic]Enemy `json:"-"`,
 	bullets:       [dynamic]Bullet `json:"-"`,
+	enemy_bullets: [dynamic]Enemy_Bullet `json:"-"`,
 	xp_orbs:       [dynamic]Xp_Orb `json:"-"`,
 
 	// true while the level-up modal is open; simulation is paused and only
@@ -50,6 +51,10 @@ game: struct {
 	// mid-modal simply reopens closed, which is fine since no run state is
 	// lost (xp/level are already committed by collect_xp).
 	leveling_up:   bool `json:"-"`,
+
+	// true while the game-over modal is open; simulation is paused. never
+	// saved, same rationale as leveling_up.
+	game_over:     bool `json:"-"`,
 }
 
 MouseState :: struct {
@@ -139,7 +144,11 @@ initialize_program :: proc() -> runtime.Context {
 	load_game()
 	reset_enemies()
 	reset_bullets()
+	reset_enemy_bullets()
 	reset_xp_orbs()
+	// runtime combat state, deliberately not persisted (see Player.health) -
+	// reset here so both fresh games and loads start at full health
+	game.player.health = PLAYER_MAX_HEALTH
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -180,7 +189,7 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.leveling_up {
+		if game.leveling_up || game.game_over {
 			return
 		}
 
@@ -225,6 +234,7 @@ update_game :: proc() {
 		}
 
 		update_bullets(rl.GetFrameTime())
+		update_enemy_bullets(rl.GetFrameTime())
 		update_xp_orbs(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
@@ -297,6 +307,21 @@ Player :: struct {
 	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
 	xp:         int, // progress toward next level; persisted run progression
 	level:      int, // persisted run progression, starts at 1
+	// runtime combat state, not persisted (see initialize_program) - a saved
+	// game predating this field would otherwise unmarshal it as 0 and trigger
+	// an instant game-over on load
+	health:     f32 `json:"-"`,
+}
+
+PLAYER_MAX_HEALTH :: 100
+
+// applies enemy damage to the player, opening the game-over modal at 0 hp
+damage_player :: proc(amount: f32) {
+	game.player.health -= amount
+	if game.player.health <= 0 {
+		game.player.health = 0
+		game.game_over = true
+	}
 }
 
 XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
@@ -361,6 +386,7 @@ draw_game :: proc() {
 		draw_weapon(game.player)
 		draw_spawners(game.spawners[:])
 		draw_bullets(game.bullets[:])
+		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_xp_orbs(game.xp_orbs[:])
 
 		if game.program_mode == .Editing {
@@ -391,6 +417,13 @@ draw_game :: proc() {
 				0,
 				rl.WHITE,
 			)
+			draw_text(
+				fmt.tprintf("HP {:.0f}/{}", game.player.health, PLAYER_MAX_HEALTH),
+				{10, 70},
+				10,
+				0,
+				rl.WHITE,
+			)
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
@@ -403,6 +436,10 @@ draw_game :: proc() {
 
 	if game.leveling_up {
 		draw_level_up_ui()
+	}
+
+	if game.game_over {
+		draw_game_over_ui()
 	}
 
 	end_drawing()
@@ -462,6 +499,12 @@ draw_game :: proc() {
 		}
 	}
 
+	draw_enemy_bullets :: proc(bullets: []Enemy_Bullet) {
+		for bullet in bullets {
+			rl.DrawCircleV(bullet.position, BULLET_RADIUS, rl.RED)
+		}
+	}
+
 	draw_xp_orbs :: proc(orbs: []Xp_Orb) {
 		for orb in orbs {
 			rl.DrawCircleV(orb.position, XP_ORB_RADIUS, rl.SKYBLUE)
@@ -486,6 +529,44 @@ draw_game :: proc() {
 				}
 				if ui.button("Skip") {
 					game.leveling_up = false
+				}
+			}
+		}
+
+		render_commands := ui.end_frame()
+
+		for cmd in render_commands {
+			switch cmd.kind {
+			case .Rectangle:
+				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
+			case .Text:
+				rl.DrawTextEx(
+					font,
+					strings.clone_to_cstring(cmd.text, context.temp_allocator),
+					rl.Vector2(cmd.pos),
+					f32(cmd.font_size),
+					0,
+					rl.Color(cmd.color),
+				)
+			}
+		}
+	}
+
+	draw_game_over_ui :: proc() {
+		ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+		ui.begin_frame(game.window_width, game.window_height)
+
+		if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+			if ui.begin("Game Over") {
+				ui.text("You died")
+
+				if ui.button("Restart") {
+					clear(&game.enemies)
+					clear(&game.bullets)
+					clear(&game.enemy_bullets)
+					clear(&game.xp_orbs)
+					game.player.health = PLAYER_MAX_HEALTH
+					game.game_over = false
 				}
 			}
 		}

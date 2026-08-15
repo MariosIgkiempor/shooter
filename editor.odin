@@ -212,7 +212,7 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 	}
 }
 
-// left-drag places a Chaser spawner on each cell passed over, right-drag
+// left-drag places a Melee spawner on each cell passed over, right-drag
 // removes the spawner on the hovered cell. one spawner per cell, like tiles
 update_spawners_mode :: proc(hovered_coord: Vec2i) {
 	if editor.ui_hovered {
@@ -240,7 +240,7 @@ spawner_place :: proc(cell: Vec2i) {
 			position = cell_center_to_world(cell),
 			interval = DEFAULT_SPAWNER_INTERVAL,
 			animation = .Player_Walk,
-			template = Chaser{speed = 40},
+			template = Melee{speed = 40, attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 		},
 	)
 
@@ -543,41 +543,78 @@ spawners_mode_ui :: proc() {
 
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Template")
-		template_button("Chaser", spawner, Chaser{speed = 40})
-		template_button("Patrol", spawner, Patrol{speed = 40})
-		template_button("Sine Flyer", spawner, Sine_Flyer{speed = 40, amplitude = 20, frequency = 1})
+		template_button(
+			"Melee",
+			spawner,
+			Melee{speed = 40, attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		)
+		template_button(
+			"Ranged",
+			spawner,
+			Ranged {
+				speed = 30,
+				min_range = 60,
+				max_range = 120,
+				attack_damage = 8,
+				projectile_speed = 200,
+				fire_rate = 1,
+				bullet_lifetime = 2,
+			},
+		)
 	}
 
 	switch &b in spawner.template {
-	case Chaser:
+	case Melee:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Speed")
-			ui.slider("chaser_speed", &b.speed, 0, 300)
-			ui.text("{:.0f}", b.speed)
-		}
-	case Patrol:
-		vec2_slider_row("From", &b.from, -500, 500)
-		vec2_slider_row("To", &b.to, -500, 500)
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider("patrol_speed", &b.speed, 0, 300)
-			ui.text("{:.0f}", b.speed)
-		}
-	case Sine_Flyer:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider("flyer_speed", &b.speed, 0, 300)
+			ui.slider("melee_speed", &b.speed, 0, 300)
 			ui.text("{:.0f}", b.speed)
 		}
 		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Amplitude")
-			ui.slider("flyer_amplitude", &b.amplitude, 0, 200)
-			ui.text("{:.0f}", b.amplitude)
+			ui.text("Attack Damage")
+			ui.slider("melee_attack_damage", &b.attack_damage, 0, 100)
+			ui.text("{:.0f}", b.attack_damage)
 		}
 		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Frequency")
-			ui.slider("flyer_frequency", &b.frequency, 0, 10)
-			ui.text("{:.1f}", b.frequency)
+			ui.text("Attack Range")
+			ui.slider("melee_attack_range", &b.attack_range, 0, 50)
+			ui.text("{:.0f}", b.attack_range)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Attack Cooldown")
+			ui.slider("melee_attack_cooldown", &b.attack_cooldown, 0.1, 5)
+			ui.text("{:.2f}", b.attack_cooldown)
+		}
+	case Ranged:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("ranged_speed", &b.speed, 0, 300)
+			ui.text("{:.0f}", b.speed)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Min Range")
+			ui.slider("ranged_min_range", &b.min_range, 0, 300)
+			ui.text("{:.0f}", b.min_range)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Max Range")
+			ui.slider("ranged_max_range", &b.max_range, 0, 300)
+			ui.text("{:.0f}", b.max_range)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Attack Damage")
+			ui.slider("ranged_attack_damage", &b.attack_damage, 0, 100)
+			ui.text("{:.0f}", b.attack_damage)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Projectile Speed")
+			ui.slider("ranged_projectile_speed", &b.projectile_speed, 0, 500)
+			ui.text("{:.0f}", b.projectile_speed)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Fire Rate")
+			ui.slider("ranged_fire_rate", &b.fire_rate, 0.1, 10)
+			ui.text("{:.1f}", b.fire_rate)
 		}
 	}
 }
@@ -594,15 +631,6 @@ template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
 	_, is_active := spawner.template.(T)
 	if selectable_button(label, is_active) {
 		spawner.template = value
-	}
-}
-
-vec2_slider_row :: proc(label: string, v: ^Vec2, min, max: f32) {
-	if ui.row({gap = ui.theme.gap}) {
-		ui.text("{} X", label)
-		ui.slider(fmt.tprintf("%s_x", label), &v.x, min, max)
-		ui.text("{} Y", label)
-		ui.slider(fmt.tprintf("%s_y", label), &v.y, min, max)
 	}
 }
 

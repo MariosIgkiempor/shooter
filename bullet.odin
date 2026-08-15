@@ -79,3 +79,44 @@ update_bullets :: proc(dt: f32) {
 		}
 	}
 }
+
+Enemy_Bullet :: struct {
+	position: Vec2,
+	velocity: Vec2,
+	damage:   f32,
+	lifetime: f32, // seconds remaining; despawns at <= 0
+}
+
+reset_enemy_bullets :: proc() {
+	clear(&game.enemy_bullets)
+}
+
+fire_enemy_bullet :: proc(origin, direction: Vec2, ranged: Ranged) {
+	append(
+		&game.enemy_bullets,
+		Enemy_Bullet {
+			position = origin,
+			velocity = direction * ranged.projectile_speed,
+			damage = ranged.attack_damage,
+			lifetime = ranged.bullet_lifetime,
+		},
+	)
+}
+
+update_enemy_bullets :: proc(dt: f32) {
+	#reverse for &bullet, i in game.enemy_bullets {
+		bullet.position += bullet.velocity * dt
+		bullet.lifetime -= dt
+
+		if bullet.lifetime <= 0 {
+			unordered_remove(&game.enemy_bullets, i)
+			continue
+		}
+
+		player_box := actor_collision_rect(game.player.rect, game.player.animation)
+		if rl.CheckCollisionCircleRec(bullet.position, BULLET_RADIUS, player_box) {
+			damage_player(bullet.damage)
+			unordered_remove(&game.enemy_bullets, i)
+		}
+	}
+}

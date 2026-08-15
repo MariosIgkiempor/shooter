@@ -22,36 +22,36 @@ Enemy :: struct {
 
 // the union variant is the enemy kind; nil means inert (stands still).
 //
-// Chaser must stay first: Spawner.template is this union and is now saved to
+// Melee must stay first: Spawner.template is this union and is now saved to
 // disk, but core:encoding/json unmarshals a union by trying each variant in
 // declaration order and keeping the first one that parses without error.
 // Struct fields are optional on decode (missing ones are just left zeroed),
-// so a lone `{"speed":40}` would happily "succeed" as any of these variants
-// - putting Chaser first is what makes it decode back as a Chaser, which is
-// the only variant the editor currently creates spawners for.
+// so a lone `{"speed":40}` would happily "succeed" as either variant -
+// putting Melee first is what makes it decode back as a Melee, which is the
+// default the editor creates spawners with. A spawner explicitly switched to
+// Ranged, saved, and reloaded may decode back as Melee for the same reason.
 Enemy_Behaviour :: union {
-	Chaser,
-	Patrol,
-	Sine_Flyer,
+	Melee,
+	Ranged,
 }
 
-Patrol :: struct {
-	// offsets from the spawner in a template, fixed up to world-space at spawn
-	from, to:   Vec2,
-	speed:      f32,
-	heading_to: bool,
+Melee :: struct {
+	speed:           f32,
+	attack_damage:   f32,
+	attack_range:    f32, // contact distance to land a hit
+	attack_cooldown: f32, // seconds between hits
+	attack_timer:    f32, // runtime countdown, not editor-set
 }
 
-Chaser :: struct {
-	speed: f32,
-}
-
-Sine_Flyer :: struct {
-	origin:    Vec2,
-	speed:     f32, // horizontal drift
-	amplitude: f32,
-	frequency: f32,
-	phase:     f32,
+Ranged :: struct {
+	speed:            f32,
+	min_range:        f32, // retreats if the player is closer than this
+	max_range:        f32, // advances if the player is farther than this
+	attack_damage:    f32,
+	projectile_speed: f32,
+	fire_rate:        f32, // shots/sec while in the min..max band
+	bullet_lifetime:  f32,
+	fire_timer:       f32, // runtime countdown, not editor-set
 }
 
 Spawner :: struct {
@@ -90,73 +90,46 @@ spawn_enemy :: proc(spawner: Spawner) {
 		health    = ENEMY_MAX_HEALTH,
 	}
 
-	// fix up template state that is relative to the spawner's position
-	switch &b in enemy.behaviour {
-	case Patrol:
-		b.from += spawner.position
-		b.to += spawner.position
-	case Sine_Flyer:
-		b.origin = spawner.position
-	case Chaser:
-	case:
-	}
-
 	append(&game.enemies, enemy)
 }
 
 update_enemies :: proc(dt: f32) {
 	inflated_collision_map := build_inflated_collision_map(&game.tilemap, 1)
+	player_pos := Vec2{game.player.x, game.player.y}
+
 	for &enemy in game.enemies {
 		delta: Vec2
 
 		switch &b in enemy.behaviour {
-		case Patrol:
-			target := b.heading_to ? b.to : b.from
-			to_target := target - Vec2{enemy.x, enemy.y}
-			if linalg.length(to_target) < 1 {
-				b.heading_to = !b.heading_to
-			}
-			delta = linalg.normalize0(to_target) * b.speed * dt
-		case Chaser:
-			enemy_cell := world_to_cell_coord(Vec2{enemy.x, enemy.y})
+		case Melee:
+			delta = chase_to(&enemy, inflated_collision_map, player_pos, b.speed, dt)
 
-			enemy_path, ok := find_path(
-				inflated_collision_map,
-				enemy_cell,
-				world_to_cell_coord(Vec2{game.player.x, game.player.y}),
-			)
-			if ok {
-				delete(enemy.path)
-				enemy.path = enemy_path
-			} else {
-				enemy.path = {}
-			}
+			dist_to_player := linalg.distance(Vec2{enemy.x, enemy.y}, player_pos)
+			b.attack_timer -= dt
 
-			path_index := 0
-			ARRIVE_RADIUS: f32 = 4.0
-			for path_index < len(enemy.path) &&
-			    linalg.distance(
-				    cell_center_to_world(enemy.path[path_index]),
-				    Vec2{enemy.x, enemy.y},
-			    ) <
-				    ARRIVE_RADIUS {
-				path_index += 1
+			if dist_to_player <= b.attack_range {
+				delta = {}
+				if b.attack_timer <= 0 {
+					damage_player(b.attack_damage)
+					b.attack_timer = b.attack_cooldown
+				}
 			}
+		case Ranged:
+			dist_to_player := linalg.distance(Vec2{enemy.x, enemy.y}, player_pos)
+			b.fire_timer -= dt
 
-			target: Vec2
-			if path_index < len(enemy.path) {
-				target = cell_center_to_world(enemy.path[path_index])
-			} else {
-				target = Vec2{game.player.x, game.player.y}
+			switch {
+			case dist_to_player > b.max_range:
+				delta = chase_to(&enemy, inflated_collision_map, player_pos, b.speed, dt)
+			case dist_to_player < b.min_range:
+				delta = linalg.normalize0(Vec2{enemy.x, enemy.y} - player_pos) * b.speed * dt
+			case:
+				if b.fire_timer <= 0 {
+					direction := linalg.normalize0(player_pos - Vec2{enemy.x, enemy.y})
+					fire_enemy_bullet(Vec2{enemy.x, enemy.y}, direction, b)
+					b.fire_timer = 1.0 / b.fire_rate
+				}
 			}
-
-			to_target := target - Vec2{enemy.x, enemy.y}
-			delta = linalg.normalize0(to_target) * b.speed * dt
-		case Sine_Flyer:
-			b.phase += b.frequency * dt
-			b.origin.x += b.speed * dt
-			target := b.origin + Vec2{0, math.sin(b.phase) * b.amplitude}
-			delta = target - Vec2{enemy.x, enemy.y}
 		case:
 		// nil: inert
 		}
@@ -168,6 +141,38 @@ update_enemies :: proc(dt: f32) {
 
 		move_actor(&enemy.rect, enemy.animation, &game.tilemap, delta)
 	}
+}
+
+// computes a fresh BFS path from enemy to goal_world, stores it on enemy.path
+// (for the debug draw), and returns this frame's movement delta toward the
+// next un-arrived waypoint
+chase_to :: proc(enemy: ^Enemy, collision_map: Collision_Map, goal_world: Vec2, speed, dt: f32) -> Vec2 {
+	enemy_cell := world_to_cell_coord(Vec2{enemy.x, enemy.y})
+
+	enemy_path, ok := find_path(collision_map, enemy_cell, world_to_cell_coord(goal_world))
+	if ok {
+		delete(enemy.path)
+		enemy.path = enemy_path
+	} else {
+		enemy.path = {}
+	}
+
+	path_index := 0
+	ARRIVE_RADIUS: f32 = 4.0
+	for path_index < len(enemy.path) &&
+	    linalg.distance(cell_center_to_world(enemy.path[path_index]), Vec2{enemy.x, enemy.y}) <
+		    ARRIVE_RADIUS {
+		path_index += 1
+	}
+
+	target: Vec2
+	if path_index < len(enemy.path) {
+		target = cell_center_to_world(enemy.path[path_index])
+	} else {
+		target = goal_world
+	}
+
+	return linalg.normalize0(target - Vec2{enemy.x, enemy.y}) * speed * dt
 }
 
 world_to_cell_coord :: proc(world_pos: Vec2) -> Vec2i {
