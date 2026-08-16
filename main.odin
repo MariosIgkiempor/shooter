@@ -40,12 +40,13 @@ game: struct {
 	// spawners are level data and persist; enemies/bullets/xp_orbs are
 	// transient runtime state spawned/created during play, so they're
 	// never saved
-	spawners:      [dynamic]Spawner,
-	enemies:       [dynamic]Enemy `json:"-"`,
-	bullets:       [dynamic]Bullet `json:"-"`,
-	enemy_bullets: [dynamic]Enemy_Bullet `json:"-"`,
-	xp_orbs:       [dynamic]Xp_Orb `json:"-"`,
-	particles:     [dynamic]Particle `json:"-"`,
+	spawners:            [dynamic]Spawner,
+	enemies:             [dynamic]Enemy `json:"-"`,
+	bullets:             [dynamic]Bullet `json:"-"`,
+	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
+	xp_orbs:             [dynamic]Xp_Orb `json:"-"`,
+	particles:           [dynamic]Particle `json:"-"`,
+	screen_shake_trauma: f32 `json:"-"`,
 
 	// true while the level-up modal is open; simulation is paused and only
 	// draw_level_up_ui's buttons are live. never saved - a save taken
@@ -148,6 +149,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_enemy_bullets()
 	reset_xp_orbs()
 	reset_particles()
+	reset_screen_shake()
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
 	game.player.health = PLAYER_MAX_HEALTH
@@ -321,6 +323,7 @@ PLAYER_MAX_HEALTH :: 100
 // applies enemy damage to the player, opening the game-over modal at 0 hp
 damage_player :: proc(amount: f32) {
 	spawn_damage_burst(Vec2{game.player.x, game.player.y})
+	trigger_screen_shake(amount / PLAYER_MAX_HEALTH)
 
 	game.player.health -= amount
 	if game.player.health <= 0 {
@@ -377,6 +380,7 @@ draw_game :: proc() {
 			int(game.window_width),
 			int(game.window_height),
 		)
+		game.camera.offset += update_screen_shake(rl.GetFrameTime())
 	}
 
 	begin_using_camera(game.camera)
@@ -572,6 +576,7 @@ draw_game :: proc() {
 					clear(&game.enemy_bullets)
 					clear(&game.xp_orbs)
 					clear(&game.particles)
+					reset_screen_shake()
 					game.player.health = PLAYER_MAX_HEALTH
 					game.game_over = false
 				}
