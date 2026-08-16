@@ -67,6 +67,12 @@ weapon_presets: [Weapon_Kind]Weapon = {
 	},
 }
 
+weapon_texture_names: [Weapon_Kind]Texture_Name = {
+	.Pistol  = .Weapon_Pistol,
+	.SMG     = .Weapon_Smg,
+	.Shotgun = .Weapon_Shotgun,
+}
+
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
 
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {

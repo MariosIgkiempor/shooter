@@ -45,6 +45,7 @@ game: struct {
 	bullets:             [dynamic]Bullet `json:"-"`,
 	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
 	xp_orbs:             [dynamic]Xp_Orb `json:"-"`,
+	pickups:             [dynamic]Pickup `json:"-"`,
 	particles:           [dynamic]Particle `json:"-"`,
 	screen_shake_trauma: f32 `json:"-"`,
 
@@ -148,6 +149,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_bullets()
 	reset_enemy_bullets()
 	reset_xp_orbs()
+	reset_pickups()
 	reset_particles()
 	reset_screen_shake()
 	// runtime combat state, deliberately not persisted (see Player.health) -
@@ -240,6 +242,7 @@ update_game :: proc() {
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
 		update_xp_orbs(rl.GetFrameTime())
+		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
@@ -332,6 +335,11 @@ damage_player :: proc(amount: f32) {
 	}
 }
 
+// restores player hp from a pickup, clamped so healing can't exceed max health
+heal_player :: proc(amount: f32) {
+	game.player.health = min(game.player.health + amount, PLAYER_MAX_HEALTH)
+}
+
 XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
 XP_LEVEL_GROWTH :: 1.25 // multiplicative growth per level
 
@@ -397,6 +405,7 @@ draw_game :: proc() {
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_xp_orbs(game.xp_orbs[:])
+		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
 
 		if game.program_mode == .Editing {
@@ -504,14 +513,26 @@ draw_game :: proc() {
 	}
 
 	draw_bullets :: proc(bullets: []Bullet) {
+		tex := atlas_textures[Texture_Name.Bullet]
+		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}
+
 		for bullet in bullets {
-			rl.DrawCircleV(bullet.position, BULLET_RADIUS, rl.YELLOW)
+			// sprite's nose faces up (-y) by default, hence the +90 to align
+			// it with the velocity direction (0 degrees = +x, clockwise)
+			angle := math.to_degrees(math.atan2(bullet.velocity.y, bullet.velocity.x)) + 90
+			dest := Rect{bullet.position.x, bullet.position.y, tex.rect.width, tex.rect.height}
+			draw_atlas_tile(tex.rect, dest, origin, angle, rl.YELLOW)
 		}
 	}
 
 	draw_enemy_bullets :: proc(bullets: []Enemy_Bullet) {
+		tex := atlas_textures[Texture_Name.Bullet]
+		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}
+
 		for bullet in bullets {
-			rl.DrawCircleV(bullet.position, BULLET_RADIUS, rl.RED)
+			angle := math.to_degrees(math.atan2(bullet.velocity.y, bullet.velocity.x)) + 90
+			dest := Rect{bullet.position.x, bullet.position.y, tex.rect.width, tex.rect.height}
+			draw_atlas_tile(tex.rect, dest, origin, angle, rl.RED)
 		}
 	}
 
@@ -575,6 +596,7 @@ draw_game :: proc() {
 					clear(&game.bullets)
 					clear(&game.enemy_bullets)
 					clear(&game.xp_orbs)
+					clear(&game.pickups)
 					clear(&game.particles)
 					reset_screen_shake()
 					game.player.health = PLAYER_MAX_HEALTH
@@ -605,19 +627,23 @@ draw_game :: proc() {
 	// a short barrel pivoting at roughly chest height, rotated to face the
 	// player's current aim direction - stands in for a weapon sprite until one exists
 	draw_weapon :: proc(player: Player) {
-		WEAPON_LENGTH: f32 = 16
-		WEAPON_THICKNESS: f32 = 5
+		tex := atlas_textures[weapon_texture_names[player.weapon.kind]]
 
 		doc := animation_atlas_texture(player.animation).document_size
 		pivot := Vec2{player.x, player.y - doc.y / 2}
 		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
 
-		draw_rectangle(
-			{pivot.x, pivot.y, WEAPON_LENGTH, WEAPON_THICKNESS},
-			rl.DARKGRAY,
-			{0, WEAPON_THICKNESS / 2},
-			angle,
-		)
+		// sprite's muzzle faces +x (right) by default; mirror vertically when
+		// aiming left so the weapon stays right-side up instead of upside-down
+		atlas_rect := tex.rect
+		if player.aim_dir.x < 0 {
+			atlas_rect.height = -atlas_rect.height
+		}
+
+		dest := Rect{pivot.x, pivot.y, tex.rect.width, tex.rect.height}
+		origin := Vec2{0, tex.rect.height / 2}
+
+		draw_atlas_tile(atlas_rect, dest, origin, angle)
 	}
 
 	draw_health_bar :: proc(enemy: Enemy) {

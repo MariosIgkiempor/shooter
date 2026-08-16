@@ -54,8 +54,8 @@ draw_rectangle_lines :: proc(rect: Rect, color: Color, thickness: f32 = 1) {
 	rl.DrawRectangleLinesEx(rect, thickness, color)
 }
 
-draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2) {
-	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, 0, rl.WHITE)
+draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2, rotation: f32 = 0, tint: Color = rl.WHITE) {
+	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, rotation, tint)
 }
 
 draw_text :: proc(text: string, pos: Vec2, size: f32, spacing: f32 = 0, tint: Color = rl.WHITE) {

@@ -13,6 +13,7 @@ Xp_Orb :: struct {
 	position: Vec2,
 	velocity: Vec2,
 	value:    int,
+	homing:   bool, // sticky once true, so a fast player can't outrun it once it's triggered
 }
 
 reset_xp_orbs :: proc() {
@@ -37,13 +38,15 @@ update_xp_orbs :: proc(dt: f32) {
 		}
 
 		if dist <= XP_ORB_MAGNET_RADIUS {
+			orb.homing = true
+		}
+
+		if orb.homing {
 			dir := to_player / dist
 			orb.velocity += dir * XP_ORB_HOMING_ACCEL * dt
 			if speed := linalg.length(orb.velocity); speed > XP_ORB_MAX_SPEED {
 				orb.velocity = orb.velocity / speed * XP_ORB_MAX_SPEED
 			}
-		} else {
-			orb.velocity = {}
 		}
 
 		orb.position += orb.velocity * dt
