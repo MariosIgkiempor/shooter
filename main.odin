@@ -92,6 +92,8 @@ load_game :: proc() {
 		return
 	}
 
+	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
+
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
@@ -118,6 +120,8 @@ load_game :: proc() {
 
 save_game :: proc() {
 	log_info("Saving game to save file `{}`", SAVE_GAME_PATH)
+
+	game.player.weapon_variant_save = weapon_variant_to_save(game.player.weapon.variant)
 
 	json_data, json_error := json.marshal(game, allocator = context.temp_allocator)
 	if json_error != nil {
@@ -231,7 +235,7 @@ update_game :: proc() {
 		fire_pressed := game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
 
 		if fire_pressed {
-			try_fire_weapon(&game.player.weapon, player_pos, game.player.aim_dir)
+			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir)
 		}
 
 		update_bullets(rl.GetFrameTime())
@@ -307,6 +311,11 @@ Player :: struct {
 	animation:  Animation,
 	flip_x:     bool,
 	weapon:     Weapon,
+	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
+	// this is the plain, persisted view of it, converted explicitly at the
+	// save_game/load_game boundary so json.unmarshal's union-decode-order
+	// guessing never runs on player-owned weapon state.
+	weapon_variant_save: Weapon_Variant_Save,
 	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
 	xp:         int, // progress toward next level; persisted run progression
 	level:      int, // persisted run progression, starts at 1

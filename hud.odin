@@ -68,17 +68,25 @@ draw_hud :: proc(player: Player) {
 
 	weapon := player.weapon
 	ammo_frac: f32 = 0
-	if weapon.clip_size > 0 {
-		ammo_frac = clamp(f32(weapon.ammo_in_clip) / f32(weapon.clip_size), 0, 1)
+	ammo_color := HUD_AMMO_COLOR
+	reserve_text := ""
+
+	// Gun-only for now; ticket 07 gives Melee_Weapon/Magic their own HUD row
+	switch v in weapon.variant {
+	case Gun:
+		if v.clip_size > 0 {
+			ammo_frac = clamp(f32(v.ammo_in_clip) / f32(v.clip_size), 0, 1)
+		}
+		if v.reload_timer > 0 {
+			ammo_color = HUD_RELOADING_COLOR
+		} else if v.ammo_in_clip <= 0 && v.reserve_ammo <= 0 {
+			ammo_color = HUD_EMPTY_COLOR
+		}
+		reserve_text = fmt.tprintf("+{}", v.reserve_ammo)
+	case Melee_Weapon, Magic:
 	}
 
-	ammo_color := HUD_AMMO_COLOR
-	if weapon.reload_timer > 0 {
-		ammo_color = HUD_RELOADING_COLOR
-	} else if weapon.ammo_in_clip <= 0 && weapon.reserve_ammo <= 0 {
-		ammo_color = HUD_EMPTY_COLOR
-	}
-	draw_hud_icon_row(center_x, y, .Pickup_Ammo, ammo_frac, ammo_color, fmt.tprintf("+{}", weapon.reserve_ammo))
+	draw_hud_icon_row(center_x, y, .Pickup_Ammo, ammo_frac, ammo_color, reserve_text)
 }
 
 draw_hud_bar :: proc(pos: Vec2, frac: f32, fill: Color) {

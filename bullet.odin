@@ -16,11 +16,12 @@ reset_bullets :: proc() {
 	clear(&game.bullets)
 }
 
-// spawns weapon.pellet_count bullets, fanned across weapon.spread_angle
-// degrees around aim_dir (a single bullet straight down aim_dir when
-// pellet_count is 1, e.g. pistol/SMG)
-fire_pellets :: proc(weapon: Weapon, origin, aim_dir: Vec2) {
-	pellets := max(weapon.pellet_count, 1)
+// spawns gun.pellet_count bullets, fanned across gun.spread_angle degrees
+// around aim_dir (a single bullet straight down aim_dir when pellet_count is
+// 1, e.g. pistol/SMG). damage comes from the weapon header since it applies
+// generically across all weapon types, not just Gun.
+fire_pellets :: proc(weapon: Weapon, gun: Gun, origin, aim_dir: Vec2) {
+	pellets := max(gun.pellet_count, 1)
 	base_angle := math.atan2(aim_dir.y, aim_dir.x)
 
 	for i in 0 ..< pellets {
@@ -28,7 +29,7 @@ fire_pellets :: proc(weapon: Weapon, origin, aim_dir: Vec2) {
 
 		if pellets > 1 {
 			t := f32(i) / f32(pellets - 1) - 0.5 // -0.5 .. 0.5
-			angle += math.to_radians(weapon.spread_angle) * t
+			angle += math.to_radians(gun.spread_angle) * t
 		}
 
 		direction := Vec2{math.cos(angle), math.sin(angle)}
@@ -37,9 +38,9 @@ fire_pellets :: proc(weapon: Weapon, origin, aim_dir: Vec2) {
 			&game.bullets,
 			Bullet {
 				position = origin,
-				velocity = direction * weapon.projectile_speed,
+				velocity = direction * gun.projectile_speed,
 				damage = weapon.damage,
-				lifetime = weapon.bullet_lifetime,
+				lifetime = gun.bullet_lifetime,
 			},
 		)
 	}
