@@ -39,6 +39,7 @@ game: struct {
 	enemies:             [dynamic]Enemy `json:"-"`,
 	bullets:             [dynamic]Bullet `json:"-"`,
 	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
+	poison_clouds:       [dynamic]Poison_Cloud `json:"-"`,
 	xp_orbs:             [dynamic]Xp_Orb `json:"-"`,
 	pickups:             [dynamic]Pickup `json:"-"`,
 	particles:           [dynamic]Particle `json:"-"`,
@@ -147,6 +148,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_enemies()
 	reset_bullets()
 	reset_enemy_bullets()
+	reset_poison_clouds()
 	reset_xp_orbs()
 	reset_pickups()
 	reset_particles()
@@ -252,11 +254,12 @@ update_game :: proc() {
 		fire_pressed := game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
 
 		if fire_pressed {
-			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir)
+			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir, mouse_world)
 		}
 
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
+		update_poison_clouds(rl.GetFrameTime())
 		update_xp_orbs(rl.GetFrameTime())
 		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
@@ -422,9 +425,11 @@ draw_game :: proc() {
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
+		draw_flamethrower_cone(game.player)
 		draw_spawners(game.spawners[:])
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
+		draw_poison_clouds(game.poison_clouds[:])
 		draw_xp_orbs(game.xp_orbs[:])
 		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
@@ -593,6 +598,26 @@ draw_game :: proc() {
 		origin := Vec2{-tex.offset_left * scale, (tex.document_size.y / 2 - offset_top) * scale}
 
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
+	}
+
+	// translucent cone, cosmetic only, while the flamethrower is actively
+	// channeling - the tick damage itself already resolved in
+	// try_cast_magic (cast_flamethrower_tick); this just shows its reach
+	draw_flamethrower_cone :: proc(player: Player) {
+		magic, is_magic := player.weapon.variant.(Magic)
+		if !is_magic || magic.spell_kind != .Flamethrower {
+			return
+		}
+		if !is_mouse_button_down(.LEFT) {
+			return
+		}
+
+		center := Vec2{player.x, player.y}
+		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
+		start := angle - magic.arc_degrees / 2
+		end := angle + magic.arc_degrees / 2
+
+		rl.DrawCircleSector(center, magic.range, start, end, 16, rl.Color{230, 100, 30, 90})
 	}
 
 }

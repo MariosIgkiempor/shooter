@@ -1,15 +1,19 @@
 package shooter
 
 import "core:math"
+import "core:math/linalg"
 import rl "vendor:raylib"
 
 BULLET_RADIUS :: 2.0
 
 Bullet :: struct {
-	position: Vec2,
-	velocity: Vec2, // direction * speed, computed once at spawn
-	damage:   f32,
-	lifetime: f32, // seconds remaining; despawns at <= 0
+	position:         Vec2,
+	velocity:         Vec2, // direction * speed, computed once at spawn
+	damage:           f32,
+	lifetime:         f32, // seconds remaining; despawns at <= 0
+	// 0 for a normal single-target bullet; >0 makes it explode into an AoE
+	// on hit instead (fireball - ticket 11), via explode_bullet below
+	explosion_radius: f32,
 }
 
 reset_bullets :: proc() {
@@ -46,6 +50,25 @@ fire_pellets :: proc(weapon: Weapon, gun: Gun, origin, aim_dir: Vec2) {
 	}
 }
 
+// spawns a single explosive Bullet along aim_dir - reuses the Bullet
+// movement/collision/lifetime pipeline as-is (Gun already exercises this
+// same shape); update_bullets branches on explosion_radius > 0 to do an AoE
+// sweep instead of a single-target hit. Reaching max lifetime without a hit
+// despawns it silently below, same as any other bullet - a miss fizzles
+// with no explosion (ticket 11).
+cast_fireball :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
+	append(
+		&game.bullets,
+		Bullet {
+			position = origin,
+			velocity = aim_dir * magic.projectile_speed,
+			damage = damage,
+			lifetime = magic.bullet_lifetime,
+			explosion_radius = magic.explosion_radius,
+		},
+	)
+}
+
 update_bullets :: proc(dt: f32) {
 	#reverse for &bullet, i in game.bullets {
 		bullet.position += bullet.velocity * dt
@@ -64,7 +87,11 @@ update_bullets :: proc(dt: f32) {
 				continue
 			}
 
-			apply_hit_to_enemy(j, bullet.damage, bullet.position)
+			if bullet.explosion_radius > 0 {
+				explode_bullet(bullet)
+			} else {
+				apply_hit_to_enemy(j, bullet.damage, bullet.position)
+			}
 
 			hit = true
 			break
@@ -73,6 +100,17 @@ update_bullets :: proc(dt: f32) {
 		if hit {
 			unordered_remove(&game.bullets, i)
 		}
+	}
+}
+
+// damages every enemy within explosion_radius of the bullet's impact point,
+// not just the one it directly collided with (fireball AoE - ticket 11)
+explode_bullet :: proc(bullet: Bullet) {
+	#reverse for enemy, i in game.enemies {
+		if linalg.length(Vec2{enemy.x, enemy.y} - bullet.position) > bullet.explosion_radius {
+			continue
+		}
+		apply_hit_to_enemy(i, bullet.damage, Vec2{enemy.x, enemy.y})
 	}
 }
 

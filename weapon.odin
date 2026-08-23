@@ -7,18 +7,31 @@ Weapon_Kind :: enum {
 	Pistol,
 	SMG,
 	Shotgun,
-	// placeholder melee/magic content so try_swing_melee (ticket 03) and the
-	// Class cycle below are actually usable for testing - real tier-ladder
-	// naming/stats are content-authoring for a later ticket (map's "Not yet
-	// specified")
+	// placeholder melee content so try_swing_melee (ticket 03) and the Class
+	// cycle below are actually usable for testing - real tier-ladder
+	// naming/stats for Melee are still content-authoring for a later ticket
+	// (map's "Not yet specified")
 	Dagger,
 	Sword,
-	Wand,
+	// Magic tier ladder (ticket 11): each tier is a distinct spell, mirroring
+	// Ranged's Pistol/SMG/Shotgun being three distinct weapons rather than
+	// numeric upgrades of one
+	Fire_Wand,
+	Flame_Staff,
+	Poison_Staff,
 }
 
 Fire_Mode :: enum {
 	Semi_Automatic,
 	Automatic,
+}
+
+// which spell a Magic weapon casts - ticket 11 fulfilling the Spell_Kind
+// enum ticket 04 anticipated
+Spell_Kind :: enum {
+	Fireball,
+	Flamethrower,
+	Poison_Cloud,
 }
 
 // Weapon is a wrapper struct, not a bare union like Enemy_Behaviour: common
@@ -74,8 +87,29 @@ Melee_Weapon :: struct {
 	swing_timer: f32,
 }
 
-// no runtime state yet - cast mechanics land in ticket 04
-Magic :: struct {}
+// fields cover all three Spell_Kinds; each weapon_presets entry only sets
+// the fields its spell_kind actually uses (mirrors Gun's pellet_count/
+// spread_angle being pistol/SMG-irrelevant but shotgun-relevant)
+Magic :: struct {
+	spell_kind: Spell_Kind,
+
+	// Fireball: travels like a Bullet (bullet.odin's cast_fireball), explodes
+	// into an AoE on impact instead of a single-target hit
+	projectile_speed: f32,
+	bullet_lifetime:  f32,
+	explosion_radius: f32,
+
+	// Flamethrower: instant cone hit-check re-run every Automatic-mode tick
+	// while held (cast_flamethrower_tick below), reusing melee's arc-check
+	range:       f32,
+	arc_degrees: f32,
+
+	// Poison Cloud: ground-targeted lingering DoT zone (poison_cloud.odin)
+	cast_range:      f32, // max distance from the player it can be placed
+	cloud_radius:    f32,
+	cloud_duration:  f32,
+	cloud_tick_rate: f32, // damage ticks/sec for enemies standing inside
+}
 
 // discriminant for Weapon_Variant_Save; internal to persistence, unrelated
 // to the gameplay Weapon_Kind enum (Pistol/SMG/Shotgun/...)
@@ -181,12 +215,37 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		action_rate = 1.8,
 		variant = Melee_Weapon{range = 60, arc_degrees = 110, swing_time = 0.35},
 	},
-	.Wand = {
-		kind = .Wand,
+	.Fire_Wand = {
+		kind = .Fire_Wand,
 		fire_mode = .Semi_Automatic,
-		damage = 20,
-		action_rate = 2,
-		variant = Magic{}, // casting is a no-op until ticket 04's spell effects land
+		damage = 35, // direct hit + explosion both use this
+		action_rate = 1.2,
+		variant = Magic {
+			spell_kind = .Fireball,
+			projectile_speed = 300,
+			bullet_lifetime = 1.2,
+			explosion_radius = 24,
+		},
+	},
+	.Flame_Staff = {
+		kind = .Flame_Staff,
+		fire_mode = .Automatic, // hold to channel
+		damage = 6, // per tick
+		action_rate = 10, // ticks/sec while held
+		variant = Magic{spell_kind = .Flamethrower, range = 50, arc_degrees = 50},
+	},
+	.Poison_Staff = {
+		kind = .Poison_Staff,
+		fire_mode = .Semi_Automatic, // one click, one cloud - not holdable
+		damage = 4, // per tick
+		action_rate = 0.5, // 2s between casts
+		variant = Magic {
+			spell_kind = .Poison_Cloud,
+			cast_range = 90,
+			cloud_radius = 28,
+			cloud_duration = 5,
+			cloud_tick_rate = 2,
+		},
 	},
 }
 
@@ -196,8 +255,11 @@ weapon_texture_names: [Weapon_Kind]Texture_Name = {
 	.Shotgun = .Weapon_Shotgun,
 	.Dagger  = .Weapon_Dagger,
 	.Sword   = .Weapon_Sword,
-	// no wand art yet - reusing the pistol icon as a placeholder
-	.Wand    = .Weapon_Pistol,
+	// no magic art yet - reusing the pistol icon as a placeholder for all
+	// three, same as the old single Wand did
+	.Fire_Wand    = .Weapon_Pistol,
+	.Flame_Staff  = .Weapon_Pistol,
+	.Poison_Staff = .Weapon_Pistol,
 }
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
@@ -278,7 +340,7 @@ refill_weapon_reserve :: proc(weapon: ^Weapon) {
 // dispatches the weapon's action (fire/swing/cast) by variant, gating on the
 // shared cooldown and setting it from action_rate only if something actually
 // happened - renamed from try_fire_weapon now that Gun is one of three cases
-try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir: Vec2) {
+try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2) {
 	if weapon.cooldown_timer > 0 {
 		return
 	}
@@ -290,7 +352,7 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir: Vec2) {
 	case Melee_Weapon:
 		acted = try_swing_melee(&v, weapon.damage, origin, aim_dir)
 	case Magic:
-		acted = try_cast_magic(&v, origin, aim_dir)
+		acted = try_cast_magic(&v, weapon.damage, origin, aim_dir, mouse_world)
 	}
 
 	if acted {
@@ -358,15 +420,55 @@ try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2
 }
 
 // resolves the cast instantly and synchronously, exactly like try_swing_melee/
-// try_fire_gun - no active-cast/channel window, no runtime state on Magic.
-// A future spell-effect ticket fills in the actual effect (projectile,
-// homing, AoE, DoT, ...); any effect that needs to persist beyond this frame
-// will spawn its own tracked entity the way fire_pellets spawns Bullets,
-// rather than being represented here. Always "acts" once triggered - no
-// ammo/cooldown-style failure case beyond the shared cooldown_timer gate in
-// try_use_weapon.
-try_cast_magic :: proc(magic: ^Magic, origin, aim_dir: Vec2) -> bool {
+// try_fire_gun - no active-cast/channel window, no state on Magic beyond its
+// fixed preset fields. Dispatches on spell_kind (ticket 11, fulfilling
+// ticket 04's anticipated interface); any effect that needs to persist
+// beyond this frame spawns its own tracked entity the way fire_pellets
+// spawns Bullets (fireball reuses Bullet directly; poison cloud gets its own
+// Poison_Cloud array), rather than being represented here. Always "acts"
+// once triggered - no ammo/cooldown-style failure case beyond the shared
+// cooldown_timer gate in try_use_weapon.
+try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, mouse_world: Vec2) -> bool {
+	switch magic.spell_kind {
+	case .Fireball:
+		cast_fireball(magic^, damage, origin, aim_dir)
+	case .Flamethrower:
+		cast_flamethrower_tick(magic^, damage, origin, aim_dir)
+	case .Poison_Cloud:
+		// ground-targeted at the mouse rather than a fixed point along
+		// aim_dir (ticket 11) - the one spell that breaks from the
+		// aim_dir-targeting model the others share - clamped so it can't be
+		// dropped anywhere on screen regardless of player position
+		target := clamp_point_to_range(origin, mouse_world, magic.cast_range)
+		cast_poison_cloud(magic^, damage, target)
+	}
 	return true
+}
+
+// re-run every Automatic-mode trigger while the mouse is held (try_use_weapon's
+// existing cooldown/action_rate gate controls tick rate) - reuses the same
+// arc/cone hit-check as melee (ticket 03), just against Magic's own
+// range/arc_degrees, hitting every enemy in the cone each tick (cleave, no
+// single-target cap)
+cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
+	cone := Melee_Weapon{range = magic.range, arc_degrees = magic.arc_degrees}
+
+	#reverse for enemy, i in game.enemies {
+		if !enemy_in_melee_arc(cone, origin, aim_dir, enemy) do continue
+		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
+	}
+}
+
+// clamps `target` to at most `max_range` from `origin`, preserving direction -
+// caps Poison Cloud placement so it can't be dropped anywhere on screen
+// regardless of player position (ticket 11)
+clamp_point_to_range :: proc(origin, target: Vec2, max_range: f32) -> Vec2 {
+	offset := target - origin
+	dist := linalg.length(offset)
+	if dist <= max_range || dist == 0 {
+		return target
+	}
+	return origin + offset * (max_range / dist)
 }
 
 // -- dev/debug weapon switching (arrow keys, main.odin) -------------------
@@ -390,13 +492,15 @@ weapon_kind_class: [Weapon_Kind]Class = {
 	.Shotgun = .Ranged,
 	.Dagger  = .Melee,
 	.Sword   = .Melee,
-	.Wand    = .Magic,
+	.Fire_Wand    = .Magic,
+	.Flame_Staff  = .Magic,
+	.Poison_Staff = .Magic,
 }
 
 class_weapon_kinds: [Class][]Weapon_Kind = {
 	.Ranged = {.Pistol, .SMG, .Shotgun},
 	.Melee  = {.Dagger, .Sword},
-	.Magic  = {.Wand},
+	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff},
 }
 
 // steps to the next/previous Weapon_Kind within current's class (wrapping)
