@@ -7,11 +7,13 @@ Weapon_Kind :: enum {
 	Pistol,
 	SMG,
 	Shotgun,
-	// placeholder melee content so try_swing_melee (ticket 03) is actually
-	// player-reachable for testing - real tier-ladder naming/stats are
-	// content-authoring for a later ticket (map's "Not yet specified")
+	// placeholder melee/magic content so try_swing_melee (ticket 03) and the
+	// Class cycle below are actually usable for testing - real tier-ladder
+	// naming/stats are content-authoring for a later ticket (map's "Not yet
+	// specified")
 	Dagger,
 	Sword,
+	Wand,
 }
 
 Fire_Mode :: enum {
@@ -64,7 +66,12 @@ Gun :: struct {
 Melee_Weapon :: struct {
 	range:       f32, // max distance from origin a swing's arc reaches
 	arc_degrees: f32, // total cone width, centered on aim_dir
-	swing_time:  f32, // cosmetic-only animation duration - ticket 07 owns the actual animation
+	swing_time:  f32, // cosmetic-only animation duration
+	// counts down from swing_time to 0 while the cosmetic swing-sweep
+	// animation plays (main.odin's draw_weapon); never gates the hit-check -
+	// ticket 03's hit already resolved instantly before this starts (ticket
+	// 07's animation requirement)
+	swing_timer: f32,
 }
 
 // no runtime state yet - cast mechanics land in ticket 04
@@ -174,6 +181,13 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		action_rate = 1.8,
 		variant = Melee_Weapon{range = 60, arc_degrees = 110, swing_time = 0.35},
 	},
+	.Wand = {
+		kind = .Wand,
+		fire_mode = .Semi_Automatic,
+		damage = 20,
+		action_rate = 2,
+		variant = Magic{}, // casting is a no-op until ticket 04's spell effects land
+	},
 }
 
 weapon_texture_names: [Weapon_Kind]Texture_Name = {
@@ -182,6 +196,8 @@ weapon_texture_names: [Weapon_Kind]Texture_Name = {
 	.Shotgun = .Weapon_Shotgun,
 	.Dagger  = .Weapon_Dagger,
 	.Sword   = .Weapon_Sword,
+	// no wand art yet - reusing the pistol icon as a placeholder
+	.Wand    = .Weapon_Pistol,
 }
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
@@ -212,7 +228,11 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32) {
 				v.ammo_in_clip = new_ammo
 			}
 		}
-	case Melee_Weapon, Magic: // nothing yet - tickets 03/04
+	case Melee_Weapon:
+		if v.swing_timer > 0 {
+			v.swing_timer -= dt
+		}
+	case Magic: // nothing yet - ticket 04
 	}
 }
 
@@ -269,7 +289,8 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir: Vec2) {
 		acted = try_fire_gun(weapon, &v, origin, aim_dir)
 	case Melee_Weapon:
 		acted = try_swing_melee(&v, weapon.damage, origin, aim_dir)
-	case Magic: // ticket 04
+	case Magic:
+		acted = try_cast_magic(&v, origin, aim_dir)
 	}
 
 	if acted {
@@ -331,5 +352,74 @@ try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
 
+	melee.swing_timer = melee.swing_time
+
 	return true
+}
+
+// resolves the cast instantly and synchronously, exactly like try_swing_melee/
+// try_fire_gun - no active-cast/channel window, no runtime state on Magic.
+// A future spell-effect ticket fills in the actual effect (projectile,
+// homing, AoE, DoT, ...); any effect that needs to persist beyond this frame
+// will spawn its own tracked entity the way fire_pellets spawns Bullets,
+// rather than being represented here. Always "acts" once triggered - no
+// ammo/cooldown-style failure case beyond the shared cooldown_timer gate in
+// try_use_weapon.
+try_cast_magic :: proc(magic: ^Magic, origin, aim_dir: Vec2) -> bool {
+	return true
+}
+
+// -- dev/debug weapon switching (arrow keys, main.odin) -------------------
+//
+// A quick way to reach every Weapon_Kind for testing, ahead of the real
+// Class-locked Shop/tier-ladder progression (tickets 08/10). `Class` and
+// weapon_kind_class are the same lookup table those tickets already
+// anticipated needing (see CONTEXT.md's Class entry and ADR-0002); this is
+// just an early, informal user of it. class_weapon_kinds is only a cycle
+// order for this debug tool, not ticket 10's priced tier ladder.
+
+Class :: enum {
+	Ranged,
+	Melee,
+	Magic,
+}
+
+weapon_kind_class: [Weapon_Kind]Class = {
+	.Pistol  = .Ranged,
+	.SMG     = .Ranged,
+	.Shotgun = .Ranged,
+	.Dagger  = .Melee,
+	.Sword   = .Melee,
+	.Wand    = .Magic,
+}
+
+class_weapon_kinds: [Class][]Weapon_Kind = {
+	.Ranged = {.Pistol, .SMG, .Shotgun},
+	.Melee  = {.Dagger, .Sword},
+	.Magic  = {.Wand},
+}
+
+// steps to the next/previous Weapon_Kind within current's class (wrapping)
+cycle_weapon_kind :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
+	kinds := class_weapon_kinds[weapon_kind_class[current]]
+
+	index := 0
+	for k, i in kinds {
+		if k == current {
+			index = i
+			break
+		}
+	}
+
+	n := len(kinds)
+	return kinds[((index + delta) % n + n) % n]
+}
+
+// steps to the next/previous Class (wrapping), equipping that class's first
+// Weapon_Kind
+cycle_class :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
+	n := len(class_weapon_kinds)
+	current_class := int(weapon_kind_class[current])
+	next_class := Class(((current_class + delta) % n + n) % n)
+	return class_weapon_kinds[next_class][0]
 }

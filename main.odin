@@ -200,16 +200,16 @@ update_game :: proc() {
 
 		input: Vec2
 
-		if is_key_down(.LEFT) || is_key_down(.A) {
+		if is_key_down(.A) {
 			input.x -= 1
 		}
-		if is_key_down(.RIGHT) || is_key_down(.D) {
+		if is_key_down(.D) {
 			input.x += 1
 		}
-		if is_key_down(.UP) || is_key_down(.W) {
+		if is_key_down(.W) {
 			input.y -= 1
 		}
-		if is_key_down(.DOWN) || is_key_down(.S) {
+		if is_key_down(.S) {
 			input.y += 1
 		}
 
@@ -226,6 +226,23 @@ update_game :: proc() {
 
 		if is_key_pressed(.R) {
 			start_reload(&game.player.weapon)
+		}
+
+		// dev/debug weapon switching: left/right cycles within the current
+		// Class, up/down cycles Class (see weapon.odin's cycle_weapon_kind/
+		// cycle_class) - arrow keys are free for this since WASD alone
+		// already covers movement
+		if is_key_pressed(.LEFT) {
+			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, -1))
+		}
+		if is_key_pressed(.RIGHT) {
+			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, 1))
+		}
+		if is_key_pressed(.UP) {
+			game.player.weapon = weapon_create(cycle_class(game.player.weapon.kind, 1))
+		}
+		if is_key_pressed(.DOWN) {
+			game.player.weapon = weapon_create(cycle_class(game.player.weapon.kind, -1))
 		}
 
 		mouse_world := rl.GetScreenToWorld2D(game.mouse.position, game.camera)
@@ -535,11 +552,25 @@ draw_game :: proc() {
 		pivot := Vec2{player.x, player.y - doc.y / 2}
 		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
 
+		// melee swish (ticket 07): sweeps -arc_degrees/2 -> +arc_degrees/2
+		// across swing_time, purely cosmetic - the hit already resolved
+		// instantly in try_swing_melee before this ever plays
+		switch v in player.weapon.variant {
+		case Melee_Weapon:
+			if v.swing_timer > 0 {
+				progress := 1 - v.swing_timer / v.swing_time // 0 -> 1 across the swing
+				angle += (progress - 0.5) * v.arc_degrees
+			}
+		case Gun, Magic:
+		}
+
 		// sprite's muzzle faces +x (right) by default; mirror vertically when
-		// aiming left so the weapon stays right-side up instead of upside-down
+		// the drawn angle (post swing-offset, not the raw aim_dir) points
+		// left, so the weapon stays right-side up instead of upside-down
+		// mid-swing
 		atlas_rect := tex.rect
 		offset_top := tex.offset_top
-		if player.aim_dir.x < 0 {
+		if math.cos(math.to_radians(angle)) < 0 {
 			atlas_rect.height = -atlas_rect.height
 			offset_top = tex.offset_bottom
 		}
