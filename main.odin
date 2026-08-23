@@ -538,12 +538,28 @@ draw_game :: proc() {
 		// sprite's muzzle faces +x (right) by default; mirror vertically when
 		// aiming left so the weapon stays right-side up instead of upside-down
 		atlas_rect := tex.rect
+		offset_top := tex.offset_top
 		if player.aim_dir.x < 0 {
 			atlas_rect.height = -atlas_rect.height
+			offset_top = tex.offset_bottom
 		}
 
-		dest := Rect{pivot.x, pivot.y, tex.rect.width, tex.rect.height}
-		origin := Vec2{0, tex.rect.height / 2}
+		// scale the weapon's full document (not just its trimmed rect) up to
+		// match the player's size, preserving native aspect ratio - scaling
+		// by the trimmed rect instead would size each weapon inconsistently
+		// depending on how tightly the atlas happened to trim it
+		scale := doc.y / tex.document_size.y
+		width := tex.rect.width * scale
+		height := tex.rect.height * scale
+
+		dest := Rect{pivot.x, pivot.y, width, height}
+
+		// origin (the grip, rotation pivot) sits at the document's left edge,
+		// vertically centered - expressed relative to the trimmed rect's
+		// top-left since the atlas is tightly trimmed and the grip may fall
+		// in space that got cropped away (see draw_actor's similar use of
+		// offset_left/top to correct for the same trimming)
+		origin := Vec2{-tex.offset_left * scale, (tex.document_size.y / 2 - offset_top) * scale}
 
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
 	}
