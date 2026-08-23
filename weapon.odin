@@ -176,15 +176,12 @@ weapon_presets: [Weapon_Kind]Weapon = {
 	},
 }
 
-// Dagger/Sword have no art of their own yet - reusing gun icons as
-// placeholders (main.odin's draw_weapon already stands in with placeholder
-// art generally); swap these once real melee sprites exist.
 weapon_texture_names: [Weapon_Kind]Texture_Name = {
 	.Pistol  = .Weapon_Pistol,
 	.SMG     = .Weapon_Smg,
 	.Shotgun = .Weapon_Shotgun,
-	.Dagger  = .Weapon_Pistol,
-	.Sword   = .Weapon_Shotgun,
+	.Dagger  = .Weapon_Dagger,
+	.Sword   = .Weapon_Sword,
 }
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
