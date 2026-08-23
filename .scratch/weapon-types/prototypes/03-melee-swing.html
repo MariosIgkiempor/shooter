@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE — Melee swing (throwaway, ticket 03)</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --panel-2: #232733;
+    --border: #2e3342;
+    --text: #e8eaf0;
+    --dim: #8a90a3;
+    --accent: #5fb3ff;
+    --good: #5fe3a3;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--dim); font-size: 14px; margin: 0 0 20px; max-width: 720px; }
+  .throwaway {
+    display: inline-block;
+    background: #3a2a1a;
+    color: #ffb95f;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+  }
+  .grid { display: grid; grid-template-columns: 420px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dim); margin: 0 0 12px; }
+  canvas { background: #0e1016; border-radius: 8px; display: block; width: 100%; height: auto; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #06131f; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #06131f; font-weight: 600; border-color: var(--accent); }
+  .toggle-group { display: flex; gap: 6px; }
+  .state-line { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .state-line:last-child { border-bottom: none; }
+  .state-line .k { color: var(--dim); }
+  .state-line .v { font-family: ui-monospace, monospace; }
+  .pill { padding: 1px 8px; border-radius: 100px; font-size: 11px; font-weight: 600; }
+  .pill.idle { background: #2b3040; color: var(--dim); }
+  .pill.winding { background: #4a3a1a; color: #ffb95f; }
+  .pill.active { background: #1a4a2e; color: var(--good); }
+  .pill.recovering { background: #2b3040; color: var(--dim); }
+  .log {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    max-height: 220px;
+    overflow-y: auto;
+    background: #0e1016;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .log .entry { padding: 2px 0; }
+  .log .entry.hit { color: var(--good); }
+  .log .entry.death { color: var(--bad); }
+  .log .entry.blocked { color: var(--dim); }
+  .log .entry.tick { color: #4a5064; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tab-btn { font-size: 12px; padding: 6px 10px; }
+  .scenario-desc { font-size: 13px; color: var(--dim); margin-bottom: 10px; }
+  .step-list { display: flex; flex-direction: column; gap: 6px; }
+  .step-list button { text-align: left; }
+  .step-list button.done { opacity: 0.5; }
+  .section-gap { margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="throwaway">PROTOTYPE — throwaway, do not ship</span>
+  <h1>Melee swing: hit-check timing &amp; hitbox shape</h1>
+  <p class="subtitle">
+    Answers wayfinder ticket <strong>melee-combat-design</strong> on the weapon-types map: how a melee swing
+    resolves exactly once (not per-frame, not per-overlapping-enemy-per-frame), and whether the hitbox should
+    be an arc/cone or an expanding rect. Free-play on the left drives the canvas on the right; the guided
+    scenarios below walk through the cases that are hard to reason about on paper. The swing/hit logic itself
+    lives in the <code>&lt;script id="logic"&gt;</code> block — it's a pure module with no DOM access, meant
+    to lift directly into <code>weapon.odin</code>/<code>bullet.odin</code> once the shape is validated.
+  </p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Controls</h2>
+
+      <div class="row">
+        <div class="toggle-group" id="timing-toggle"></div>
+      </div>
+      <div class="row">
+        <div class="toggle-group" id="shape-toggle"></div>
+      </div>
+
+      <div class="row">
+        <button id="btn-swing" class="primary">Swing!</button>
+        <button id="btn-tick">Tick 1 frame</button>
+        <button id="btn-aim-left">Aim ↺</button>
+        <button id="btn-aim-right">Aim ↻</button>
+        <button id="btn-scatter">Scatter enemies</button>
+        <button id="btn-reset">Reset</button>
+      </div>
+
+      <h2 class="section-gap">Weapon state</h2>
+      <div id="state-panel"></div>
+
+      <h2 class="section-gap">Event log</h2>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Arena (top-down — matches the game's coordinate space)</h2>
+      <canvas id="canvas" width="600" height="440"></canvas>
+
+      <h2 class="section-gap">Guided scenarios</h2>
+      <div class="tabs" id="tabs"></div>
+      <div id="scenario-body"></div>
+    </div>
+  </div>
+</div>
+
+<script id="logic">
+// ============================================================================
+// PURE MODULE — no DOM, no globals from the page. This is the part meant to
+// lift into weapon.odin/bullet.odin once validated; the HTML shell is
+// throwaway.
+//
+// Mirrors the real codebase's shapes (see ticket 02's locked Weapon shape):
+//   Weapon header: { cooldown_timer, action_rate, ... }
+//   Melee_Weapon (variant payload): { range, arc_degrees, damage, swing_time,
+//                                      active_at }  (active_at only matters
+//                                      in "delayed" timing mode)
+//
+// try_swing_melee(weapon, melee, origin, aim_dir) -> bool "acted", exactly
+// mirroring try_fire_gun's contract from ticket 02 — the header's
+// cooldown_timer is what prevents re-triggering; this module never gates on
+// its own separate cooldown.
+// ============================================================================
+
+const TIMING = { INSTANT: 'instant', DELAYED: 'delayed' };
+const SHAPE = { ARC: 'arc', RECT: 'rect' };
+const SWING_STATE = { IDLE: 'idle', WINDING: 'winding', ACTIVE: 'active', RECOVERING: 'recovering' };
+
+function createInitialState() {
+  return {
+    timingMode: TIMING.INSTANT,
+    hitboxShape: SHAPE.ARC,
+
+    player: { x: 300, y: 220 },
+    aimAngle: 0, // radians, 0 = facing +x (right)
+
+    weapon: {
+      cooldown_timer: 0,
+      action_rate: 1.4,       // swings/sec once off cooldown
+      range: 70,
+      arc_degrees: 100,       // cone total width (arc mode)
+      rect_width: 56,         // total width (rect mode)
+      damage: 34,
+      swing_time: 0.35,       // total visual swing duration
+      active_fraction: 0.5,   // delayed mode: hit resolves at 50% through the swing
+    },
+
+    swing: {
+      state: SWING_STATE.IDLE,
+      timer: 0,             // counts down within the current state
+      hasResolvedHit: false, // guards "once per swing" in delayed mode
+    },
+
+    enemies: defaultEnemies(),
+    log: [],
+    tick: 0,
+  };
+}
+
+function defaultEnemies() {
+  return [
+    { id: 1, x: 380, y: 190, radius: 12, health: 40, maxHealth: 40, alive: true },
+    { id: 2, x: 400, y: 250, radius: 12, health: 40, maxHealth: 40, alive: true },
+    { id: 3, x: 360, y: 280, radius: 12, health: 40, maxHealth: 40, alive: true },
+    { id: 4, x: 180, y: 200, radius: 12, health: 40, maxHealth: 40, alive: true }, // behind player, out of arc
+  ];
+}
+
+function scatterEnemies(state) {
+  const enemies = [];
+  const n = 5;
+  for (let i = 0; i < n; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 60 + Math.random() * 140;
+    enemies.push({
+      id: i + 1,
+      x: state.player.x + Math.cos(angle) * dist,
+      y: state.player.y + Math.sin(angle) * dist,
+      radius: 12,
+      health: 40,
+      maxHealth: 40,
+      alive: true,
+    });
+  }
+  return enemies;
+}
+
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return Math.abs(d);
+}
+
+// The two candidate hitbox tests. Both take a world-space enemy position and
+// return whether it's caught by the swing this frame.
+function enemyInArc(weapon, player, aimAngle, enemy) {
+  const dx = enemy.x - player.x;
+  const dy = enemy.y - player.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > weapon.range + enemy.radius) return false;
+  const angleToEnemy = Math.atan2(dy, dx);
+  const halfArc = (weapon.arc_degrees * Math.PI / 180) / 2;
+  return angleDiff(angleToEnemy, aimAngle) <= halfArc;
+}
+
+function enemyInRect(weapon, player, aimAngle, enemy) {
+  const dx = enemy.x - player.x;
+  const dy = enemy.y - player.y;
+  // rotate enemy into swing-local space: local x = forward, local y = lateral
+  const cos = Math.cos(-aimAngle), sin = Math.sin(-aimAngle);
+  const localX = dx * cos - dy * sin;
+  const localY = dx * sin + dy * cos;
+  const halfWidth = weapon.rect_width / 2;
+  return (
+    localX + enemy.radius >= 0 &&
+    localX - enemy.radius <= weapon.range &&
+    Math.abs(localY) - enemy.radius <= halfWidth
+  );
+}
+
+function enemiesInHitbox(state) {
+  const test = state.hitboxShape === SHAPE.ARC ? enemyInArc : enemyInRect;
+  return state.enemies.filter((e) => e.alive && test(state.weapon, state.player, state.aimAngle, e));
+}
+
+// Mirrors bullet.odin's per-enemy hit pipeline (update_bullets): damage,
+// hit-spark, and on death xp-orb + pickup-drop + removal. Cleave just calls
+// this once per enemy caught in the hitbox instead of once per bullet.
+function applyHitToEnemy(state, enemy) {
+  enemy.health -= state.weapon.damage;
+  state.log.push({ type: 'hit', text: `hit enemy #${enemy.id} for ${state.weapon.damage} (hp ${Math.max(enemy.health, 0)}/${enemy.maxHealth})` });
+  if (enemy.health <= 0) {
+    enemy.alive = false;
+    state.log.push({ type: 'death', text: `enemy #${enemy.id} died — spawn_xp_orb, maybe_spawn_pickup` });
+  }
+}
+
+// This is the "once per swing" resolution step. It's called from exactly one
+// place per timing mode: instantly inside try_swing_melee (INSTANT mode), or
+// once when the swing crosses into ACTIVE (DELAYED mode). Either way it only
+// ever runs once per swing — there is no per-frame re-check.
+function resolveSwingHit(state) {
+  const caught = enemiesInHitbox(state);
+  state.log.push({ type: 'tick', text: `resolving swing hit — ${caught.length} enemy(ies) in hitbox` });
+  for (const enemy of caught) applyHitToEnemy(state, enemy);
+  state.swing.hasResolvedHit = true;
+}
+
+// try_swing_melee(weapon, melee, origin, aim_dir) -> acted: bool
+function trySwingMelee(state) {
+  if (state.weapon.cooldown_timer > 0) {
+    state.log.push({ type: 'blocked', text: `swing blocked — cooldown_timer = ${state.weapon.cooldown_timer.toFixed(2)}s remaining` });
+    return false;
+  }
+  if (state.swing.state !== SWING_STATE.IDLE) {
+    state.log.push({ type: 'blocked', text: `swing blocked — already mid-swing (${state.swing.state})` });
+    return false;
+  }
+
+  state.swing.hasResolvedHit = false;
+
+  if (state.timingMode === TIMING.INSTANT) {
+    // Hit-check runs synchronously, right here, once. swing_time still plays
+    // out purely for animation — nothing re-checks the hitbox while it does.
+    resolveSwingHit(state);
+    state.swing.state = SWING_STATE.RECOVERING;
+    state.swing.timer = state.weapon.swing_time;
+  } else {
+    state.swing.state = SWING_STATE.WINDING;
+    state.swing.timer = state.weapon.swing_time * state.weapon.active_fraction;
+  }
+
+  return true; // acted — caller sets cooldown_timer = 1/action_rate
+}
+
+function tick(state, dt) {
+  state.tick += 1;
+
+  if (state.weapon.cooldown_timer > 0) {
+    state.weapon.cooldown_timer = Math.max(0, state.weapon.cooldown_timer - dt);
+  }
+
+  if (state.swing.state === SWING_STATE.IDLE) return;
+
+  state.swing.timer -= dt;
+
+  if (state.swing.state === SWING_STATE.WINDING && state.swing.timer <= 0) {
+    state.swing.state = SWING_STATE.ACTIVE;
+    state.swing.timer = state.weapon.swing_time * (1 - state.weapon.active_fraction);
+    // The ACTIVE frame is where the hit-check fires — exactly once, guarded
+    // by hasResolvedHit even if ACTIVE spans multiple ticks below.
+    if (!state.swing.hasResolvedHit) resolveSwingHit(state);
+  } else if (state.swing.state === SWING_STATE.ACTIVE) {
+    // Demonstrate the guard directly: keep ticking while ACTIVE and log that
+    // no extra damage occurs, even though the enemy is still overlapping.
+    if (state.swing.timer <= 0) {
+      state.swing.state = SWING_STATE.RECOVERING;
+      state.swing.timer = 0.15;
+    } else {
+      state.log.push({ type: 'tick', text: `still ACTIVE — hasResolvedHit=${state.swing.hasResolvedHit}, no re-check` });
+    }
+  } else if (state.swing.state === SWING_STATE.RECOVERING && state.swing.timer <= 0) {
+    state.swing.state = SWING_STATE.IDLE;
+    if (state.weapon.cooldown_timer <= 0) {
+      state.weapon.cooldown_timer = 1 / state.weapon.action_rate;
+      state.log.push({ type: 'tick', text: `swing done — cooldown_timer set to ${state.weapon.cooldown_timer.toFixed(2)}s (1/action_rate)` });
+    }
+  }
+}
+</script>
+
+<script>
+(function () {
+  let state = createInitialState();
+  const MAX_LOG = 60;
+
+  function pushLog(entry) {
+    // handled inline in the logic module via state.log.push; this wraps for
+    // trimming/rendering only.
+  }
+
+  function trimLog() {
+    if (state.log.length > MAX_LOG) state.log = state.log.slice(state.log.length - MAX_LOG);
+  }
+
+  const el = {
+    timingToggle: document.getElementById('timing-toggle'),
+    shapeToggle: document.getElementById('shape-toggle'),
+    btnSwing: document.getElementById('btn-swing'),
+    btnTick: document.getElementById('btn-tick'),
+    btnAimLeft: document.getElementById('btn-aim-left'),
+    btnAimRight: document.getElementById('btn-aim-right'),
+    btnScatter: document.getElementById('btn-scatter'),
+    btnReset: document.getElementById('btn-reset'),
+    statePanel: document.getElementById('state-panel'),
+    log: document.getElementById('log'),
+    canvas: document.getElementById('canvas'),
+    tabs: document.getElementById('tabs'),
+    scenarioBody: document.getElementById('scenario-body'),
+  };
+  const ctx = el.canvas.getContext('2d');
+
+  function makeToggle(container, options, getValue, setValue) {
+    container.innerHTML = '';
+    options.forEach(([value, label]) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.className = value === getValue() ? 'active' : '';
+      b.onclick = () => { setValue(value); renderAll(); };
+      container.appendChild(b);
+    });
+  }
+
+  function render() {
+    // --- state panel ---
+    const s = state.swing.state;
+    el.statePanel.innerHTML = `
+      <div class="state-line"><span class="k">swing.state</span><span class="v"><span class="pill ${s}">${s}</span></span></div>
+      <div class="state-line"><span class="k">swing.timer</span><span class="v">${state.swing.timer.toFixed(2)}s</span></div>
+      <div class="state-line"><span class="k">swing.hasResolvedHit</span><span class="v">${state.swing.hasResolvedHit}</span></div>
+      <div class="state-line"><span class="k">weapon.cooldown_timer</span><span class="v">${state.weapon.cooldown_timer.toFixed(2)}s</span></div>
+      <div class="state-line"><span class="k">timing mode</span><span class="v">${state.timingMode}</span></div>
+      <div class="state-line"><span class="k">hitbox shape</span><span class="v">${state.hitboxShape}</span></div>
+      <div class="state-line"><span class="k">aim angle</span><span class="v">${(state.aimAngle * 180 / Math.PI).toFixed(0)}°</span></div>
+    `;
+
+    // --- log ---
+    trimLog();
+    el.log.innerHTML = state.log.map((e) => `<div class="entry ${e.type}">[${e.type}] ${e.text}</div>`).join('') || '<div class="entry tick">(no events yet)</div>';
+    el.log.scrollTop = el.log.scrollHeight;
+
+    // --- toggles ---
+    makeToggle(el.timingToggle, [[TIMING.INSTANT, 'Instant'], [TIMING.DELAYED, 'Delayed window']],
+      () => state.timingMode, (v) => { state.timingMode = v; });
+    makeToggle(el.shapeToggle, [[SHAPE.ARC, 'Arc / cone'], [SHAPE.RECT, 'Expanding rect']],
+      () => state.hitboxShape, (v) => { state.hitboxShape = v; });
+
+    // --- buttons enabled state ---
+    el.btnSwing.disabled = state.weapon.cooldown_timer > 0 || state.swing.state !== SWING_STATE.IDLE;
+
+    drawCanvas();
+    renderScenario();
+  }
+
+  function drawCanvas() {
+    const w = el.canvas.width, h = el.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // hitbox preview (drawn even when idle, so shape is easy to compare)
+    ctx.save();
+    ctx.translate(state.player.x, state.player.y);
+    const active = state.swing.state === SWING_STATE.ACTIVE || state.swing.state === SWING_STATE.IDLE;
+    ctx.fillStyle = state.swing.state === SWING_STATE.ACTIVE ? 'rgba(95,227,163,0.35)' : 'rgba(95,179,255,0.15)';
+    ctx.strokeStyle = state.swing.state === SWING_STATE.ACTIVE ? '#5fe3a3' : '#5fb3ff';
+    ctx.lineWidth = 1.5;
+
+    if (state.hitboxShape === SHAPE.ARC) {
+      const half = (state.weapon.arc_degrees * Math.PI / 180) / 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, state.weapon.range, state.aimAngle - half, state.aimAngle + half);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.rotate(state.aimAngle);
+      const hw = state.weapon.rect_width / 2;
+      ctx.beginPath();
+      ctx.rect(0, -hw, state.weapon.range, hw * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // aim direction line
+    ctx.strokeStyle = '#8a90a3';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(state.player.x, state.player.y);
+    ctx.lineTo(state.player.x + Math.cos(state.aimAngle) * 160, state.player.y + Math.sin(state.aimAngle) * 160);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // player
+    ctx.fillStyle = '#5fb3ff';
+    ctx.beginPath();
+    ctx.arc(state.player.x, state.player.y, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // enemies
+    for (const e of state.enemies) {
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+      ctx.fillStyle = e.alive ? '#ff6b6b' : '#3a3f4d';
+      ctx.fill();
+      if (e.alive) {
+        // health bar
+        ctx.fillStyle = '#0e1016';
+        ctx.fillRect(e.x - 14, e.y - e.radius - 10, 28, 4);
+        ctx.fillStyle = '#5fe3a3';
+        ctx.fillRect(e.x - 14, e.y - e.radius - 10, 28 * Math.max(e.health, 0) / e.maxHealth, 4);
+      }
+      ctx.fillStyle = '#e8eaf0';
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillText('#' + e.id, e.x - 6, e.y + 3);
+    }
+  }
+
+  el.btnSwing.onclick = () => { trySwingMelee(state); render(); };
+  el.btnTick.onclick = () => { tick(state, 0.1); render(); };
+  el.btnAimLeft.onclick = () => { state.aimAngle -= Math.PI / 12; render(); };
+  el.btnAimRight.onclick = () => { state.aimAngle += Math.PI / 12; render(); };
+  el.btnScatter.onclick = () => { state.enemies = scatterEnemies(state); state.log.push({ type: 'tick', text: 'enemies scattered' }); render(); };
+  el.btnReset.onclick = () => { const shape = state.hitboxShape, timing = state.timingMode; state = createInitialState(); state.hitboxShape = shape; state.timingMode = timing; render(); };
+
+  // ---- guided scenarios ----
+  const scenarios = [
+    {
+      title: 'Happy path cleave',
+      desc: 'Three enemies clustered ahead of the player, one behind (out of the arc). Swing once and watch all three in front take damage simultaneously — that\'s cleave: one hit-check, every enemy in the hitbox is hit, not just the first.',
+      timing: TIMING.INSTANT, shape: SHAPE.ARC,
+      steps: [
+        { label: 'Swing!', run: () => trySwingMelee(state) },
+        { label: 'Tick until cooldown clears', run: () => { for (let i = 0; i < 15; i++) tick(state, 0.1); } },
+        { label: 'Swing again — finish them off', run: () => trySwingMelee(state) },
+      ],
+    },
+    {
+      title: 'Once per swing, not per frame',
+      desc: 'Delayed-window timing mode: the swing winds up, then goes ACTIVE, then recovers. Step through frame-by-frame and watch the log — the hit resolves exactly once when the swing crosses into ACTIVE, and ticking again while still ACTIVE (enemy still overlapping) produces no extra damage.',
+      timing: TIMING.DELAYED, shape: SHAPE.ARC,
+      steps: [
+        { label: 'Swing! (enters WINDING)', run: () => trySwingMelee(state) },
+        { label: 'Tick (crosses into ACTIVE — hit resolves once)', run: () => tick(state, 0.2) },
+        { label: 'Tick again (still ACTIVE — no re-hit)', run: () => tick(state, 0.05) },
+        { label: 'Tick (RECOVERING)', run: () => tick(state, 0.1) },
+        { label: 'Tick (back to IDLE, cooldown set)', run: () => tick(state, 0.2) },
+      ],
+    },
+    {
+      title: 'Blocked while on cooldown',
+      desc: 'Swing twice back-to-back with no ticking in between. The second press is rejected by weapon.cooldown_timer > 0 — the exact same header field that gates try_fire_gun in the real code. Melee needs no cooldown logic of its own.',
+      timing: TIMING.INSTANT, shape: SHAPE.ARC,
+      steps: [
+        { label: 'Swing! (succeeds)', run: () => trySwingMelee(state) },
+        { label: 'Swing again immediately (blocked — check the log)', run: () => trySwingMelee(state) },
+      ],
+    },
+    {
+      title: 'Arc vs. rect — same enemies, different hits',
+      desc: 'Same enemy layout, two swings back to back with the shape switched between them. Watch which enemies get caught change — a narrow flanking enemy near the arc\'s edge can fall inside the rect but outside the cone, or vice versa depending on distance.',
+      timing: TIMING.INSTANT, shape: SHAPE.ARC,
+      steps: [
+        { label: 'Swing with Arc / cone active', run: () => trySwingMelee(state) },
+        { label: 'Tick until cooldown clears', run: () => { for (let i = 0; i < 15; i++) tick(state, 0.1); } },
+        { label: 'Switch to Expanding rect', run: () => { state.hitboxShape = SHAPE.RECT; } },
+        { label: 'Swing again — compare who got hit', run: () => trySwingMelee(state) },
+      ],
+    },
+  ];
+
+  let activeScenario = 0;
+  let stepIndex = 0;
+
+  function startScenario(i) {
+    activeScenario = i;
+    stepIndex = 0;
+    const sc = scenarios[i];
+    state = createInitialState();
+    state.timingMode = sc.timing;
+    state.hitboxShape = sc.shape;
+    state.log.push({ type: 'tick', text: `— scenario "${sc.title}" reset to known initial state —` });
+    render();
+  }
+
+  function renderScenario() {
+    el.tabs.innerHTML = '';
+    scenarios.forEach((sc, i) => {
+      const b = document.createElement('button');
+      b.className = 'tab-btn' + (i === activeScenario ? ' active' : '');
+      b.textContent = sc.title;
+      b.onclick = () => startScenario(i);
+      el.tabs.appendChild(b);
+    });
+
+    const sc = scenarios[activeScenario];
+    const stepsHtml = sc.steps.map((step, i) => {
+      const done = i < stepIndex;
+      const isNext = i === stepIndex;
+      return `<button data-step="${i}" class="${done ? 'done' : ''}" ${isNext ? '' : 'disabled'}>${i + 1}. ${step.label}</button>`;
+    }).join('');
+
+    el.scenarioBody.innerHTML = `
+      <div class="scenario-desc">${sc.desc}</div>
+      <div class="step-list">${stepsHtml}</div>
+    `;
+
+    el.scenarioBody.querySelectorAll('button[data-step]').forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.step);
+        scenarios[activeScenario].steps[i].run();
+        stepIndex = i + 1;
+        render();
+      };
+    });
+  }
+
+  startScenario(0);
+})();
+</script>
+</body>
+</html>
