@@ -1,5 +1,8 @@
 package shooter
 
+import "core:math"
+import "core:math/linalg"
+
 Weapon_Kind :: enum {
 	Pistol,
 	SMG,
@@ -53,8 +56,13 @@ Gun :: struct {
 	bullet_lifetime:  f32,
 }
 
-// no runtime state yet - swing/cast mechanics land in tickets 03/04
-Melee_Weapon :: struct {}
+Melee_Weapon :: struct {
+	range:       f32, // max distance from origin a swing's arc reaches
+	arc_degrees: f32, // total cone width, centered on aim_dir
+	swing_time:  f32, // cosmetic-only animation duration - ticket 07 owns the actual animation
+}
+
+// no runtime state yet - cast mechanics land in ticket 04
 Magic :: struct {}
 
 // discriminant for Weapon_Variant_Save; internal to persistence, unrelated
@@ -238,7 +246,8 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir: Vec2) {
 	switch &v in weapon.variant {
 	case Gun:
 		acted = try_fire_gun(weapon, &v, origin, aim_dir)
-	case Melee_Weapon: // ticket 03
+	case Melee_Weapon:
+		acted = try_swing_melee(&v, weapon.damage, origin, aim_dir)
 	case Magic: // ticket 04
 	}
 
@@ -263,6 +272,42 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool 
 
 	if gun.ammo_in_clip <= 0 {
 		start_reload(weapon)
+	}
+
+	return true
+}
+
+// true if enemy is within melee's arc/cone: inside range (plus a fudge for
+// the enemy's own collision size, derived from its existing collision rect -
+// Enemy has no dedicated radius field) and within arc_degrees/2 of aim_dir.
+// Mirrors Gun.spread_angle's cone-around-aim_dir idea, reused for hit
+// detection instead of pellet fan-out.
+enemy_in_melee_arc :: proc(melee: Melee_Weapon, origin, aim_dir: Vec2, enemy: Enemy) -> bool {
+	enemy_box := actor_collision_rect(enemy.rect, enemy.animation)
+	enemy_radius := max(enemy_box.width, enemy_box.height) / 2
+
+	to_enemy := Vec2{enemy.x, enemy.y} - origin
+	dist := linalg.length(to_enemy)
+	if dist > melee.range + enemy_radius {
+		return false
+	}
+
+	direction_to_enemy := linalg.normalize0(to_enemy)
+	angle_to_enemy := math.to_degrees(math.acos(clamp(linalg.dot(aim_dir, direction_to_enemy), -1, 1)))
+
+	return angle_to_enemy <= melee.arc_degrees / 2
+}
+
+// resolves the swing instantly and synchronously - no active-frame window to
+// guard, so there's no per-swing "already hit" flag to manage. A single pass
+// gathers every enemy in the arc (cleave), applying the hit to each via the
+// same apply_hit_to_enemy pipeline bullets use, so death handling is never
+// duplicated between weapon types. Always "acts" once triggered - no
+// ammo-style failure case like Gun's empty-clip.
+try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2) -> bool {
+	#reverse for enemy, i in game.enemies {
+		if !enemy_in_melee_arc(melee^, origin, aim_dir, enemy) do continue
+		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
 
 	return true

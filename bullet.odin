@@ -58,21 +58,13 @@ update_bullets :: proc(dt: f32) {
 
 		hit := false
 
-		#reverse for &enemy, j in game.enemies {
+		#reverse for enemy, j in game.enemies {
 			enemy_box := actor_collision_rect(enemy.rect, enemy.animation)
 			if !rl.CheckCollisionCircleRec(bullet.position, BULLET_RADIUS, enemy_box) {
 				continue
 			}
 
-			enemy.health -= bullet.damage
-			spawn_hit_spark(bullet.position)
-
-			if enemy.health <= 0 {
-				spawn_xp_orb(Vec2{enemy.x, enemy.y})
-				maybe_spawn_pickup(Vec2{enemy.x, enemy.y})
-				delete(enemy.path)
-				unordered_remove(&game.enemies, j)
-			}
+			apply_hit_to_enemy(j, bullet.damage, bullet.position)
 
 			hit = true
 			break
@@ -81,6 +73,25 @@ update_bullets :: proc(dt: f32) {
 		if hit {
 			unordered_remove(&game.bullets, i)
 		}
+	}
+}
+
+// applies damage to game.enemies[index] at hit_position, spawning a hit
+// spark and, on death, an xp orb + pickup drop + removal - shared by bullet
+// collision above and melee's arc/cone hit-check (weapon.odin's
+// try_swing_melee), so death handling is never duplicated between weapon
+// types
+apply_hit_to_enemy :: proc(index: int, damage: f32, hit_position: Vec2) {
+	enemy := &game.enemies[index]
+
+	enemy.health -= damage
+	spawn_hit_spark(hit_position)
+
+	if enemy.health <= 0 {
+		spawn_xp_orb(Vec2{enemy.x, enemy.y})
+		maybe_spawn_pickup(Vec2{enemy.x, enemy.y})
+		delete(enemy.path)
+		unordered_remove(&game.enemies, index)
 	}
 }
 
