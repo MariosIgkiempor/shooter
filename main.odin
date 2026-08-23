@@ -105,7 +105,7 @@ load_game :: proc() {
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
 				animation = animation_create(.Player_Walk),
-				weapon = weapon_create(.SMG),
+				weapon = weapon_create(.Sword),
 				level = 1,
 			},
 			camera = Camera {

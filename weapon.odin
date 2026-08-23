@@ -7,6 +7,11 @@ Weapon_Kind :: enum {
 	Pistol,
 	SMG,
 	Shotgun,
+	// placeholder melee content so try_swing_melee (ticket 03) is actually
+	// player-reachable for testing - real tier-ladder naming/stats are
+	// content-authoring for a later ticket (map's "Not yet specified")
+	Dagger,
+	Sword,
 }
 
 Fire_Mode :: enum {
@@ -155,12 +160,31 @@ weapon_presets: [Weapon_Kind]Weapon = {
 			bullet_lifetime = 0.6,
 		},
 	},
+	.Dagger = {
+		kind = .Dagger,
+		fire_mode = .Automatic, // hold to spam quick swings
+		damage = 15,
+		action_rate = 4,
+		variant = Melee_Weapon{range = 40, arc_degrees = 70, swing_time = 0.15},
+	},
+	.Sword = {
+		kind = .Sword,
+		fire_mode = .Semi_Automatic,
+		damage = 30,
+		action_rate = 1.8,
+		variant = Melee_Weapon{range = 60, arc_degrees = 110, swing_time = 0.35},
+	},
 }
 
+// Dagger/Sword have no art of their own yet - reusing gun icons as
+// placeholders (main.odin's draw_weapon already stands in with placeholder
+// art generally); swap these once real melee sprites exist.
 weapon_texture_names: [Weapon_Kind]Texture_Name = {
 	.Pistol  = .Weapon_Pistol,
 	.SMG     = .Weapon_Smg,
 	.Shotgun = .Weapon_Shotgun,
+	.Dagger  = .Weapon_Pistol,
+	.Sword   = .Weapon_Shotgun,
 }
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
