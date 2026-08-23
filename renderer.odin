@@ -58,6 +58,41 @@ draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2, rotation: f32 = 0,
 	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, rotation, tint)
 }
 
+// draws a 9-slice panel: corners at native size (scaled by `corner_scale`,
+// useful when the panel is drawn much larger than the source tiles), edges
+// stretched along one axis to bridge the gap between corners, middle
+// stretched across both axes. `pieces` are ordered row-major top-to-bottom,
+// left-to-right (top-left, top-middle, top-right, middle-left, ...,
+// bottom-right), matching how a 3x3 grid of source tiles reads.
+draw_nine_slice :: proc(pieces: [9]Atlas_Texture, dest: Rect, tint: Color = rl.WHITE, corner_scale: f32 = 1) {
+	tl, tm, tr := pieces[0], pieces[1], pieces[2]
+	ml, mm, mr := pieces[3], pieces[4], pieces[5]
+	bl, bm, br := pieces[6], pieces[7], pieces[8]
+
+	// clamped to half the destination so corners can never together exceed
+	// dest's width/height - without this, a panel smaller than the (scaled)
+	// corner size would overflow its own bounds instead of shrinking to fit
+	left_w := min(tl.document_size.x * corner_scale, dest.width / 2)
+	right_w := min(tr.document_size.x * corner_scale, dest.width / 2)
+	top_h := min(tl.document_size.y * corner_scale, dest.height / 2)
+	bottom_h := min(bl.document_size.y * corner_scale, dest.height / 2)
+
+	mid_w := max(dest.width - left_w - right_w, 0)
+	mid_h := max(dest.height - top_h - bottom_h, 0)
+
+	draw_atlas_tile(tl.rect, {dest.x, dest.y, left_w, top_h}, {}, 0, tint)
+	draw_atlas_tile(tm.rect, {dest.x + left_w, dest.y, mid_w, top_h}, {}, 0, tint)
+	draw_atlas_tile(tr.rect, {dest.x + left_w + mid_w, dest.y, right_w, top_h}, {}, 0, tint)
+
+	draw_atlas_tile(ml.rect, {dest.x, dest.y + top_h, left_w, mid_h}, {}, 0, tint)
+	draw_atlas_tile(mm.rect, {dest.x + left_w, dest.y + top_h, mid_w, mid_h}, {}, 0, tint)
+	draw_atlas_tile(mr.rect, {dest.x + left_w + mid_w, dest.y + top_h, right_w, mid_h}, {}, 0, tint)
+
+	draw_atlas_tile(bl.rect, {dest.x, dest.y + top_h + mid_h, left_w, bottom_h}, {}, 0, tint)
+	draw_atlas_tile(bm.rect, {dest.x + left_w, dest.y + top_h + mid_h, mid_w, bottom_h}, {}, 0, tint)
+	draw_atlas_tile(br.rect, {dest.x + left_w + mid_w, dest.y + top_h + mid_h, right_w, bottom_h}, {}, 0, tint)
+}
+
 draw_text :: proc(text: string, pos: Vec2, size: f32, spacing: f32 = 0, tint: Color = rl.WHITE) {
 	rl.DrawTextEx(
 		font,
@@ -65,7 +100,7 @@ draw_text :: proc(text: string, pos: Vec2, size: f32, spacing: f32 = 0, tint: Co
 		pos,
 		size,
 		spacing,
-		rl.WHITE,
+		tint,
 	)
 }
 

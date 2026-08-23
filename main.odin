@@ -3,15 +3,10 @@ package shooter
 import "base:runtime"
 import "core:c"
 import "core:encoding/json"
-import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:os"
-import "core:strings"
 import rl "vendor:raylib"
-
-import layout "vendor/ui"
-import ui "vendor/ui/ui"
 
 Vec2 :: rl.Vector2
 Vec2i :: [2]i32
@@ -422,27 +417,7 @@ draw_game :: proc() {
 	{
 		switch game.program_mode {
 		case .Playing:
-			draw_text("Playing", 10, 10, 0, rl.GREEN)
-			draw_weapon_hud(game.player.weapon)
-			draw_text(
-				fmt.tprintf(
-					"Lv {}  XP {}/{}",
-					game.player.level,
-					game.player.xp,
-					xp_required_for_level(game.player.level),
-				),
-				{10, 55},
-				10,
-				0,
-				rl.WHITE,
-			)
-			draw_text(
-				fmt.tprintf("HP {:.0f}/{}", game.player.health, PLAYER_MAX_HEALTH),
-				{10, 70},
-				10,
-				0,
-				rl.WHITE,
-			)
+			draw_hud(game.player)
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
@@ -542,88 +517,6 @@ draw_game :: proc() {
 		}
 	}
 
-	draw_level_up_ui :: proc() {
-		ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
-		ui.begin_frame(game.window_width, game.window_height)
-
-		if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-			if ui.begin("Level Up!") {
-				ui.text("Level {} - choose an upgrade", game.player.level)
-
-				if ui.button("Upgrade Weapon") {
-					upgrade_weapon(&game.player.weapon)
-					game.leveling_up = false
-				}
-				if ui.button("Refill Ammo") {
-					refill_weapon_reserve(&game.player.weapon)
-					game.leveling_up = false
-				}
-				if ui.button("Skip") {
-					game.leveling_up = false
-				}
-			}
-		}
-
-		render_commands := ui.end_frame()
-
-		for cmd in render_commands {
-			switch cmd.kind {
-			case .Rectangle:
-				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
-			case .Text:
-				rl.DrawTextEx(
-					font,
-					strings.clone_to_cstring(cmd.text, context.temp_allocator),
-					rl.Vector2(cmd.pos),
-					f32(cmd.font_size),
-					0,
-					rl.Color(cmd.color),
-				)
-			}
-		}
-	}
-
-	draw_game_over_ui :: proc() {
-		ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
-		ui.begin_frame(game.window_width, game.window_height)
-
-		if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-			if ui.begin("Game Over") {
-				ui.text("You died")
-
-				if ui.button("Restart") {
-					clear(&game.enemies)
-					clear(&game.bullets)
-					clear(&game.enemy_bullets)
-					clear(&game.xp_orbs)
-					clear(&game.pickups)
-					clear(&game.particles)
-					reset_screen_shake()
-					game.player.health = PLAYER_MAX_HEALTH
-					game.game_over = false
-				}
-			}
-		}
-
-		render_commands := ui.end_frame()
-
-		for cmd in render_commands {
-			switch cmd.kind {
-			case .Rectangle:
-				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
-			case .Text:
-				rl.DrawTextEx(
-					font,
-					strings.clone_to_cstring(cmd.text, context.temp_allocator),
-					rl.Vector2(cmd.pos),
-					f32(cmd.font_size),
-					0,
-					rl.Color(cmd.color),
-				)
-			}
-		}
-	}
-
 	// a short barrel pivoting at roughly chest height, rotated to face the
 	// player's current aim direction - stands in for a weapon sprite until one exists
 	draw_weapon :: proc(player: Player) {
@@ -646,34 +539,6 @@ draw_game :: proc() {
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
 	}
 
-	draw_health_bar :: proc(enemy: Enemy) {
-		WIDTH: f32 = 16
-		HEIGHT: f32 = 2
-		GAP_ABOVE_SPRITE: f32 = 5
-
-		doc := animation_atlas_texture(enemy.animation).document_size
-		pos := Vec2{enemy.x - WIDTH / 2, enemy.y - doc.y - GAP_ABOVE_SPRITE}
-		fill := WIDTH * clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
-
-		draw_rectangle({pos.x, pos.y, WIDTH, HEIGHT}, rl.BLACK)
-		draw_rectangle({pos.x, pos.y, fill, HEIGHT}, rl.RED)
-	}
-
-	draw_weapon_hud :: proc(weapon: Weapon) {
-		ammo_text := fmt.tprintf(
-			"Ammo: {}/{}  Reserve: {}",
-			weapon.ammo_in_clip,
-			weapon.clip_size,
-			weapon.reserve_ammo,
-		)
-		draw_text(ammo_text, {10, 25}, 10, 0, rl.WHITE)
-
-		if weapon.reload_timer > 0 {
-			draw_text("Reloading...", {10, 40}, 10, 0, rl.ORANGE)
-		} else if weapon.ammo_in_clip <= 0 && weapon.reserve_ammo <= 0 {
-			draw_text("Out of ammo!", {10, 40}, 10, 0, rl.RED)
-		}
-	}
 }
 
 program_should_exit :: proc() -> bool {
