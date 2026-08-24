@@ -1,14 +1,30 @@
 package shooter
 
+import "core:math"
+import "core:math/rand"
 import rl "vendor:raylib"
 
+// ambient gas-puff particles, spawned continuously while the cloud lives -
+// POC for the particle system rendering animated sprites instead of flat
+// circles. Kept slow and short-lived so a puff never drifts past the
+// cloud's own radius before it fades.
+POISON_GAS_SPAWN_INTERVAL :: 0.1
+POISON_GAS_SPRITE_SIZE :: 14.0
+POISON_GAS_MIN_LIFETIME :: 0.5
+POISON_GAS_MAX_LIFETIME :: 0.9
+POISON_GAS_MAX_DRIFT_SPEED :: 6.0
+// keeps puff centers away from the very edge, since the sprite itself has
+// radius (a puff spawned exactly on the boundary would draw half outside it)
+POISON_GAS_SPAWN_RADIUS_FRACTION :: 0.75
+
 Poison_Cloud :: struct {
-	position:   Vec2,
-	radius:     f32,
-	damage:     f32, // damage applied per tick to each enemy currently overlapping
-	tick_rate:  f32, // damage ticks/sec
-	tick_timer: f32, // counts down to 0, fires a tick, then resets to 1/tick_rate
-	lifetime:   f32, // seconds remaining; despawns at <= 0
+	position:        Vec2,
+	radius:          f32,
+	damage:          f32, // damage applied per tick to each enemy currently overlapping
+	tick_rate:       f32, // damage ticks/sec
+	tick_timer:      f32, // counts down to 0, fires a tick, then resets to 1/tick_rate
+	lifetime:        f32, // seconds remaining; despawns at <= 0
+	gas_spawn_timer: f32, // counts down to 0, spawns a gas puff, then resets
 }
 
 reset_poison_clouds :: proc() {
@@ -28,7 +44,31 @@ cast_poison_cloud :: proc(magic: Magic, damage: f32, position: Vec2) {
 			tick_rate = magic.cloud_tick_rate,
 			tick_timer = 0, // ticks immediately on its first update
 			lifetime = magic.cloud_duration,
+			gas_spawn_timer = 0, // spawns its first puff immediately too
 		},
+	)
+}
+
+// spawns one ambient gas-puff particle at a random point within the cloud's
+// radius, drifting slowly so it fades out before it could drift past the
+// cloud's own edge
+spawn_poison_gas_puff :: proc(cloud: Poison_Cloud) {
+	angle := rand.float32_range(0, math.TAU)
+	// sqrt of a uniform sample gives a uniform distribution over the disc's
+	// area, not a bias toward the center
+	r := cloud.radius * POISON_GAS_SPAWN_RADIUS_FRACTION * math.sqrt(rand.float32_range(0, 1))
+	offset := Vec2{math.cos(angle), math.sin(angle)} * r
+
+	drift_angle := rand.float32_range(0, math.TAU)
+	drift_speed := rand.float32_range(0, POISON_GAS_MAX_DRIFT_SPEED)
+	drift := Vec2{math.cos(drift_angle), math.sin(drift_angle)} * drift_speed
+
+	spawn_particle_sprite(
+		cloud.position + offset,
+		drift,
+		.Particle_Poison_Gas,
+		{POISON_GAS_SPRITE_SIZE, POISON_GAS_SPRITE_SIZE},
+		rand.float32_range(POISON_GAS_MIN_LIFETIME, POISON_GAS_MAX_LIFETIME),
 	)
 }
 
@@ -38,6 +78,12 @@ update_poison_clouds :: proc(dt: f32) {
 		if cloud.lifetime <= 0 {
 			unordered_remove(&game.poison_clouds, i)
 			continue
+		}
+
+		cloud.gas_spawn_timer -= dt
+		if cloud.gas_spawn_timer <= 0 {
+			cloud.gas_spawn_timer += POISON_GAS_SPAWN_INTERVAL
+			spawn_poison_gas_puff(cloud)
 		}
 
 		cloud.tick_timer -= dt

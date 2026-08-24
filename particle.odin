@@ -24,11 +24,29 @@ DAMAGE_BURST_MAX_LIFETIME :: 0.45
 DAMAGE_BURST_MIN_RADIUS :: 2.5
 DAMAGE_BURST_MAX_RADIUS :: 5.0
 
+// what a Particle looks like - a plain filled circle, or an animated atlas
+// sprite. Orthogonal to the rest of Particle's fields (position/velocity/
+// lifetime), same bare-union-on-the-struct-field idiom as Enemy's
+// Movement_Style/Attack_Style. See CONTEXT.md's Movement Style entry.
+Particle_Visual :: union {
+	Particle_Circle,
+	Particle_Sprite,
+}
+
+Particle_Circle :: struct {
+	color:  rl.Color,
+	radius: f32,
+}
+
+Particle_Sprite :: struct {
+	animation: Animation,
+	size:      Vec2, // drawn world-space size, centered on position
+}
+
 Particle :: struct {
 	position:     Vec2,
 	velocity:     Vec2,
-	color:        rl.Color,
-	radius:       f32,
+	visual:       Particle_Visual,
 	lifetime:     f32, // seconds remaining; despawns at <= 0
 	max_lifetime: f32, // starting lifetime, used to compute fade fraction
 }
@@ -56,15 +74,37 @@ spawn_particle_burst :: proc(
 		append(
 			&game.particles,
 			Particle {
-				position     = position,
-				velocity     = direction * speed,
-				color        = color,
-				radius       = rand.float32_range(min_radius, max_radius),
-				lifetime     = lifetime,
+				position = position,
+				velocity = direction * speed,
+				visual = Particle_Circle {
+					color = color,
+					radius = rand.float32_range(min_radius, max_radius),
+				},
+				lifetime = lifetime,
 				max_lifetime = lifetime,
 			},
 		)
 	}
+}
+
+// spawns a single animated-sprite particle - used for effects that need more
+// than a flat-colored circle, e.g. the poison cloud's gas puffs
+spawn_particle_sprite :: proc(
+	position, velocity: Vec2,
+	anim: Animation_Name,
+	size: Vec2,
+	lifetime: f32,
+) {
+	append(
+		&game.particles,
+		Particle {
+			position = position,
+			velocity = velocity,
+			visual = Particle_Sprite{animation = animation_create(anim), size = size},
+			lifetime = lifetime,
+			max_lifetime = lifetime,
+		},
+	)
 }
 
 // preset burst for a bullet striking an enemy
@@ -107,12 +147,26 @@ update_particles :: proc(dt: f32) {
 
 		particle.velocity *= 1 - min(PARTICLE_DRAG * dt, 1)
 		particle.position += particle.velocity * dt
+
+		switch &v in particle.visual {
+		case Particle_Circle:
+		case Particle_Sprite:
+			animation_update(&v.animation, dt)
+		}
 	}
 }
 
 draw_particles :: proc(particles: []Particle) {
 	for particle in particles {
 		t := particle.lifetime / particle.max_lifetime // 1 -> 0 over life
-		rl.DrawCircleV(particle.position, particle.radius * t, rl.Fade(particle.color, t))
+
+		switch v in particle.visual {
+		case Particle_Circle:
+			rl.DrawCircleV(particle.position, v.radius * t, rl.Fade(v.color, t))
+		case Particle_Sprite:
+			tex := animation_atlas_texture(v.animation)
+			dest := Rect{particle.position.x, particle.position.y, v.size.x, v.size.y}
+			draw_atlas_tile(tex.rect, dest, v.size / 2, 0, rl.Fade(rl.WHITE, t))
+		}
 	}
 }
