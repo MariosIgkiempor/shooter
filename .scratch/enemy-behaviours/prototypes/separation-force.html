@@ -1,0 +1,455 @@
+<title>Separation force prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8b90a3;
+    --accent: #ff7b54;
+    --grid: #22252e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+  /* position:fixed panels instead of a flex row: robust against
+     ancestor-height propagation failing in some embedded preview
+     contexts (e.g. an iframe that doesn't resolve height:100vh
+     through the flex chain), since fixed insets size directly off
+     the viewport regardless of html/body layout. */
+  #sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 340px;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+  }
+  #stage-wrap {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 340px;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .question {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .question b { color: var(--text); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 18px 0 8px; }
+  label { display: block; font-size: 13px; margin-bottom: 4px; }
+  .row { margin-bottom: 14px; }
+  .row output { color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 13px; margin-bottom: 10px;
+  }
+  button {
+    background: #262a36;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    margin: 0 6px 6px 0;
+  }
+  button:hover { background: #2f3442; }
+  button.active { background: var(--accent); color: #1a1200; border-color: var(--accent); }
+  #tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  #scenario-desc {
+    font-size: 12.5px; color: var(--dim); line-height: 1.5;
+    background: #171a22; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin-bottom: 10px; min-height: 40px;
+  }
+  #topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--dim);
+  }
+  #topbar b { color: var(--text); }
+  canvas { display: block; background: var(--bg); flex: 1; width: 100%; min-height: 0; }
+  .legend { display: flex; gap: 16px; align-items: center; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  code { background: #262a36; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+
+<div id="sidebar">
+  <h1>Separation force</h1>
+  <div class="question">
+    Ticket: <b>Separation force design</b> on the Enemy behaviours map.
+    Question: when several enemies of the <b>same Movement Style</b> chase the player, they currently
+    beeline to the same point and stack on top of each other. This prototype adds a steering force that
+    pushes same-style neighbours apart, blended with the chase direction. Tune <b>radius</b>, <b>strength</b>,
+    and check whether brute-force neighbour checks hold up as enemy count grows past the real game's
+    <code>MAX_ENEMIES :: 24</code>.
+    <br><br>
+    Chase-to-player here is a straight line (this prototype isn't testing the BFS pathfinder, only the
+    separation force blended on top of a chase direction — in the real game that direction comes from
+    <code>chase_to</code>'s next waypoint instead).
+  </div>
+
+  <h2>Guided scenarios</h2>
+  <div id="tabs"></div>
+  <div id="scenario-desc"></div>
+
+  <h2>Separation</h2>
+  <div class="row">
+    <label>Radius <output id="out-radius"></output></label>
+    <input type="range" id="radius" min="0" max="120" value="36" step="1">
+  </div>
+  <div class="row">
+    <label>Strength (vs. chase pull) <output id="out-strength"></output></label>
+    <input type="range" id="strength" min="0" max="3" value="1.2" step="0.05">
+  </div>
+
+  <h2>Population</h2>
+  <div class="row">
+    <label>Grounded / Melee count (red) <output id="out-countA"></output></label>
+    <input type="range" id="countA" min="0" max="30" value="8" step="1">
+  </div>
+  <div class="row">
+    <label>Grounded / Ranged count (blue) <output id="out-countB"></output></label>
+    <input type="range" id="countB" min="0" max="30" value="8" step="1">
+  </div>
+  <div class="row">
+    <label>Floater placeholder count (purple, different Movement Style) <output id="out-countC"></output></label>
+    <input type="range" id="countC" min="0" max="15" value="0" step="1">
+  </div>
+
+  <h2>Neighbour lookup</h2>
+  <div class="toggle">
+    <input type="checkbox" id="useGrid">
+    <span>Use spatial grid instead of brute-force O(n&sup2;)</span>
+  </div>
+
+  <h2>Playback</h2>
+  <button id="btn-pause">Pause</button>
+  <button id="btn-reset">Reset positions</button>
+  <div style="font-size:12px;color:var(--dim);margin-top:8px;">Drag the white player dot anywhere on the stage.</div>
+</div>
+
+<div id="stage-wrap">
+  <div id="topbar">
+    <div class="legend">
+      <span><span class="swatch" style="background:#ff6b6b"></span>Grounded/Melee</span>
+      <span><span class="swatch" style="background:#5b9dff"></span>Grounded/Ranged</span>
+      <span><span class="swatch" style="background:#b06bff"></span>Floater (placeholder)</span>
+    </div>
+    <span>n = <b id="stat-n">0</b></span>
+    <span>neighbour-check time/frame: <b id="stat-time">0.00ms</b></span>
+    <span>lookup: <b id="stat-mode">brute-force</b></span>
+  </div>
+  <canvas id="stage"></canvas>
+</div>
+
+<script>
+// ---------------------------------------------------------------------
+// Pure steering module — no DOM references. This is the part meant to
+// lift into enemy.odin once the ticket's numbers are validated.
+// ---------------------------------------------------------------------
+const Steering = (() => {
+  function normalize(v) {
+    const len = Math.hypot(v.x, v.y);
+    return len > 1e-6 ? { x: v.x / len, y: v.y / len } : { x: 0, y: 0 };
+  }
+
+  function chaseDirection(pos, target) {
+    return normalize({ x: target.x - pos.x, y: target.y - pos.y });
+  }
+
+  // brute-force O(n^2) neighbour scan within `radius`, restricted to `group`
+  function neighboursBruteForce(all, self, radius) {
+    const out = [];
+    for (const other of all) {
+      if (other === self || other.group !== self.group) continue;
+      const dx = other.x - self.x, dy = other.y - self.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < radius * radius) out.push(other);
+    }
+    return out;
+  }
+
+  // uniform-grid neighbour scan: bucket by cell, only check the 3x3
+  // neighbourhood of cells around self
+  function buildGrid(all, cellSize) {
+    const grid = new Map();
+    for (const e of all) {
+      const key = `${Math.floor(e.x / cellSize)},${Math.floor(e.y / cellSize)}`;
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(e);
+    }
+    return grid;
+  }
+
+  function neighboursGrid(grid, cellSize, self, radius) {
+    const out = [];
+    const cx = Math.floor(self.x / cellSize), cy = Math.floor(self.y / cellSize);
+    for (let gx = cx - 1; gx <= cx + 1; gx++) {
+      for (let gy = cy - 1; gy <= cy + 1; gy++) {
+        const bucket = grid.get(`${gx},${gy}`);
+        if (!bucket) continue;
+        for (const other of bucket) {
+          if (other === self || other.group !== self.group) continue;
+          const dx = other.x - self.x, dy = other.y - self.y;
+          if (dx * dx + dy * dy < radius * radius) out.push(other);
+        }
+      }
+    }
+    return out;
+  }
+
+  // separation vector: sum of away-from-neighbour directions, weighted
+  // by closeness (closer neighbours push harder), then normalized
+  function separationVector(self, neighbours, radius) {
+    let sx = 0, sy = 0;
+    for (const other of neighbours) {
+      const dx = self.x - other.x, dy = self.y - other.y;
+      const dist = Math.hypot(dx, dy) || 0.001;
+      const falloff = Math.max(0, (radius - dist) / radius);
+      sx += (dx / dist) * falloff;
+      sy += (dy / dist) * falloff;
+    }
+    return normalize({ x: sx, y: sy });
+  }
+
+  // blend chase + separation into one steering direction, then step
+  // position by speed*dt — mirrors chase_to's `normalize0(dir) * speed * dt`
+  function step(self, chaseDir, sepDir, strength, speed, dt) {
+    const blended = normalize({
+      x: chaseDir.x + sepDir.x * strength,
+      y: chaseDir.y + sepDir.y * strength,
+    });
+    return { x: self.x + blended.x * speed * dt, y: self.y + blended.y * speed * dt };
+  }
+
+  return { normalize, chaseDirection, neighboursBruteForce, buildGrid, neighboursGrid, separationVector, step };
+})();
+
+// ---------------------------------------------------------------------
+// Throwaway page shell
+// ---------------------------------------------------------------------
+window.addEventListener('error', (e) => {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Runtime error: ' + (e.error && e.error.stack || e.message);
+  document.body.appendChild(banner);
+});
+
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let lastW = -1, lastH = -1;
+function finiteOr(value, fallback) {
+  return (typeof value === 'number' && isFinite(value) && value > 0) ? value : fallback;
+}
+function resize() {
+  // Re-checked every frame instead of relying solely on ResizeObserver
+  // firing correctly in every embedding context (e.g. sandboxed preview
+  // iframes) - cheap enough at this canvas size, and self-heals if the
+  // container starts out at zero size. Every value is validated finite
+  // before use: ctx.setTransform throws on NaN/Infinity, and an invalid
+  // window.innerWidth/devicePixelRatio in some embeds previously turned
+  // that throw into an infinite per-frame error loop.
+  const dpr = finiteOr(window.devicePixelRatio, 1);
+  const w = finiteOr(canvas.clientWidth, finiteOr(window.innerWidth - 340, 800));
+  const h = finiteOr(canvas.clientHeight, finiteOr(window.innerHeight, 600));
+  if (w === lastW && h === lastH) return;
+  lastW = w; lastH = h;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+const $ = (id) => document.getElementById(id);
+const radiusEl = $('radius'), strengthEl = $('strength');
+const countA = $('countA'), countB = $('countB'), countC = $('countC');
+const useGrid = $('useGrid');
+const player = { x: 400, y: 300, dragging: false };
+
+let enemies = [];
+let paused = false;
+
+function spawn() {
+  enemies = [];
+  const specs = [
+    { n: +countA.value, group: 'A', color: '#ff6b6b' },
+    { n: +countB.value, group: 'B', color: '#5b9dff' },
+    { n: +countC.value, group: 'C', color: '#b06bff' },
+  ];
+  for (const s of specs) {
+    for (let i = 0; i < s.n; i++) {
+      enemies.push({
+        x: 60 + Math.random() * Math.max(40, lastW - 120),
+        y: 60 + Math.random() * Math.max(40, lastH - 120),
+        group: s.group,
+        color: s.color,
+        speed: 90 + Math.random() * 20,
+      });
+    }
+  }
+  $('stat-n').textContent = enemies.length;
+}
+
+function readouts() {
+  $('out-radius').textContent = radiusEl.value + 'px';
+  $('out-strength').textContent = (+strengthEl.value).toFixed(2);
+  $('out-countA').textContent = countA.value;
+  $('out-countB').textContent = countB.value;
+  $('out-countC').textContent = countC.value;
+}
+['input'].forEach(ev => {
+  radiusEl.addEventListener(ev, readouts);
+  strengthEl.addEventListener(ev, readouts);
+  [countA, countB, countC].forEach(el => el.addEventListener(ev, () => { readouts(); spawn(); }));
+});
+
+canvas.addEventListener('pointerdown', (e) => {
+  const r = canvas.getBoundingClientRect();
+  const dx = e.clientX - r.left - player.x, dy = e.clientY - r.top - player.y;
+  if (Math.hypot(dx, dy) < 20) player.dragging = true;
+});
+window.addEventListener('pointerup', () => player.dragging = false);
+canvas.addEventListener('pointermove', (e) => {
+  if (!player.dragging) return;
+  const r = canvas.getBoundingClientRect();
+  player.x = e.clientX - r.left;
+  player.y = e.clientY - r.top;
+});
+
+$('btn-pause').addEventListener('click', (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume' : 'Pause';
+});
+$('btn-reset').addEventListener('click', spawn);
+
+// --- guided scenarios ---
+const scenarios = [
+  {
+    name: 'Single pack chase',
+    desc: 'A mixed Grounded pack (red + blue — both share the Grounded Movement Style, different Attack Style) all chasing the player in the open. Watch: they should fan out on approach instead of stacking into one dot.',
+    apply() { countA.value = 10; countB.value = 10; countC.value = 0; radiusEl.value = 36; strengthEl.value = 1.2; },
+  },
+  {
+    name: 'Stress test @ 24',
+    desc: 'Exactly MAX_ENEMIES :: 24 Grounded enemies, matching the real game\'s cap. Watch the neighbour-check time/frame counter (top bar) — this is the number that answers "is brute-force fine at this n?"',
+    apply() { countA.value = 24; countB.value = 0; countC.value = 0; radiusEl.value = 30; strengthEl.value = 1; },
+  },
+  {
+    name: 'Push past the cap',
+    desc: 'Push enemy count well past 24 (up to 45) to see where brute-force neighbour checks would start to cost real frame time, and toggle the spatial grid to compare.',
+    apply() { countA.value = 30; countB.value = 15; countC.value = 0; radiusEl.value = 30; strengthEl.value = 1; },
+  },
+  {
+    name: 'Mixed movement styles',
+    desc: 'Adds purple placeholder-Floater dots to the same scene. They should pass straight through the red/blue Grounded cluster unaffected — separation only applies within the same Movement Style, never across it.',
+    apply() { countA.value = 8; countB.value = 8; countC.value = 8; radiusEl.value = 36; strengthEl.value = 1.2; },
+  },
+];
+const tabsEl = $('tabs');
+scenarios.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.textContent = s.name;
+  b.addEventListener('click', () => {
+    [...tabsEl.children].forEach(c => c.classList.remove('active'));
+    b.classList.add('active');
+    $('scenario-desc').textContent = s.desc;
+    s.apply();
+    readouts();
+    spawn();
+  });
+  tabsEl.appendChild(b);
+});
+tabsEl.children[0].click();
+
+// --- main loop ---
+let lastCheckTime = 0;
+function tick(dt) {
+  const radius = +radiusEl.value;
+  const strength = +strengthEl.value;
+  const cellSize = Math.max(8, radius);
+
+  const t0 = performance.now();
+  let grid = null;
+  if (useGrid.checked) grid = Steering.buildGrid(enemies, cellSize);
+
+  const next = enemies.map((e) => {
+    const neighbours = grid
+      ? Steering.neighboursGrid(grid, cellSize, e, radius)
+      : Steering.neighboursBruteForce(enemies, e, radius);
+    const chase = Steering.chaseDirection(e, player);
+    const sep = Steering.separationVector(e, neighbours, radius);
+    const moved = Steering.step(e, chase, sep, strength, e.speed, dt);
+    return { ...e, x: moved.x, y: moved.y };
+  });
+  lastCheckTime = performance.now() - t0;
+  enemies = next;
+
+  $('stat-time').textContent = lastCheckTime.toFixed(2) + 'ms';
+  $('stat-mode').textContent = useGrid.checked ? 'spatial grid' : 'brute-force';
+  $('stat-n').textContent = enemies.length;
+}
+
+function draw() {
+  const w = lastW, h = lastH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#22252e';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  for (const e of enemies) {
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = e.color;
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, 9, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = '#ffcf6b';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+let last = performance.now();
+function frame(now) {
+  resize();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!paused) tick(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+try {
+  resize();
+  spawn();
+  readouts();
+  requestAnimationFrame(frame);
+} catch (err) {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Prototype failed to start: ' + (err && err.stack || err);
+  document.body.appendChild(banner);
+  throw err;
+}
+</script>

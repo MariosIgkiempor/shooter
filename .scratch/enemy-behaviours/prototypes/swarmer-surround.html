@@ -1,0 +1,434 @@
+<title>Swarmer surround prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8b90a3;
+    --accent: #ffd166;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+  /* position:fixed, not flex+height:100vh - see the two earlier
+     prototypes this session (separation-force.html, floater-movement.html)
+     for why: flex sizing silently produced a 0x0/NaN canvas here. */
+  #sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 350px;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+  }
+  #stage-wrap {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 350px;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .question {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .question b { color: var(--text); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 18px 0 8px; }
+  label { display: block; font-size: 13px; margin-bottom: 4px; }
+  .row { margin-bottom: 14px; }
+  .row output { color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 13px; margin-bottom: 10px;
+  }
+  .toggle.disabled { opacity: 0.4; pointer-events: none; }
+  button {
+    background: #262a36;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    margin: 0 6px 6px 0;
+  }
+  button:hover { background: #2f3442; }
+  button.active { background: var(--accent); color: #1a1200; border-color: var(--accent); }
+  #tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  #scenario-desc {
+    font-size: 12.5px; color: var(--dim); line-height: 1.5;
+    background: #171a22; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin-bottom: 10px; min-height: 40px;
+  }
+  #topbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--dim); flex: 0 0 auto;
+  }
+  #topbar b { color: var(--text); }
+  canvas { display: block; background: var(--bg); flex: 1; width: 100%; min-height: 0; }
+  .legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  code { background: #262a36; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+
+<div id="sidebar">
+  <h1>Swarmer surround</h1>
+  <div class="question">
+    Ticket: <b>Swarmer surround mechanic</b> on the Enemy behaviours map.
+    Question: Swarmer needs a genuinely new mechanic (stat-tuned Grounded + Separation alone was already
+    rejected). This prototype compares the rejected baseline against two slot-assignment approaches, and
+    lets you test whether the already-resolved <b>Separation</b> force (radius 40px / strength 3.0) should
+    <i>also</i> apply on top of slot-seeking, or whether slots alone are enough.
+  </div>
+
+  <h2>Guided scenarios</h2>
+  <div id="tabs"></div>
+  <div id="scenario-desc"></div>
+
+  <h2>Mechanic</h2>
+  <div class="row">
+    <label>Approach</label>
+    <select id="mechanic" style="width:100%;padding:6px;background:#262a36;color:var(--text);border:1px solid var(--border);border-radius:6px;">
+      <option value="naive">Naive: Separation only (rejected baseline)</option>
+      <option value="static">Static angular slots (assigned at spawn)</option>
+      <option value="dynamic">Dynamic nearest-free-slot</option>
+    </select>
+  </div>
+  <div class="toggle" id="sepToggleWrap">
+    <input type="checkbox" id="extraSep">
+    <span>Also apply Separation force on top of slot-seeking</span>
+  </div>
+
+  <h2>Formation</h2>
+  <div class="row">
+    <label>Surround radius (~ melee attack_range) <output id="out-radius"></output></label>
+    <input type="range" id="radius" min="20" max="150" value="60" step="2">
+  </div>
+  <div class="row">
+    <label>Swarmer count <output id="out-count"></output></label>
+    <input type="range" id="count" min="1" max="20" value="6" step="1">
+  </div>
+
+  <h2>Playback</h2>
+  <button id="btn-pause">Pause</button>
+  <button id="btn-reset">Reset positions</button>
+  <div style="font-size:12px;color:var(--dim);margin-top:8px;">Drag the white player dot anywhere on the stage. Faint dashed circles are the current slot targets.</div>
+</div>
+
+<div id="stage-wrap">
+  <div id="topbar">
+    <div class="legend">
+      <span><span class="swatch" style="background:#ffd166"></span>Swarmer</span>
+      <span>slot swaps this run: <b id="stat-swaps">0</b></span>
+    </div>
+  </div>
+  <canvas id="stage"></canvas>
+</div>
+
+<script>
+window.addEventListener('error', (e) => {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Runtime error: ' + (e.error && e.error.stack || e.message);
+  document.body.appendChild(banner);
+});
+
+// ---------------------------------------------------------------------
+// Pure steering module - no DOM references. Meant to lift into
+// enemy.odin once the ticket's numbers/approach are validated.
+// ---------------------------------------------------------------------
+const Steering = (() => {
+  function normalize(v) {
+    const len = Math.hypot(v.x, v.y);
+    return len > 1e-6 ? { x: v.x / len, y: v.y / len } : { x: 0, y: 0 };
+  }
+
+  function seek(pos, target, speed, dt) {
+    const dir = normalize({ x: target.x - pos.x, y: target.y - pos.y });
+    return { x: pos.x + dir.x * speed * dt, y: pos.y + dir.y * speed * dt };
+  }
+
+  function separationVector(self, neighbours, radius) {
+    let sx = 0, sy = 0;
+    for (const other of neighbours) {
+      const dx = self.x - other.x, dy = self.y - other.y;
+      const dist = Math.hypot(dx, dy) || 0.001;
+      const falloff = Math.max(0, (radius - dist) / radius);
+      sx += (dx / dist) * falloff;
+      sy += (dy / dist) * falloff;
+    }
+    return normalize({ x: sx, y: sy });
+  }
+
+  // ring of `count` slot positions around `center`, evenly spaced,
+  // rotating slowly over time so a static formation still feels alive
+  function ringSlots(center, radius, count, t) {
+    const slots = [];
+    const rot = t * 0.3;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + rot;
+      slots.push({ x: center.x + Math.cos(a) * radius, y: center.y + Math.sin(a) * radius });
+    }
+    return slots;
+  }
+
+  // greedy nearest-free-slot assignment: for each swarmer (in current
+  // array order), claim the nearest slot not already claimed this frame
+  function assignNearestSlots(swarmers, slots) {
+    const claimed = new Array(slots.length).fill(false);
+    const assignment = new Array(swarmers.length).fill(0);
+    for (let i = 0; i < swarmers.length; i++) {
+      let best = -1, bestDist = Infinity;
+      for (let s = 0; s < slots.length; s++) {
+        if (claimed[s]) continue;
+        const d = Math.hypot(slots[s].x - swarmers[i].x, slots[s].y - swarmers[i].y);
+        if (d < bestDist) { bestDist = d; best = s; }
+      }
+      if (best === -1) best = i % slots.length; // more swarmers than slots
+      claimed[best] = true;
+      assignment[i] = best;
+    }
+    return assignment;
+  }
+
+  return { normalize, seek, separationVector, ringSlots, assignNearestSlots };
+})();
+
+// ---------------------------------------------------------------------
+// Throwaway page shell
+// ---------------------------------------------------------------------
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let lastW = -1, lastH = -1;
+function finiteOr(value, fallback) {
+  return (typeof value === 'number' && isFinite(value) && value > 0) ? value : fallback;
+}
+function resize() {
+  const dpr = finiteOr(window.devicePixelRatio, 1);
+  const w = finiteOr(canvas.clientWidth, finiteOr(window.innerWidth - 350, 800));
+  const h = finiteOr(canvas.clientHeight, finiteOr(window.innerHeight, 600));
+  if (w === lastW && h === lastH) return;
+  lastW = w; lastH = h;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+const $ = (id) => document.getElementById(id);
+const radiusEl = $('radius'), countEl = $('count'), mechanicEl = $('mechanic'), extraSep = $('extraSep');
+const player = { x: 500, y: 300, dragging: false };
+const SEP_RADIUS = 40, SEP_STRENGTH = 3.0;
+
+let swarmers = [];
+let currentSlots = [];
+let currentAssignment = [];
+let prevAssignment = [];
+let swapCount = 0;
+let paused = false;
+let t = 0;
+
+function spawn() {
+  swarmers = [];
+  for (let i = 0; i < +countEl.value; i++) {
+    swarmers.push({
+      x: 60 + Math.random() * Math.max(40, lastW - 120),
+      y: 60 + Math.random() * Math.max(40, lastH - 120),
+      speed: 100 + Math.random() * 15,
+      slotIndex: i, // stable spawn-order index, used by the "static" mechanic
+    });
+  }
+  prevAssignment = swarmers.map((_, i) => i);
+  swapCount = 0;
+  $('stat-swaps').textContent = '0';
+}
+
+function readouts() {
+  $('out-radius').textContent = radiusEl.value + 'px';
+  $('out-count').textContent = countEl.value;
+  $('sepToggleWrap').classList.toggle('disabled', mechanicEl.value === 'naive');
+  if (mechanicEl.value === 'naive') extraSep.checked = true;
+}
+[radiusEl, countEl].forEach(el => el.addEventListener('input', () => { readouts(); if (el === countEl) spawn(); }));
+mechanicEl.addEventListener('change', readouts);
+
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+canvas.addEventListener('pointerdown', (e) => {
+  const p = pointerPos(e);
+  if (Math.hypot(p.x - player.x, p.y - player.y) < 20) player.dragging = true;
+});
+window.addEventListener('pointerup', () => player.dragging = false);
+canvas.addEventListener('pointermove', (e) => {
+  if (!player.dragging) return;
+  const p = pointerPos(e);
+  player.x = p.x; player.y = p.y;
+});
+
+$('btn-pause').addEventListener('click', (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume' : 'Pause';
+});
+$('btn-reset').addEventListener('click', spawn);
+
+// --- guided scenarios ---
+const scenarios = [
+  {
+    name: 'Naive baseline (rejected)',
+    desc: 'Separation only, no slot targets - every Swarmer just chases the player directly and relies on Separation to keep them apart. Watch: they still bunch up approaching from whichever side is shortest, only spreading out once already crowded together.',
+    apply() { mechanicEl.value = 'naive'; countEl.value = 6; radiusEl.value = 60; extraSep.checked = true; },
+  },
+  {
+    name: 'Static angular slots',
+    desc: 'Each Swarmer keeps the angular slot it was assigned at spawn (index / count around the ring). Clean once settled, but watch what happens if you drag the Swarmer count slider mid-run - the whole ring reshuffles because slot angle depends on the current count, not just the fixed index.',
+    apply() { mechanicEl.value = 'static'; countEl.value = 6; radiusEl.value = 60; extraSep.checked = false; },
+  },
+  {
+    name: 'Dynamic nearest-slot',
+    desc: 'Slots are recomputed every frame; each Swarmer claims whichever is nearest and unclaimed. Watch the "slot swaps this run" counter (top bar) - frequent swaps would show up as visible flickering/crossing paths.',
+    apply() { mechanicEl.value = 'dynamic'; countEl.value = 6; radiusEl.value = 60; extraSep.checked = false; },
+  },
+  {
+    name: 'Dynamic + Separation stress test',
+    desc: '16 Swarmers, dynamic slots, with the resolved Separation force also layered on top. This is the composition question: does adding Separation on top of slot-seeking smooth things out, or fight the slot assignment and cause jitter?',
+    apply() { mechanicEl.value = 'dynamic'; countEl.value = 16; radiusEl.value = 90; extraSep.checked = true; },
+  },
+];
+const tabsEl = $('tabs');
+scenarios.forEach((s) => {
+  const b = document.createElement('button');
+  b.textContent = s.name;
+  b.addEventListener('click', () => {
+    [...tabsEl.children].forEach(c => c.classList.remove('active'));
+    b.classList.add('active');
+    $('scenario-desc').textContent = s.desc;
+    s.apply();
+    readouts();
+    spawn();
+  });
+  tabsEl.appendChild(b);
+});
+tabsEl.children[0].click();
+
+// --- main loop ---
+function tick(dt) {
+  t += dt;
+  const radius = +radiusEl.value;
+  const mechanic = mechanicEl.value;
+  const count = swarmers.length;
+
+  let targets;
+  if (mechanic === 'naive') {
+    targets = swarmers.map(() => player);
+    currentSlots = [];
+  } else if (mechanic === 'static') {
+    currentSlots = Steering.ringSlots(player, radius, count, t);
+    targets = swarmers.map((s) => currentSlots[s.slotIndex % currentSlots.length]);
+  } else {
+    currentSlots = Steering.ringSlots(player, radius, count, t);
+    currentAssignment = Steering.assignNearestSlots(swarmers, currentSlots);
+    for (let i = 0; i < currentAssignment.length; i++) {
+      if (prevAssignment[i] !== undefined && prevAssignment[i] !== currentAssignment[i]) {
+        swapCount++;
+      }
+    }
+    prevAssignment = currentAssignment.slice();
+    $('stat-swaps').textContent = swapCount;
+    targets = swarmers.map((s, i) => currentSlots[currentAssignment[i]]);
+  }
+
+  const useSep = extraSep.checked;
+  swarmers = swarmers.map((s, i) => {
+    const moved = Steering.seek(s, targets[i], s.speed, dt);
+    let final = moved;
+    if (useSep) {
+      const neighbours = swarmers.filter((o) => o !== s && Math.hypot(o.x - s.x, o.y - s.y) < SEP_RADIUS);
+      const sep = Steering.separationVector(s, neighbours, SEP_RADIUS);
+      final = { x: s.x + (moved.x - s.x) + sep.x * SEP_STRENGTH * s.speed * dt,
+                y: s.y + (moved.y - s.y) + sep.y * SEP_STRENGTH * s.speed * dt };
+    }
+    return { ...s, x: final.x, y: final.y };
+  });
+}
+
+function draw() {
+  const w = lastW, h = lastH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#22252e';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  for (const slot of currentSlots) {
+    ctx.beginPath();
+    ctx.setLineDash([3, 4]);
+    ctx.arc(slot.x, slot.y, 4, 0, Math.PI * 2);
+    ctx.strokeStyle = '#555a6e';
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (mechanicEl.value !== 'naive') {
+    ctx.beginPath();
+    ctx.setLineDash([2, 6]);
+    ctx.arc(player.x, player.y, +radiusEl.value, 0, Math.PI * 2);
+    ctx.strokeStyle = '#33384a';
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  for (const s of swarmers) {
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffd166';
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, 9, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = '#ff7b54';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+let last = performance.now();
+function frame(now) {
+  resize();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!paused) tick(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+try {
+  resize();
+  spawn();
+  readouts();
+  requestAnimationFrame(frame);
+} catch (err) {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Prototype failed to start: ' + (err && err.stack || err);
+  document.body.appendChild(banner);
+  throw err;
+}
+</script>

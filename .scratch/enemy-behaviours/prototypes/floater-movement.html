@@ -1,0 +1,428 @@
+<title>Floater movement prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8b90a3;
+    --accent: #b06bff;
+    --wall: #4a4d5c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+  /* position:fixed, not flex+height:100vh - the separation-force prototype
+     earlier in this session silently produced a 0x0/NaN canvas under flex
+     sizing in this preview sandbox; fixed insets size directly off the
+     viewport and sidestep that failure mode entirely. */
+  #sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 340px;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+  }
+  #stage-wrap {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 340px;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .question {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .question b { color: var(--text); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 18px 0 8px; }
+  label { display: block; font-size: 13px; margin-bottom: 4px; }
+  .row { margin-bottom: 14px; }
+  .row output { color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 13px; margin-bottom: 10px;
+  }
+  button {
+    background: #262a36;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    margin: 0 6px 6px 0;
+  }
+  button:hover { background: #2f3442; }
+  button.active { background: var(--accent); color: #1a1200; border-color: var(--accent); }
+  #tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  #scenario-desc {
+    font-size: 12.5px; color: var(--dim); line-height: 1.5;
+    background: #171a22; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin-bottom: 10px; min-height: 40px;
+  }
+  #topbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--dim); flex: 0 0 auto;
+  }
+  #topbar b { color: var(--text); }
+  canvas { display: block; background: var(--bg); flex: 1; width: 100%; min-height: 0; }
+  .legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  code { background: #262a36; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+
+<div id="sidebar">
+  <h1>Floater movement</h1>
+  <div class="question">
+    Ticket: <b>Floater movement design</b> on the Enemy behaviours map.
+    Question: what does "ghostly" Floater movement look like, mechanically? Settled already: no tilemap
+    collision, erratic drift instead of a beeline. Open here: does it overlap the player, does it respect
+    arena bounds, does it still separate from other Floaters (per the already-resolved Separation force
+    ticket), and what the wobble itself should feel like — amplitude, frequency, how strongly it still
+    homes in on the player.
+    <br><br>
+    The grey square is a wall. The purple dot is the contrast "Grounded" enemy (simplified direct-line
+    seek + AABB blocking — not the real BFS pathfinder, just a stand-in so the phase-through is visible).
+  </div>
+
+  <h2>Guided scenarios</h2>
+  <div id="tabs"></div>
+  <div id="scenario-desc"></div>
+
+  <h2>Wobble</h2>
+  <div class="row">
+    <label>Amplitude <output id="out-amp"></output></label>
+    <input type="range" id="amp" min="0" max="80" value="26" step="1">
+  </div>
+  <div class="row">
+    <label>Frequency <output id="out-freq"></output></label>
+    <input type="range" id="freq" min="0.2" max="5" value="1.6" step="0.1">
+  </div>
+  <div class="row">
+    <label>Pull toward player <output id="out-pull"></output></label>
+    <input type="range" id="pull" min="0" max="1" value="0.55" step="0.05">
+  </div>
+
+  <h2>Population</h2>
+  <div class="row">
+    <label>Floater count (purple) <output id="out-countF"></output></label>
+    <input type="range" id="countF" min="1" max="12" value="1" step="1">
+  </div>
+
+  <h2>Rules</h2>
+  <div class="toggle">
+    <input type="checkbox" id="respectBounds" checked>
+    <span>Respects arena bounds (clamped to canvas)</span>
+  </div>
+  <div class="toggle">
+    <input type="checkbox" id="separateFloaters" checked>
+    <span>Separates from other Floaters (radius 40 / strength 3.0, per the resolved Separation ticket)</span>
+  </div>
+
+  <h2>Playback</h2>
+  <button id="btn-pause">Pause</button>
+  <button id="btn-reset">Reset positions</button>
+  <div style="font-size:12px;color:var(--dim);margin-top:8px;">Drag the white player dot or the grey wall anywhere on the stage.</div>
+</div>
+
+<div id="stage-wrap">
+  <div id="topbar">
+    <div class="legend">
+      <span><span class="swatch" style="background:#b06bff"></span>Floater</span>
+      <span><span class="swatch" style="background:#5b9dff"></span>Grounded (contrast, blocked by wall)</span>
+      <span><span class="swatch" style="background:#4a4d5c;border-radius:2px"></span>Wall</span>
+    </div>
+  </div>
+  <canvas id="stage"></canvas>
+</div>
+
+<script>
+window.addEventListener('error', (e) => {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Runtime error: ' + (e.error && e.error.stack || e.message);
+  document.body.appendChild(banner);
+});
+
+// ---------------------------------------------------------------------
+// Pure steering module - no DOM references. Meant to lift into
+// enemy.odin once the ticket's numbers are validated.
+// ---------------------------------------------------------------------
+const Steering = (() => {
+  function normalize(v) {
+    const len = Math.hypot(v.x, v.y);
+    return len > 1e-6 ? { x: v.x / len, y: v.y / len } : { x: 0, y: 0 };
+  }
+  function perp(v) { return { x: -v.y, y: v.x }; }
+
+  // layered-sine pseudo-noise: cheap, deterministic per phase, no lookup
+  // table - good enough to feel "erratic" without a real noise library
+  function wobbleSignal(t, phase, freq) {
+    return Math.sin(t * freq + phase) * 0.7 + Math.sin(t * freq * 2.3 + phase * 1.7) * 0.3;
+  }
+
+  // Floater steering: blend a homing pull toward the target with a
+  // perpendicular wobble that's strongest when pull is weak
+  function floaterDirection(pos, target, t, phase, freq, pullStrength) {
+    const toTarget = normalize({ x: target.x - pos.x, y: target.y - pos.y });
+    const side = perp(toTarget);
+    const wobble = wobbleSignal(t, phase, freq);
+    return normalize({
+      x: toTarget.x * pullStrength + side.x * wobble * (1 - pullStrength * 0.4),
+      y: toTarget.y * pullStrength + side.y * wobble * (1 - pullStrength * 0.4),
+    });
+  }
+
+  function separationVector(self, neighbours, radius) {
+    let sx = 0, sy = 0;
+    for (const other of neighbours) {
+      const dx = self.x - other.x, dy = self.y - other.y;
+      const dist = Math.hypot(dx, dy) || 0.001;
+      const falloff = Math.max(0, (radius - dist) / radius);
+      sx += (dx / dist) * falloff;
+      sy += (dy / dist) * falloff;
+    }
+    return normalize({ x: sx, y: sy });
+  }
+
+  function blend(dirA, dirB, weightB) {
+    return normalize({ x: dirA.x + dirB.x * weightB, y: dirA.y + dirB.y * weightB });
+  }
+
+  // simplified direct-line seek blocked by one AABB wall - a stand-in for
+  // the real BFS chase_to, not testing pathfinding itself
+  function groundedStep(pos, target, wall, speed, dt) {
+    const dir = normalize({ x: target.x - pos.x, y: target.y - pos.y });
+    let nx = pos.x + dir.x * speed * dt;
+    let ny = pos.y + dir.y * speed * dt;
+    const inWallX = nx > wall.x && nx < wall.x + wall.w && pos.y > wall.y && pos.y < wall.y + wall.h;
+    const inWallY = ny > wall.y && ny < wall.y + wall.h && pos.x > wall.x && pos.x < wall.x + wall.w;
+    if (inWallX) nx = pos.x;
+    if (inWallY) ny = pos.y;
+    return { x: nx, y: ny };
+  }
+
+  return { normalize, perp, wobbleSignal, floaterDirection, separationVector, blend, groundedStep };
+})();
+
+// ---------------------------------------------------------------------
+// Throwaway page shell
+// ---------------------------------------------------------------------
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let lastW = -1, lastH = -1;
+function finiteOr(value, fallback) {
+  return (typeof value === 'number' && isFinite(value) && value > 0) ? value : fallback;
+}
+function resize() {
+  const dpr = finiteOr(window.devicePixelRatio, 1);
+  const w = finiteOr(canvas.clientWidth, finiteOr(window.innerWidth - 340, 800));
+  const h = finiteOr(canvas.clientHeight, finiteOr(window.innerHeight, 600));
+  if (w === lastW && h === lastH) return;
+  lastW = w; lastH = h;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+const $ = (id) => document.getElementById(id);
+const ampEl = $('amp'), freqEl = $('freq'), pullEl = $('pull'), countF = $('countF');
+const respectBounds = $('respectBounds'), separateFloaters = $('separateFloaters');
+const player = { x: 500, y: 300, dragging: false };
+const wall = { x: 320, y: 160, w: 140, h: 220, dragging: false };
+const SEP_RADIUS = 40, SEP_STRENGTH = 3.0;
+
+let floaters = [];
+let grounded = { x: 200, y: 500 };
+let paused = false;
+let t = 0;
+
+function spawn() {
+  floaters = [];
+  for (let i = 0; i < +countF.value; i++) {
+    floaters.push({
+      x: 60 + Math.random() * Math.max(40, lastW - 120),
+      y: 60 + Math.random() * Math.max(40, lastH - 120),
+      phase: Math.random() * Math.PI * 2,
+      speed: 70 + Math.random() * 20,
+    });
+  }
+  grounded = { x: Math.max(40, lastW * 0.2), y: Math.max(40, lastH * 0.75) };
+}
+
+function readouts() {
+  $('out-amp').textContent = ampEl.value + 'px';
+  $('out-freq').textContent = (+freqEl.value).toFixed(1) + '/s';
+  $('out-pull').textContent = (+pullEl.value).toFixed(2);
+  $('out-countF').textContent = countF.value;
+}
+[ampEl, freqEl, pullEl].forEach(el => el.addEventListener('input', readouts));
+countF.addEventListener('input', () => { readouts(); spawn(); });
+
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+canvas.addEventListener('pointerdown', (e) => {
+  const p = pointerPos(e);
+  if (Math.hypot(p.x - player.x, p.y - player.y) < 20) { player.dragging = true; return; }
+  if (p.x > wall.x && p.x < wall.x + wall.w && p.y > wall.y && p.y < wall.y + wall.h) {
+    wall.dragging = true; wall.grabOffset = { x: p.x - wall.x, y: p.y - wall.y };
+  }
+});
+window.addEventListener('pointerup', () => { player.dragging = false; wall.dragging = false; });
+canvas.addEventListener('pointermove', (e) => {
+  const p = pointerPos(e);
+  if (player.dragging) { player.x = p.x; player.y = p.y; }
+  if (wall.dragging) { wall.x = p.x - wall.grabOffset.x; wall.y = p.y - wall.grabOffset.y; }
+});
+
+$('btn-pause').addEventListener('click', (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? 'Resume' : 'Pause';
+});
+$('btn-reset').addEventListener('click', spawn);
+
+// --- guided scenarios ---
+const scenarios = [
+  {
+    name: 'Open field wobble',
+    desc: 'No wall in the way. Tune amplitude/frequency/pull until the drift feels ghostly rather than either a straight beeline or aimless noise.',
+    apply() { countF.value = 1; ampEl.value = 26; freqEl.value = 1.6; pullEl.value = 0.55; wall.x = -400; },
+  },
+  {
+    name: 'Ghost through wall',
+    desc: 'The wall now sits between both enemies and the player. Watch: the blue Grounded contrast dot should stop at the wall, while the purple Floater drifts straight through it.',
+    apply() { countF.value = 1; ampEl.value = 22; freqEl.value = 1.4; pullEl.value = 0.6; wall.x = 320; wall.y = 160; },
+  },
+  {
+    name: 'Overlap the player',
+    desc: 'High pull, low wobble, so the Floater commits to closing in on the player - watch whether it visually sits on top of the player dot rather than being blocked at some distance.',
+    apply() { countF.value = 1; ampEl.value = 10; freqEl.value = 1; pullEl.value = 0.9; wall.x = -400; },
+  },
+  {
+    name: 'Floater pack',
+    desc: 'Several Floaters at once, wobbling independently. With "Separates from other Floaters" checked, they should still push apart from each other exactly like the Separation ticket validated - even while wobbling - but pass freely through the Grounded contrast dot (different Movement Style).',
+    apply() { countF.value = 8; ampEl.value = 20; freqEl.value = 1.6; pullEl.value = 0.5; wall.x = -400; },
+  },
+];
+const tabsEl = $('tabs');
+scenarios.forEach((s) => {
+  const b = document.createElement('button');
+  b.textContent = s.name;
+  b.addEventListener('click', () => {
+    [...tabsEl.children].forEach(c => c.classList.remove('active'));
+    b.classList.add('active');
+    $('scenario-desc').textContent = s.desc;
+    s.apply();
+    readouts();
+    spawn();
+  });
+  tabsEl.appendChild(b);
+});
+tabsEl.children[0].click();
+
+// --- main loop ---
+function tick(dt) {
+  t += dt;
+  const amp = +ampEl.value, freq = +freqEl.value, pull = +pullEl.value;
+
+  const next = floaters.map((f) => {
+    const dir = Steering.floaterDirection(f, player, t, f.phase, freq, pull);
+    let sepDir = { x: 0, y: 0 };
+    if (separateFloaters.checked) {
+      const neighbours = floaters.filter((o) => o !== f && Math.hypot(o.x - f.x, o.y - f.y) < SEP_RADIUS);
+      sepDir = Steering.separationVector(f, neighbours, SEP_RADIUS);
+    }
+    const finalDir = Steering.blend(dir, sepDir, SEP_STRENGTH);
+    // amplitude scales the wobble's visible reach; pull already shapes
+    // direction, so amplitude modulates effective speed contribution
+    const wobbleBoost = 1 + (amp / 80) * 0.6;
+    let nx = f.x + finalDir.x * f.speed * wobbleBoost * dt;
+    let ny = f.y + finalDir.y * f.speed * wobbleBoost * dt;
+    if (respectBounds.checked) {
+      nx = Math.max(8, Math.min(lastW - 8, nx));
+      ny = Math.max(8, Math.min(lastH - 8, ny));
+    }
+    return { ...f, x: nx, y: ny };
+  });
+  floaters = next;
+
+  grounded = Steering.groundedStep(grounded, player, wall, 90, dt);
+}
+
+function draw() {
+  const w = lastW, h = lastH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#22252e';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  ctx.fillStyle = '#4a4d5c';
+  ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+  ctx.strokeStyle = '#6a6d80';
+  ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
+
+  ctx.beginPath();
+  ctx.arc(grounded.x, grounded.y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = '#5b9dff';
+  ctx.fill();
+
+  for (const f of floaters) {
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#b06bff';
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, 9, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = '#ffcf6b';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+let last = performance.now();
+function frame(now) {
+  resize();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!paused) tick(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+try {
+  resize();
+  spawn();
+  readouts();
+  requestAnimationFrame(frame);
+} catch (err) {
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1010;color:#fff;' +
+    'padding:10px 16px;font:13px monospace;z-index:9999;white-space:pre-wrap;';
+  banner.textContent = 'Prototype failed to start: ' + (err && err.stack || err);
+  document.body.appendChild(banner);
+  throw err;
+}
+</script>
