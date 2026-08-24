@@ -521,7 +521,7 @@ draw_game :: proc() {
 
 	draw_tilemap :: proc(tilemap: ^Tilemap) {
 		for tile in tilemap.tiles {
-			atlas_rect := tileset_ping[tile.atlas_coords.x][tile.atlas_coords.y]
+			atlas_rect := tileset_normal[tile.atlas_coords.x][tile.atlas_coords.y]
 			world_rect := Rect {
 				f32(tile.world_coords.x) * tilemap.tile_size.x,
 				f32(tile.world_coords.y) * tilemap.tile_size.y,

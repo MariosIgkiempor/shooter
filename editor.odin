@@ -27,8 +27,8 @@ EditorTool :: enum {
 	Erase,
 }
 
-TILESET_COLS :: len(tileset_ping)
-TILESET_ROWS :: len(tileset_ping[0])
+TILESET_COLS :: len(tileset_normal)
+TILESET_ROWS :: len(tileset_normal[0])
 PALETTE_CELL_SIZE :: 20
 
 Palette_Cell :: struct {
@@ -445,7 +445,7 @@ draw_editor :: proc() {
 		}
 
 		dest := Rect{rect.x, rect.y, rect.width, rect.height}
-		draw_atlas_tile(tileset_ping[cell.coords.x][cell.coords.y], dest, 0)
+		draw_atlas_tile(tileset_normal[cell.coords.x][cell.coords.y], dest, 0)
 
 		if cell.coords == editor.selected_tile {
 			rl.DrawRectangleLinesEx(dest, 2, rl.YELLOW)
