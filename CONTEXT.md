@@ -5,7 +5,7 @@ A top-down twin-stick shooter (Odin + raylib). Single global `game` struct, free
 ## Language
 
 **Weapon**:
-The player's single currently-equipped combat tool. Common state (kind, fire mode, damage, action rate, cooldown) lives directly on it; type-specific state lives in one of `Gun`, `Melee_Weapon`, or `Magic` behind its `variant` field. See [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md) for why this differs in shape from `Enemy_Behaviour`.
+The player's single currently-equipped combat tool. Common state (kind, fire mode, damage, action rate, cooldown) lives directly on it; type-specific state lives in one of `Gun`, `Melee_Weapon`, or `Magic` behind its `variant` field. See [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md) for why this differs in shape from `Enemy`'s `Movement_Style`/`Attack_Style` bare unions.
 _Avoid_: Loadout, armament
 
 **Gun** / **Melee_Weapon** / **Magic**:
@@ -18,12 +18,9 @@ _Avoid_: Fire rate (Gun-specific predecessor term, now only correct when talking
 **Fire mode**:
 Whether a weapon's action re-triggers repeatedly while its input is held (`Automatic`) or once per press (`Semi_Automatic`). Applies generically across all three weapon types, not just Gun.
 
-**Enemy_Behaviour**:
-The current (pre-split) name for an enemy's AI archetype — `Melee` (chases and attacks in melee range) or `Ranged` (holds a distance band, fires enemy bullets), bundling movement and attack into one variant. Being split into independent **Movement Style** and **Attack Style** axes — see the enemy-behaviours map; this entry retires once that split lands.
-
 **Movement Style**:
-An enemy's per-frame steering archetype, held on `Enemy.movement` as its own bare union — how it gets from where it is to where it's going: `Grounded`, ghostly `Floater` drift, or `Swarmer` surround. Orthogonal to **Attack Style**, held separately on `Enemy.attack`: an enemy picks one of each independently, replacing the old bundled `Enemy_Behaviour`. `speed` belongs to Movement Style (each variant carries its own), not Attack Style, since it's a movement trait.
-_Avoid_: Enemy_Behaviour (once retired), Behaviour alone
+An enemy's per-frame steering archetype, held on `Enemy.movement` as its own bare union — how it gets from where it is to where it's going: `Grounded`, ghostly `Floater` drift, or `Swarmer` surround. Orthogonal to **Attack Style**, held separately on `Enemy.attack`: an enemy picks one of each independently. `speed` belongs to Movement Style (each variant carries its own), not Attack Style, since it's a movement trait.
+_Avoid_: Behaviour alone
 
 **Grounded**:
 The Movement Style variant matching today's only movement: chases along a BFS path over the tilemap, colliding with terrain like the player does. Named for what distinguishes it from `Floater` (collides with terrain, follows the path) rather than for the chasing behaviour itself, since `Swarmer` also closes on the player via a different route.
@@ -35,8 +32,7 @@ The ghostly Movement Style variant: ignores tilemap collision and drifts erratic
 The Movement Style variant that flanks the player instead of converging with other Swarmers on the same point — a genuinely new surround/flank mechanic, not just `Grounded` movement with tuned-up **Separation**. Exact mechanic is this map's Swarmer surround mechanic ticket.
 
 **Attack Style**:
-An enemy's combat archetype, held on `Enemy.attack` as its own bare union, independent of **Movement Style** — `Melee` (contact damage in range), `Ranged` (fires enemy bullets in a distance band), or nil (no attack). Frozen at today's Melee/Ranged/none logic; only the movement half of the old bundled `Enemy_Behaviour` is being generalized. Attack Style's `Melee` is unrelated to `Weapon`'s `Melee_Weapon`/player Class:Melee — enemies keep their own separate combat system by design (see the weapon-types map's Out of scope).
-_Avoid_: Enemy_Behaviour (once retired)
+An enemy's combat archetype, held on `Enemy.attack` as its own bare union, independent of **Movement Style** — `Melee` (contact damage in range), `Ranged` (fires enemy bullets in a distance band), or nil (no attack). Attack Style's `Melee` is unrelated to `Weapon`'s `Melee_Weapon`/player Class:Melee — enemies keep their own separate combat system by design (see the weapon-types map's Out of scope).
 
 **Separation**:
 The steering force that pushes enemies of the same Movement Style apart from each other so they don't clump on the same point or path. Layered on top of Movement Style (e.g. blended with the BFS-chase direction), not integrated into pathfinding itself.

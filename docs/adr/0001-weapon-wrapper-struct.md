@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Note: `Enemy_Behaviour`, as referenced throughout this ADR, was later split into `Enemy`'s two sibling bare unions `Movement_Style`/`Attack_Style` (see the enemy-behaviours map and CONTEXT.md). The bare-union-vs-wrapper-struct reasoning below is unaffected by that rename.
+
 `Enemy_Behaviour :: union { Melee, Ranged }` is a bare union with no shared header — each variant is fully self-contained, and it's the only polymorphism precedent in the codebase. `Weapon` needed a shape for Gun/Melee/Magic with genuinely shared state (`kind`, `fire_mode`, `damage`, `action_rate`, `cooldown_timer`), so mirroring `Enemy_Behaviour` exactly — each variant embedding a common header via `using` — was the obvious first reach.
 
 We rejected that: Odin unions don't expose fields without a `switch`/type-assertion first, even when every variant embeds the same `using` header. Two existing call sites read weapon fields directly with no switch (`main.odin:231` — `weapon.fire_mode`, `main.odin:523` — `weapon.kind`), and the bare-union shape would force both into a switch just to read a common field, with the same tax paid by every future direct read of a shared field.

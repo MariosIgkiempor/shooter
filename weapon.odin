@@ -34,11 +34,12 @@ Spell_Kind :: enum {
 	Poison_Cloud,
 }
 
-// Weapon is a wrapper struct, not a bare union like Enemy_Behaviour: common
-// state (kind/fire_mode/damage/action_rate/cooldown_timer) is read directly
-// at existing call sites with no switch (main.odin's fire_mode/kind reads),
-// and Odin unions require a switch/type-assertion to read any field at all.
-// Type-specific state lives behind `variant`. See ADR-0001.
+// Weapon is a wrapper struct, not a bare union like Enemy's Movement_Style/
+// Attack_Style: common state (kind/fire_mode/damage/action_rate/
+// cooldown_timer) is read directly at existing call sites with no switch
+// (main.odin's fire_mode/kind reads), and Odin unions require a
+// switch/type-assertion to read any field at all. Type-specific state lives
+// behind `variant`. See ADR-0001.
 Weapon :: struct {
 	kind:           Weapon_Kind,
 	fire_mode:      Fire_Mode,

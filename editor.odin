@@ -240,7 +240,8 @@ spawner_place :: proc(cell: Vec2i) {
 			position = cell_center_to_world(cell),
 			interval = DEFAULT_SPAWNER_INTERVAL,
 			animation = .Player_Walk,
-			template = Melee{speed = 40, attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+			movement_template = Grounded{speed = 40},
+			attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 		},
 	)
 
@@ -539,20 +540,74 @@ spawners_mode_ui :: proc() {
 		ui.text("Animation")
 		animation_button("None", spawner, .None)
 		animation_button("Walk", spawner, .Player_Walk)
+		animation_button("Floater", spawner, .Enemy_Floater_Placeholder)
+		animation_button("Swarmer", spawner, .Enemy_Swarmer_Placeholder)
 	}
 
 	if ui.row({gap = ui.theme.gap}) {
-		ui.text("Template")
-		template_button(
+		ui.text("Movement")
+		movement_template_none_button("None", spawner)
+		movement_template_button("Grounded", spawner, Grounded{speed = 40})
+		movement_template_button(
+			"Floater",
+			spawner,
+			Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35},
+		)
+		movement_template_button("Swarmer", spawner, Swarmer{speed = 50})
+	}
+
+	switch &m in spawner.movement_template {
+	case Grounded:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("grounded_speed", &m.speed, 0, 300)
+			ui.text("{:.0f}", m.speed)
+		}
+	case Floater:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("floater_speed", &m.speed, 0, 300)
+			ui.text("{:.0f}", m.speed)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Wobble Amplitude")
+			ui.slider("floater_wobble_amplitude", &m.wobble_amplitude, 0, 80)
+			ui.text("{:.0f}", m.wobble_amplitude)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Wobble Frequency")
+			ui.slider("floater_wobble_frequency", &m.wobble_frequency, 0.1, 5)
+			ui.text("{:.1f}", m.wobble_frequency)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Pull Toward Player")
+			ui.slider("floater_pull_strength", &m.pull_strength, 0, 1)
+			ui.text("{:.2f}", m.pull_strength)
+		}
+	case Swarmer:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Speed")
+			ui.slider("swarmer_speed", &m.speed, 0, 300)
+			ui.text("{:.0f}", m.speed)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Surround Radius (from Attack Style)")
+			ui.text("{:.0f}", swarmer_surround_radius(spawner.attack_template))
+		}
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Attack")
+		attack_template_none_button("None", spawner)
+		attack_template_button(
 			"Melee",
 			spawner,
-			Melee{speed = 40, attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+			Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 		)
-		template_button(
+		attack_template_button(
 			"Ranged",
 			spawner,
 			Ranged {
-				speed = 30,
 				min_range = 60,
 				max_range = 120,
 				attack_damage = 8,
@@ -563,58 +618,48 @@ spawners_mode_ui :: proc() {
 		)
 	}
 
-	switch &b in spawner.template {
+	switch &a in spawner.attack_template {
 	case Melee:
 		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider("melee_speed", &b.speed, 0, 300)
-			ui.text("{:.0f}", b.speed)
-		}
-		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Damage")
-			ui.slider("melee_attack_damage", &b.attack_damage, 0, 100)
-			ui.text("{:.0f}", b.attack_damage)
+			ui.slider("melee_attack_damage", &a.attack_damage, 0, 100)
+			ui.text("{:.0f}", a.attack_damage)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Range")
-			ui.slider("melee_attack_range", &b.attack_range, 0, 50)
-			ui.text("{:.0f}", b.attack_range)
+			ui.slider("melee_attack_range", &a.attack_range, 0, 50)
+			ui.text("{:.0f}", a.attack_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Cooldown")
-			ui.slider("melee_attack_cooldown", &b.attack_cooldown, 0.1, 5)
-			ui.text("{:.2f}", b.attack_cooldown)
+			ui.slider("melee_attack_cooldown", &a.attack_cooldown, 0.1, 5)
+			ui.text("{:.2f}", a.attack_cooldown)
 		}
 	case Ranged:
 		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider("ranged_speed", &b.speed, 0, 300)
-			ui.text("{:.0f}", b.speed)
-		}
-		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Min Range")
-			ui.slider("ranged_min_range", &b.min_range, 0, 300)
-			ui.text("{:.0f}", b.min_range)
+			ui.slider("ranged_min_range", &a.min_range, 0, 300)
+			ui.text("{:.0f}", a.min_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Max Range")
-			ui.slider("ranged_max_range", &b.max_range, 0, 300)
-			ui.text("{:.0f}", b.max_range)
+			ui.slider("ranged_max_range", &a.max_range, 0, 300)
+			ui.text("{:.0f}", a.max_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Damage")
-			ui.slider("ranged_attack_damage", &b.attack_damage, 0, 100)
-			ui.text("{:.0f}", b.attack_damage)
+			ui.slider("ranged_attack_damage", &a.attack_damage, 0, 100)
+			ui.text("{:.0f}", a.attack_damage)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Projectile Speed")
-			ui.slider("ranged_projectile_speed", &b.projectile_speed, 0, 500)
-			ui.text("{:.0f}", b.projectile_speed)
+			ui.slider("ranged_projectile_speed", &a.projectile_speed, 0, 500)
+			ui.text("{:.0f}", a.projectile_speed)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Fire Rate")
-			ui.slider("ranged_fire_rate", &b.fire_rate, 0.1, 10)
-			ui.text("{:.1f}", b.fire_rate)
+			ui.slider("ranged_fire_rate", &a.fire_rate, 0.1, 10)
+			ui.text("{:.1f}", a.fire_rate)
 		}
 	}
 }
@@ -627,10 +672,29 @@ animation_button :: proc(label: string, spawner: ^Spawner, value: Animation_Name
 	}
 }
 
-template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
-	_, is_active := spawner.template.(T)
+movement_template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
+	_, is_active := spawner.movement_template.(T)
 	if selectable_button(label, is_active) {
-		spawner.template = value
+		spawner.movement_template = value
+	}
+}
+
+movement_template_none_button :: proc(label: string, spawner: ^Spawner) {
+	if selectable_button(label, spawner.movement_template == nil) {
+		spawner.movement_template = nil
+	}
+}
+
+attack_template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
+	_, is_active := spawner.attack_template.(T)
+	if selectable_button(label, is_active) {
+		spawner.attack_template = value
+	}
+}
+
+attack_template_none_button :: proc(label: string, spawner: ^Spawner) {
+	if selectable_button(label, spawner.attack_template == nil) {
+		spawner.attack_template = nil
 	}
 }
 

@@ -102,7 +102,8 @@ load_game :: proc() {
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
 
 	for &spawner in game.spawners {
-		spawner.template = enemy_behaviour_from_save(spawner.template_save)
+		spawner.movement_template = movement_style_from_save(spawner.movement_template_save)
+		spawner.attack_template = attack_style_from_save(spawner.attack_template_save)
 	}
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
@@ -135,7 +136,8 @@ save_game :: proc() {
 	game.player.weapon_variant_save = weapon_variant_to_save(game.player.weapon.variant)
 
 	for &spawner in game.spawners {
-		spawner.template_save = enemy_behaviour_to_save(spawner.template)
+		spawner.movement_template_save = movement_style_to_save(spawner.movement_template)
+		spawner.attack_template_save = attack_style_to_save(spawner.attack_template)
 	}
 
 	json_data, json_error := json.marshal(game, allocator = context.temp_allocator)
@@ -450,6 +452,7 @@ draw_game :: proc() {
 			draw_debug_colliders()
 			draw_debug_weapon_area(game.player)
 			draw_debug_attack_ranges()
+			draw_debug_movement_styles()
 		}
 		draw_spawners(game.spawners[:])
 		draw_bullets(game.bullets[:])
@@ -660,18 +663,41 @@ draw_game :: proc() {
 	// F8 dev view: each enemy's attack-trigger radius - a single circle at
 	// attack_range for Melee (contact distance to land a hit), or two
 	// circles (min_range/max_range) for Ranged marking the band it holds
-	// inside to fire rather than chase or retreat. Inert enemies have no
-	// attack, so nothing is drawn for them.
+	// inside to fire rather than chase or retreat. Enemies with no Attack
+	// Style have no attack, so nothing is drawn for them.
 	draw_debug_attack_ranges :: proc() {
 		for enemy in game.enemies {
 			center := Vec2{enemy.x, enemy.y}
-			switch b in enemy.behaviour {
+			switch a in enemy.attack {
 			case Melee:
-				rl.DrawCircleLinesV(center, b.attack_range, rl.ORANGE)
+				rl.DrawCircleLinesV(center, a.attack_range, rl.ORANGE)
 			case Ranged:
-				rl.DrawCircleLinesV(center, b.min_range, rl.ORANGE)
-				rl.DrawCircleLinesV(center, b.max_range, rl.ORANGE)
+				rl.DrawCircleLinesV(center, a.min_range, rl.ORANGE)
+				rl.DrawCircleLinesV(center, a.max_range, rl.ORANGE)
 			case:
+			}
+		}
+	}
+
+	// F8 dev view: each enemy's Separation neighbour radius (how close
+	// same-Movement-Style enemies must be before they push apart), plus a
+	// dedicated ring for Swarmer's surround distance - the band around the
+	// player it seeks to orbit, read from its own Attack Style's engagement
+	// range (see swarmer_surround_radius).
+	draw_debug_movement_styles :: proc() {
+		player_pos := Vec2{game.player.x, game.player.y}
+
+		for enemy in game.enemies {
+			center := Vec2{enemy.x, enemy.y}
+			kind := movement_style_kind(enemy.movement)
+			if kind == .Inert {
+				continue
+			}
+
+			rl.DrawCircleLinesV(center, SEPARATION_RADIUS[kind], rl.PURPLE)
+
+			if kind == .Swarmer {
+				rl.DrawCircleLinesV(player_pos, swarmer_surround_radius(enemy.attack), rl.PURPLE)
 			}
 		}
 	}
