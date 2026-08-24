@@ -69,6 +69,23 @@ cast_fireball :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
 	)
 }
 
+// true if position (a bullet's center) overlaps any collidable tile -
+// shared by player and enemy bullets to stop them at walls the same way
+// move_actor stops the player/enemies
+bullet_hits_wall :: proc(position: Vec2) -> bool {
+	for tile in game.tilemap.tiles {
+		if !tile.collides {
+			continue
+		}
+
+		if rl.CheckCollisionCircleRec(position, BULLET_RADIUS, tile_world_rect(tile.world_coords)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 update_bullets :: proc(dt: f32) {
 	#reverse for &bullet, i in game.bullets {
 		bullet.position += bullet.velocity * dt
@@ -95,6 +112,17 @@ update_bullets :: proc(dt: f32) {
 
 			hit = true
 			break
+		}
+
+		// wall check comes after the enemy check above so a bullet touching
+		// both a wall and a wall-adjacent enemy at once still registers the
+		// hit (also lets bullets still reach a Floater that has drifted into
+		// a wall, since Floater ignores tilemap collision - see enemy.odin)
+		if !hit && bullet_hits_wall(bullet.position) {
+			if bullet.explosion_radius > 0 {
+				explode_bullet(bullet)
+			}
+			hit = true
 		}
 
 		if hit {
@@ -169,6 +197,11 @@ update_enemy_bullets :: proc(dt: f32) {
 		player_box := actor_collision_rect(game.player.rect, game.player.animation)
 		if rl.CheckCollisionCircleRec(bullet.position, BULLET_RADIUS, player_box) {
 			damage_player(bullet.damage)
+			unordered_remove(&game.enemy_bullets, i)
+			continue
+		}
+
+		if bullet_hits_wall(bullet.position) {
 			unordered_remove(&game.enemy_bullets, i)
 		}
 	}
