@@ -21,15 +21,6 @@ Enemy :: struct {
 }
 
 // the union variant is the enemy kind; nil means inert (stands still).
-//
-// Melee must stay first: Spawner.template is this union and is now saved to
-// disk, but core:encoding/json unmarshals a union by trying each variant in
-// declaration order and keeping the first one that parses without error.
-// Struct fields are optional on decode (missing ones are just left zeroed),
-// so a lone `{"speed":40}` would happily "succeed" as either variant -
-// putting Melee first is what makes it decode back as a Melee, which is the
-// default the editor creates spawners with. A spawner explicitly switched to
-// Ranged, saved, and reloaded may decode back as Melee for the same reason.
 Enemy_Behaviour :: union {
 	Melee,
 	Ranged,
@@ -59,7 +50,59 @@ Spawner :: struct {
 	interval:  f32,
 	timer:     f32,
 	animation: Animation_Name,
-	template:  Enemy_Behaviour, // copied by value into each spawned enemy
+	template:  Enemy_Behaviour `json:"-"`, // copied by value into each spawned enemy
+
+	// tagged json:"-" for the same reason Weapon.variant is (weapon.odin):
+	// core:encoding/json unmarshals a union by trying each variant in
+	// declaration order and keeping the first one that parses without error,
+	// and every struct field is optional on decode - so a Ranged template
+	// saved to disk would silently decode back as Melee (the first variant)
+	// on load. `template` is never passed to json.marshal/json.unmarshal
+	// directly; persistence goes through this plain Enemy_Behaviour_Save DTO
+	// instead (see enemy_behaviour_to_save/enemy_behaviour_from_save below
+	// and the per-spawner conversion loop in main.odin's save_game/load_game).
+	template_save: Enemy_Behaviour_Save,
+}
+
+// discriminant for Enemy_Behaviour_Save; internal to persistence, unrelated
+// to any gameplay enum
+Enemy_Behaviour_Kind :: enum {
+	Melee,
+	Ranged,
+	Inert,
+}
+
+// plain (non-union) persisted shape of Spawner.template - see the json:"-"
+// comment on Spawner.template above
+Enemy_Behaviour_Save :: struct {
+	kind:   Enemy_Behaviour_Kind,
+	melee:  Maybe(Melee) `json:"melee,omitempty"`,
+	ranged: Maybe(Ranged) `json:"ranged,omitempty"`,
+}
+
+enemy_behaviour_to_save :: proc(behaviour: Enemy_Behaviour) -> Enemy_Behaviour_Save {
+	switch v in behaviour {
+	case Melee:
+		return {kind = .Melee, melee = v}
+	case Ranged:
+		return {kind = .Ranged, ranged = v}
+	}
+	return {kind = .Inert}
+}
+
+// explicit switch on the decoded `kind` - never lets json.unmarshal's
+// union-variant-guessing loop run, since Enemy_Behaviour is never the direct
+// target of json.unmarshal; only Enemy_Behaviour_Save is.
+enemy_behaviour_from_save :: proc(s: Enemy_Behaviour_Save) -> Enemy_Behaviour {
+	switch s.kind {
+	case .Melee:
+		return s.melee.? or_else Melee{}
+	case .Ranged:
+		return s.ranged.? or_else Ranged{}
+	case .Inert:
+		return nil
+	}
+	return nil // unreachable: s.kind is always one of the above
 }
 
 // enemies are transient (`json:"-"`), so they are empty after every load;

@@ -54,6 +54,12 @@ game: struct {
 	// true while the game-over modal is open; simulation is paused. never
 	// saved, same rationale as leveling_up.
 	game_over:     bool `json:"-"`,
+
+	// F8-toggled dev view: gates enemy pathfinding-debug lines (previously
+	// always drawn), and additionally shows actor colliders and the
+	// currently-equipped weapon's hit area. Never saved, same rationale as
+	// leveling_up/game_over.
+	debug_overlay: bool `json:"-"`,
 }
 
 MouseState :: struct {
@@ -95,6 +101,10 @@ load_game :: proc() {
 
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
 
+	for &spawner in game.spawners {
+		spawner.template = enemy_behaviour_from_save(spawner.template_save)
+	}
+
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
@@ -123,6 +133,10 @@ save_game :: proc() {
 	log_info("Saving game to save file `{}`", SAVE_GAME_PATH)
 
 	game.player.weapon_variant_save = weapon_variant_to_save(game.player.weapon.variant)
+
+	for &spawner in game.spawners {
+		spawner.template_save = enemy_behaviour_to_save(spawner.template)
+	}
 
 	json_data, json_error := json.marshal(game, allocator = context.temp_allocator)
 	if json_error != nil {
@@ -186,6 +200,10 @@ update_game :: proc() {
 		} else {
 			game.program_mode = .Playing
 		}
+	}
+
+	if is_key_pressed(.F8) {
+		game.debug_overlay = !game.debug_overlay
 	}
 
 	switch game.program_mode {
@@ -420,12 +438,19 @@ draw_game :: proc() {
 		draw_tilemap(&game.tilemap)
 		for enemy in game.enemies {
 			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
-			draw_path(enemy.path)
+			if game.debug_overlay {
+				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
+			}
 			draw_health_bar(enemy)
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
 		draw_flamethrower_cone(game.player)
+		if game.debug_overlay {
+			draw_debug_colliders()
+			draw_debug_weapon_area(game.player)
+			draw_debug_attack_ranges()
+		}
 		draw_spawners(game.spawners[:])
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
@@ -504,10 +529,12 @@ draw_game :: proc() {
 		}
 	}
 
-	draw_path :: proc(path: [dynamic]Vec2i) {
+	draw_path :: proc(from: Vec2, path: [dynamic]Vec2i) {
+		point := from
 		for cell in path {
-			world := cell_center_to_world(cell)
-			rl.DrawCircleV(world, 4, rl.YELLOW)
+			next := cell_center_to_world(cell)
+			rl.DrawLineV(point, next, rl.YELLOW)
+			point = next
 		}
 	}
 
@@ -618,6 +645,65 @@ draw_game :: proc() {
 		end := angle + magic.arc_degrees / 2
 
 		rl.DrawCircleSector(center, magic.range, start, end, 16, rl.Color{230, 100, 30, 90})
+	}
+
+	// F8 dev view: outlines the player's and every enemy's actual collision
+	// rect (actor_collision_rect - the same box move_actor/melee/bullets hit
+	// test against), not just their sprite bounds
+	draw_debug_colliders :: proc() {
+		rl.DrawRectangleLinesEx(actor_collision_rect(game.player.rect, game.player.animation), 1, rl.LIME)
+		for enemy in game.enemies {
+			rl.DrawRectangleLinesEx(actor_collision_rect(enemy.rect, enemy.animation), 1, rl.RED)
+		}
+	}
+
+	// F8 dev view: each enemy's attack-trigger radius - a single circle at
+	// attack_range for Melee (contact distance to land a hit), or two
+	// circles (min_range/max_range) for Ranged marking the band it holds
+	// inside to fire rather than chase or retreat. Inert enemies have no
+	// attack, so nothing is drawn for them.
+	draw_debug_attack_ranges :: proc() {
+		for enemy in game.enemies {
+			center := Vec2{enemy.x, enemy.y}
+			switch b in enemy.behaviour {
+			case Melee:
+				rl.DrawCircleLinesV(center, b.attack_range, rl.ORANGE)
+			case Ranged:
+				rl.DrawCircleLinesV(center, b.min_range, rl.ORANGE)
+				rl.DrawCircleLinesV(center, b.max_range, rl.ORANGE)
+			case:
+			}
+		}
+	}
+
+	// F8 dev view: the equipped weapon's hit area, shown continuously
+	// (unlike draw_flamethrower_cone's held-only fill) so range/arc tuning
+	// doesn't require attacking to see it. Gun has no player-relative area to
+	// show; fireball's AoE lands wherever it hits, not around the player, so
+	// it's skipped too.
+	draw_debug_weapon_area :: proc(player: Player) {
+		center := Vec2{player.x, player.y}
+		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
+
+		draw_cone :: proc(center: Vec2, range, arc_degrees, angle: f32) {
+			start := angle - arc_degrees / 2
+			end := angle + arc_degrees / 2
+			rl.DrawCircleSectorLines(center, range, start, end, 16, rl.SKYBLUE)
+		}
+
+		switch v in player.weapon.variant {
+		case Melee_Weapon:
+			draw_cone(center, v.range, v.arc_degrees, angle)
+		case Magic:
+			switch v.spell_kind {
+			case .Flamethrower:
+				draw_cone(center, v.range, v.arc_degrees, angle)
+			case .Poison_Cloud:
+				rl.DrawCircleLinesV(center, v.cast_range, rl.SKYBLUE)
+			case .Fireball:
+			}
+		case Gun:
+		}
 	}
 
 }
