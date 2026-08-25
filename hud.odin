@@ -249,10 +249,42 @@ draw_level_up_ui :: proc() {
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
 }
 
-// shown at every launch (ProgramMode.Selecting, the zero value) before
-// Playing/Editing become reachable - one button per Map_Name, labeled by
-// that case's baked display name. Map choice is one-shot per launch: once
-// game.program_mode leaves .Selecting here, there's no in-game way back.
+// shown only until a Class is ever chosen (ProgramMode.Choosing_Class, the
+// zero value) before Selecting/Playing/Editing become reachable - one button
+// per Class, labeled via class_display_name. Picking a Class equips
+// class_weapon_kinds' first Weapon_Kind for it and locks the choice in for
+// the whole game: game.player.class_chosen makes load_game skip straight
+// past this screen on every later launch, so it - unlike map choice - never
+// runs again for a save that already has a Class (see CONTEXT.md's Class
+// entry and ADR-0002).
+draw_class_selection_ui :: proc() {
+	previous_theme := ui.theme
+	ui.theme = HUD_THEME
+	defer ui.theme = previous_theme
+
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.begin_frame(game.window_width, game.window_height)
+
+	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+		if ui.begin("Choose a Class", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			for class in Class {
+				if ui.button(class_display_name[class], {panel = true}) {
+					game.player.class = class
+					game.player.weapon = weapon_create(class_weapon_kinds[class][0])
+					game.player.class_chosen = true
+					game.program_mode = .Selecting
+				}
+			}
+		}
+	}
+
+	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+}
+
+// shown at every launch (ProgramMode.Selecting) before Playing/Editing
+// become reachable - one button per Map_Name, labeled by that case's baked
+// display name. Map choice is one-shot per launch: once game.program_mode
+// leaves .Selecting here, there's no in-game way back.
 draw_map_selection_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME

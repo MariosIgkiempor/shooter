@@ -17,18 +17,24 @@ PIXEL_WINDOW_HEIGHT :: 180
 GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
-// Selecting is first (the zero value) so every launch starts there
-// regardless of what program_mode a stale save file might otherwise imply -
-// see the json:"-" tag below, which already prevents that on its own.
+// Choosing_Class is first (the zero value) so a save with no Class chosen
+// yet always starts there, regardless of what program_mode a stale save
+// file might otherwise imply - see the json:"-" tag below, which already
+// prevents that on its own. Unlike Selecting (map choice, which re-runs
+// every launch), load_game skips straight past Choosing_Class once
+// Player.class_chosen is true, since Class must stay locked in for the
+// whole game rather than be re-pickable launch to launch.
 ProgramMode :: enum {
+	Choosing_Class,
 	Selecting,
 	Playing,
 	Editing,
 }
 
 game: struct {
-	// never persisted: every launch starts at .Selecting regardless of
-	// whatever mode was active when the game was last saved
+	// never persisted: every launch starts at .Choosing_Class (or .Selecting,
+	// once player.class_chosen - see load_game) regardless of whatever mode
+	// was active when the game was last saved
 	program_mode: ProgramMode `json:"-"`,
 	mouse:         MouseState,
 	window_width:  f32,
@@ -122,20 +128,26 @@ load_game :: proc() {
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
 
 	// never trust a stale persisted value even though program_mode's
-	// json:"-" tag already prevents it from round-tripping
-	game.program_mode = .Selecting
+	// json:"-" tag already prevents it from round-tripping. Skip straight
+	// past Choosing_Class on a save that already locked one in - showing it
+	// again would let a same-class re-click in draw_class_selection_ui blow
+	// away the just-loaded (possibly Shop/level-up upgraded) weapon above,
+	// and Class is meant to be permanent for the whole game, not just
+	// one-shot-per-launch the way map choice is.
+	game.program_mode = game.player.class_chosen ? .Selecting : .Choosing_Class
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
 		game = {
-			program_mode = .Selecting,
+			program_mode = .Choosing_Class,
 			window_width = 1920 / 2,
 			window_height = 1080 / 2,
 			window_title = "Game",
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
 				animation = animation_create(.Player_Walk),
+				class = .Melee,
 				weapon = weapon_create(.Sword),
 				level = 1,
 			},
@@ -211,6 +223,8 @@ update_game :: proc() {
 
 	if is_key_pressed(.F1) {
 		switch game.program_mode {
+		case .Choosing_Class:
+		// no-op: F1 does nothing before a Class has been chosen
 		case .Selecting:
 		// no-op: F1 does nothing before a map has been chosen
 		case .Playing:
@@ -236,6 +250,8 @@ update_game :: proc() {
 	}
 
 	switch game.program_mode {
+	case .Choosing_Class:
+	// no-op: draw_class_selection_ui's buttons handle their own clicks
 	case .Selecting:
 	// no-op: draw_map_selection_ui's buttons handle their own clicks
 	case .Playing:
@@ -281,21 +297,16 @@ update_game :: proc() {
 			start_reload(&game.player.weapon)
 		}
 
-		// dev/debug weapon switching: left/right cycles within the current
-		// Class, up/down cycles Class (see weapon.odin's cycle_weapon_kind/
-		// cycle_class) - arrow keys are free for this since WASD alone
-		// already covers movement
+		// dev/debug weapon switching: left/right cycles within the player's
+		// locked-in Class (see weapon.odin's cycle_weapon_kind) - never
+		// crosses into another Class, since Class is chosen once on the
+		// Choosing_Class screen and locked in for the whole game. Arrow keys
+		// are free for this since WASD alone already covers movement.
 		if is_key_pressed(.LEFT) {
 			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, -1))
 		}
 		if is_key_pressed(.RIGHT) {
 			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, 1))
-		}
-		if is_key_pressed(.UP) {
-			game.player.weapon = weapon_create(cycle_class(game.player.weapon.kind, 1))
-		}
-		if is_key_pressed(.DOWN) {
-			game.player.weapon = weapon_create(cycle_class(game.player.weapon.kind, -1))
 		}
 
 		mouse_world := rl.GetScreenToWorld2D(game.mouse.position, game.camera)
@@ -395,6 +406,20 @@ Player :: struct {
 	using rect: Rect,
 	animation:  Animation,
 	flip_x:     bool,
+	// chosen once on the Choosing_Class screen (hud.odin's
+	// draw_class_selection_ui) and locked in for the whole game from then on
+	// - see CONTEXT.md's Class entry and ADR-0002. Persisted so the choice
+	// survives relaunches; class_chosen (below) is what actually gates
+	// whether Choosing_Class shows again, since Class's own zero value
+	// (.Ranged) is indistinguishable from a real choice of Ranged.
+	class:      Class,
+	// true once `class` has been set via draw_class_selection_ui - load_game
+	// uses this to skip straight past Choosing_Class on a resumed save,
+	// unlike map choice (ProgramMode.Selecting), which re-shows every
+	// launch. Without this gate, re-showing the picker would let a
+	// same-class re-click wipe out an already-loaded, possibly upgraded
+	// weapon (draw_class_selection_ui always equips the class's base tier).
+	class_chosen: bool,
 	weapon:     Weapon,
 	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
 	// this is the plain, persisted view of it, converted explicitly at the
@@ -519,6 +544,9 @@ draw_game :: proc() {
 	begin_using_camera(game.ui_camera)
 	{
 		switch game.program_mode {
+		case .Choosing_Class:
+		// no-op: draw_class_selection_ui (below, alongside the other modals)
+		// draws its own full-screen content
 		case .Selecting:
 		// no-op: draw_map_selection_ui (below, alongside the other modals)
 		// draws its own full-screen content
@@ -532,6 +560,10 @@ draw_game :: proc() {
 
 	if game.program_mode == .Editing {
 		draw_editor()
+	}
+
+	if game.program_mode == .Choosing_Class {
+		draw_class_selection_ui()
 	}
 
 	if game.program_mode == .Selecting {

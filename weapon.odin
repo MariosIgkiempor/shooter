@@ -652,19 +652,28 @@ clamp_point_to_range :: proc(origin, target: Vec2, max_range: f32) -> Vec2 {
 	return origin + offset * (max_range / dist)
 }
 
-// -- dev/debug weapon switching (arrow keys, main.odin) -------------------
+// -- Class (see CONTEXT.md's Class entry and ADR-0002) ---------------------
 //
-// A quick way to reach every Weapon_Kind for testing, ahead of the real
-// Class-locked Shop/tier-ladder progression (tickets 08/10). `Class` and
-// weapon_kind_class are the same lookup table those tickets already
-// anticipated needing (see CONTEXT.md's Class entry and ADR-0002); this is
-// just an early, informal user of it. class_weapon_kinds is only a cycle
-// order for this debug tool, not ticket 10's priced tier ladder.
+// The player's permanent choice, made once at game start on main.odin's
+// Choosing_Class screen (hud.odin's draw_class_selection_ui): which Weapon
+// family they can ever equip. class_weapon_kinds[chosen][0] becomes the
+// starting weapon; weapon_kind_class is the reverse lookup dev/debug weapon
+// switching (arrow keys, main.odin) uses to stay within the locked-in
+// Class while cycling Weapon_Kinds for testing, ahead of the real
+// Shop/tier-ladder progression (tickets 08/10) - class_weapon_kinds is only
+// a cycle order for that debug tool, not ticket 10's priced tier ladder.
 
 Class :: enum {
 	Ranged,
 	Melee,
 	Magic,
+}
+
+// hud.odin's draw_class_selection_ui button labels
+class_display_name: [Class]string = {
+	.Ranged = "Ranged",
+	.Melee  = "Melee",
+	.Magic  = "Magic",
 }
 
 weapon_kind_class: [Weapon_Kind]Class = {
@@ -684,7 +693,9 @@ class_weapon_kinds: [Class][]Weapon_Kind = {
 	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff},
 }
 
-// steps to the next/previous Weapon_Kind within current's class (wrapping)
+// steps to the next/previous Weapon_Kind within current's class (wrapping) -
+// never crosses into another Class, since Class is locked in for the whole
+// game once chosen on the Choosing_Class screen
 cycle_weapon_kind :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
 	kinds := class_weapon_kinds[weapon_kind_class[current]]
 
@@ -698,13 +709,4 @@ cycle_weapon_kind :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
 
 	n := len(kinds)
 	return kinds[((index + delta) % n + n) % n]
-}
-
-// steps to the next/previous Class (wrapping), equipping that class's first
-// Weapon_Kind
-cycle_class :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
-	n := len(class_weapon_kinds)
-	current_class := int(weapon_kind_class[current])
-	next_class := Class(((current_class + delta) % n + n) % n)
-	return class_weapon_kinds[next_class][0]
 }
