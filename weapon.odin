@@ -41,11 +41,34 @@ Spell_Kind :: enum {
 // switch/type-assertion to read any field at all. Type-specific state lives
 // behind `variant`. See ADR-0001.
 Weapon :: struct {
-	kind:           Weapon_Kind,
-	fire_mode:      Fire_Mode,
-	damage:         f32, // per bullet/pellet/swing/cast
-	action_rate:    f32, // actions/sec; cooldown between actions is 1/action_rate
-	cooldown_timer: f32,
+	kind:        Weapon_Kind,
+	fire_mode:   Fire_Mode,
+	damage:      f32, // per bullet/pellet/swing/cast
+	action_rate: f32, // actions/sec; cooldown between actions is 1/action_rate
+	// runtime countdown, not persisted (json:"-") - unlike windup_timer below,
+	// cooldown_timer crossing zero has no side effect of its own, but it's
+	// excluded for the same reason: it's transient/frame-driven state, not
+	// saved content
+	cooldown_timer: f32 `json:"-"`,
+
+	// Windup/Follow-through (see CONTEXT.md, ADR-0003/0004): exactly one of
+	// these two pairs is ever nonzero for a given Weapon_Kind, decided
+	// entirely by fire_mode. windup_fraction is a proportion of the cycle,
+	// not a fixed duration, so it stays nested inside 1/action_rate no
+	// matter how much action_rate has grown from upgrades (ADR-0004) -
+	// windup_timer's actual seconds are derived fresh at Trigger as
+	// windup_fraction/action_rate. follow_through_time has no equivalent
+	// invariant to protect (purely cosmetic), so it stays a fixed duration -
+	// the generalized, Weapon-level successor to Melee_Weapon's old
+	// swing_time/swing_timer. windup_timer/follow_through_timer are tagged
+	// json:"-": unlike cooldown_timer, windup_timer crossing zero now has a
+	// real side effect (resolve_weapon_action) - restoring a positive
+	// windup_timer from a save would fire that weapon on its own on the
+	// first post-load frame, with no Trigger from the player.
+	windup_fraction:      f32, // 0..1, Semi_Automatic only
+	windup_timer:         f32 `json:"-"`,
+	follow_through_time:  f32, // seconds, Automatic only
+	follow_through_timer: f32 `json:"-"`,
 
 	// tagged json:"-": core:encoding/json decodes a union by trying each
 	// variant in declaration order and keeping the first one that parses
@@ -80,12 +103,6 @@ Gun :: struct {
 Melee_Weapon :: struct {
 	range:       f32, // max distance from origin a swing's arc reaches
 	arc_degrees: f32, // total cone width, centered on aim_dir
-	swing_time:  f32, // cosmetic-only animation duration
-	// counts down from swing_time to 0 while the cosmetic swing-sweep
-	// animation plays (main.odin's draw_weapon); never gates the hit-check -
-	// ticket 03's hit already resolved instantly before this starts (ticket
-	// 07's animation requirement)
-	swing_timer: f32,
 }
 
 // fields cover all three Spell_Kinds; each weapon_presets entry only sets
@@ -110,6 +127,16 @@ Magic :: struct {
 	cloud_radius:    f32,
 	cloud_duration:  f32,
 	cloud_tick_rate: f32, // damage ticks/sec for enemies standing inside
+	// captured from mouse_world at Trigger, not Resolve (ADR-0005): unlike
+	// aim_dir-based casts, a ground-targeted cast locks in the instant the
+	// player commits rather than tracking the mouse live through Windup.
+	// Stays on Magic rather than the common Weapon struct - this is specific
+	// to Poison_Cloud's targeting model, not a cross-variant Fire_Mode
+	// concern like windup_fraction/follow_through_time. Tagged json:"-" even
+	// though Magic is embedded directly in Weapon_Variant_Save (unlike the
+	// live variant): it's transient/frame-driven runtime state, not saved
+	// content, same as windup_timer.
+	locked_target: Vec2 `json:"-"`,
 }
 
 // discriminant for Weapon_Variant_Save; internal to persistence, unrelated
@@ -165,6 +192,7 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Semi_Automatic,
 		damage = 25,
 		action_rate = 3,
+		windup_fraction = 0.24,
 		variant = Gun {
 			projectile_speed = 400,
 			clip_size = 12,
@@ -179,6 +207,7 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Automatic,
 		damage = 10,
 		action_rate = 12,
+		follow_through_time = 0.045,
 		variant = Gun {
 			projectile_speed = 500,
 			clip_size = 30,
@@ -193,6 +222,9 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Semi_Automatic,
 		damage = 8,
 		action_rate = 1.1,
+		// reads heavier than Pistol purely because its cycle is ~2.7x longer
+		// at a similar fraction - no separate escalation mechanism needed
+		windup_fraction = 0.26,
 		variant = Gun {
 			projectile_speed = 350,
 			clip_size = 6,
@@ -207,20 +239,23 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Automatic, // hold to spam quick swings
 		damage = 15,
 		action_rate = 4,
-		variant = Melee_Weapon{range = 40, arc_degrees = 70, swing_time = 0.15},
+		follow_through_time = 0.15, // carried over unchanged from the old swing_time
+		variant = Melee_Weapon{range = 40, arc_degrees = 70},
 	},
 	.Sword = {
 		kind = .Sword,
 		fire_mode = .Semi_Automatic,
 		damage = 30,
 		action_rate = 1.8,
-		variant = Melee_Weapon{range = 60, arc_degrees = 110, swing_time = 0.35},
+		windup_fraction = 0.37,
+		variant = Melee_Weapon{range = 60, arc_degrees = 110},
 	},
 	.Fire_Wand = {
 		kind = .Fire_Wand,
 		fire_mode = .Semi_Automatic,
 		damage = 35, // direct hit + explosion both use this
 		action_rate = 1.2,
+		windup_fraction = 0.21,
 		variant = Magic {
 			spell_kind = .Fireball,
 			projectile_speed = 300,
@@ -233,6 +268,9 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Automatic, // hold to channel
 		damage = 6, // per tick
 		action_rate = 10, // ticks/sec while held
+		// discrete per-tick pulse, not a continuous stream - a continuous
+		// stream was prototyped and read worse at this tick rate
+		follow_through_time = 0.08,
 		variant = Magic{spell_kind = .Flamethrower, range = 50, arc_degrees = 50},
 	},
 	.Poison_Staff = {
@@ -240,6 +278,7 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Semi_Automatic, // one click, one cloud - not holdable
 		damage = 4, // per tick
 		action_rate = 0.5, // 2s between casts
+		windup_fraction = 0.18,
 		variant = Magic {
 			spell_kind = .Poison_Cloud,
 			cast_range = 90,
@@ -276,9 +315,28 @@ weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	return w
 }
 
-update_weapon :: proc(weapon: ^Weapon, dt: f32) {
+// runs every frame regardless of Trigger: ticks cooldown_timer down as
+// before, ticks windup_timer down and calls resolve_weapon_action the
+// instant it crosses to <=0 (exactly once - the `> 0` guard only lets a
+// weapon in Winding Up reach the inner check at all), and ticks
+// follow_through_timer down with no side effect (purely cosmetic). Callers
+// must pass this frame's freshly-computed origin/aim_dir/mouse_world so a
+// Resolve on Windup completion always fires against current-frame aim state,
+// not whatever was live at Trigger.
+update_weapon :: proc(weapon: ^Weapon, dt: f32, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) {
 	if weapon.cooldown_timer > 0 {
 		weapon.cooldown_timer -= dt
+	}
+
+	if weapon.windup_timer > 0 {
+		weapon.windup_timer -= dt
+		if weapon.windup_timer <= 0 {
+			resolve_weapon_action(weapon, origin, aim_dir, mouse_world, enemies)
+		}
+	}
+
+	if weapon.follow_through_timer > 0 {
+		weapon.follow_through_timer -= dt
 	}
 
 	switch &v in weapon.variant {
@@ -291,11 +349,7 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32) {
 				v.ammo_in_clip = new_ammo
 			}
 		}
-	case Melee_Weapon:
-		if v.swing_timer > 0 {
-			v.swing_timer -= dt
-		}
-	case Magic: // nothing yet - ticket 04
+	case Melee_Weapon, Magic:
 	}
 }
 
@@ -338,35 +392,104 @@ refill_weapon_reserve :: proc(weapon: ^Weapon) {
 	}
 }
 
-// dispatches the weapon's action (fire/swing/cast) by variant, gating on the
-// shared cooldown and setting it from action_rate only if something actually
-// happened - renamed from try_fire_weapon now that Gun is one of three cases
-try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2) {
+// Trigger-time entry point (a press for Semi_Automatic, each re-fire tick
+// while held for Automatic - see CONTEXT.md's Trigger entry). Gates on the
+// shared cooldown. Semi_Automatic weapons only start the cycle here
+// (cooldown_timer/windup_timer, both from the same instant - "nested inside
+// cooldown" requires they start together, not staggered) and return without
+// resolving; Automatic weapons resolve immediately via resolve_weapon_action,
+// unchanged from pre-Windup behavior, and start Follow-through if the action
+// succeeded. Once a Windup starts it always completes into Resolve - there is
+// no cancel-by-releasing-early path (see CONTEXT.md's Windup entry).
+try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) {
 	if weapon.cooldown_timer > 0 {
 		return
 	}
 
-	acted: bool
-	switch &v in weapon.variant {
-	case Gun:
-		acted = try_fire_gun(weapon, &v, origin, aim_dir)
-	case Melee_Weapon:
-		acted = try_swing_melee(&v, weapon.damage, origin, aim_dir)
-	case Magic:
-		acted = try_cast_magic(&v, weapon.damage, origin, aim_dir, mouse_world)
+	if weapon.fire_mode == .Semi_Automatic {
+		// Gun-specific: an empty clip gates Windup starting at all (mirrors
+		// try_fire_gun's own gate below, via the shared gun_can_fire helper)
+		// - neither timer starts, start_reload runs exactly as it does
+		// today, nothing plays. Melee_Weapon/Magic have no equivalent
+		// resource gate and always start Windup unconditionally.
+		switch &v in weapon.variant {
+		case Gun:
+			if !gun_can_fire(v) {
+				start_reload(weapon)
+				return
+			}
+		case Melee_Weapon, Magic:
+		}
+
+		lock_poison_cloud_target(weapon, origin, mouse_world)
+
+		weapon.cooldown_timer = 1.0 / weapon.action_rate
+		weapon.windup_timer = weapon.windup_fraction / weapon.action_rate
+
+		// a zero-length Windup (windup_fraction == 0) has already "completed"
+		// the instant it starts - update_weapon's `windup_timer > 0` guard
+		// only fires on the > 0 -> <= 0 transition, so it would otherwise
+		// never see this Windup and never resolve it at all
+		if weapon.windup_timer <= 0 {
+			resolve_weapon_action(weapon, origin, aim_dir, mouse_world, enemies)
+		}
+		return
 	}
 
-	if acted {
+	if resolve_weapon_action(weapon, origin, aim_dir, mouse_world, enemies) {
 		weapon.cooldown_timer = 1.0 / weapon.action_rate
+		weapon.follow_through_timer = weapon.follow_through_time
 	}
 }
 
-try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool {
-	if gun.reload_timer > 0 {
-		return false
+// extracted from try_use_weapon's old inline variant-dispatch switch so it's
+// callable from two sites: try_use_weapon directly (Automatic weapons resolve
+// on Trigger) and update_weapon (Semi_Automatic weapons resolve on Windup
+// completion). Magic's Poison_Cloud reads its Trigger-locked target instead
+// of live mouse_world (ADR-0005); everything else aiming along aim_dir (Gun,
+// Melee_Weapon, Fireball, Flamethrower) keeps tracking live, so a Resolve may
+// whiff if the target moved or died since Trigger.
+resolve_weapon_action :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) -> bool {
+	switch &v in weapon.variant {
+	case Gun:
+		return try_fire_gun(weapon, &v, origin, aim_dir)
+	case Melee_Weapon:
+		return try_swing_melee(&v, weapon.damage, origin, aim_dir, enemies)
+	case Magic:
+		target := mouse_world
+		if v.spell_kind == .Poison_Cloud {
+			target = v.locked_target
+		}
+		return try_cast_magic(&v, weapon.damage, origin, aim_dir, target, enemies)
 	}
+	return false
+}
 
-	if gun.ammo_in_clip <= 0 {
+// captures mouse_world into Magic's locked_target the instant Windup starts,
+// for Poison_Cloud specifically - a no-op for every other weapon/spell.
+// Ground-targeted casts commit their target at Trigger rather than tracking
+// the mouse live through Windup like everything aim_dir-based does (see
+// ADR-0005): the natural mental model for a discrete point pick is that the
+// choice is locked in once made.
+lock_poison_cloud_target :: proc(weapon: ^Weapon, origin, mouse_world: Vec2) {
+	switch &v in weapon.variant {
+	case Magic:
+		if v.spell_kind == .Poison_Cloud {
+			v.locked_target = clamp_point_to_range(origin, mouse_world, v.cast_range)
+		}
+	case Gun, Melee_Weapon:
+	}
+}
+
+// shared by try_use_weapon's Semi_Automatic Windup-gate and try_fire_gun's
+// own Resolve-time check (ticket 02), so the empty-clip/reloading condition
+// that decides whether a Gun can act at all is expressed exactly once
+gun_can_fire :: proc(gun: Gun) -> bool {
+	return gun.reload_timer <= 0 && gun.ammo_in_clip > 0
+}
+
+try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool {
+	if !gun_can_fire(gun^) {
 		start_reload(weapon)
 		return false
 	}
@@ -408,14 +531,14 @@ enemy_in_melee_arc :: proc(melee: Melee_Weapon, origin, aim_dir: Vec2, enemy: En
 // gathers every enemy in the arc (cleave), applying the hit to each via the
 // same apply_hit_to_enemy pipeline bullets use, so death handling is never
 // duplicated between weapon types. Always "acts" once triggered - no
-// ammo-style failure case like Gun's empty-clip.
-try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2) -> bool {
-	#reverse for enemy, i in game.enemies {
+// ammo-style failure case like Gun's empty-clip. `enemies` is threaded in
+// explicitly rather than read from game.enemies, for consistency with
+// origin/aim_dir already being explicit params (ticket 01).
+try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2, enemies: []Enemy) -> bool {
+	#reverse for enemy, i in enemies {
 		if !enemy_in_melee_arc(melee^, origin, aim_dir, enemy) do continue
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
-
-	melee.swing_timer = melee.swing_time
 
 	return true
 }
@@ -428,19 +551,16 @@ try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2
 // spawns Bullets (fireball reuses Bullet directly; poison cloud gets its own
 // Poison_Cloud array), rather than being represented here. Always "acts"
 // once triggered - no ammo/cooldown-style failure case beyond the shared
-// cooldown_timer gate in try_use_weapon.
-try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, mouse_world: Vec2) -> bool {
+// cooldown_timer gate in try_use_weapon. `target` is live mouse_world for
+// aim_dir-based spells, or Poison_Cloud's Trigger-locked point (already
+// clamped by lock_poison_cloud_target) - resolve_weapon_action decides which.
+try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, target: Vec2, enemies: []Enemy) -> bool {
 	switch magic.spell_kind {
 	case .Fireball:
 		cast_fireball(magic^, damage, origin, aim_dir)
 	case .Flamethrower:
-		cast_flamethrower_tick(magic^, damage, origin, aim_dir)
+		cast_flamethrower_tick(magic^, damage, origin, aim_dir, enemies)
 	case .Poison_Cloud:
-		// ground-targeted at the mouse rather than a fixed point along
-		// aim_dir (ticket 11) - the one spell that breaks from the
-		// aim_dir-targeting model the others share - clamped so it can't be
-		// dropped anywhere on screen regardless of player position
-		target := clamp_point_to_range(origin, mouse_world, magic.cast_range)
 		cast_poison_cloud(magic^, damage, target)
 	}
 	return true
@@ -451,10 +571,10 @@ try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, mouse_world:
 // arc/cone hit-check as melee (ticket 03), just against Magic's own
 // range/arc_degrees, hitting every enemy in the cone each tick (cleave, no
 // single-target cap)
-cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
+cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2, enemies: []Enemy) {
 	cone := Melee_Weapon{range = magic.range, arc_degrees = magic.arc_degrees}
 
-	#reverse for enemy, i in game.enemies {
+	#reverse for enemy, i in enemies {
 		if !enemy_in_melee_arc(cone, origin, aim_dir, enemy) do continue
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}

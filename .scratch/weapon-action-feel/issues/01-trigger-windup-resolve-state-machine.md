@@ -1,0 +1,29 @@
+Type: grilling
+Status: resolved
+
+## Question
+
+Today `try_use_weapon` is called synchronously from input handling (main.odin) and every variant resolves its effect immediately, in the same call, using the `origin`/`aim_dir`/`mouse_world` passed in at that instant. Windup breaks that: a `Semi_Automatic` weapon must start Winding Up on Trigger but not Resolve until `windup_time` seconds later, inside `update_weapon` (which runs every frame but currently has no access to origin/aim_dir/mouse_world — only `dt`).
+
+Decide the shape of this restructuring:
+
+- Does `update_weapon`'s signature grow to take live `origin`/`aim_dir`/`mouse_world` every frame (not just on Trigger), so a completing Windup can Resolve against fresh aim state (per the map's locked "aim tracks live" decision)? Or does something else supply that context at Resolve time?
+- Does `try_use_weapon` change to only ever *start* a cycle (set `windup_timer`/`cooldown_timer` for Windup-gated weapons, or Resolve immediately for Automatic weapons as it does today), while a new function (called from `update_weapon` or elsewhere) does the actual Resolve dispatch (`fire_pellets`/`enemy_in_melee_arc` loop/`try_cast_magic`'s switch) when `windup_timer` crosses to 0?
+- How does Follow-through fit into this same tick — does resolving into Follow-through (Automatic weapons) reuse the same "start a timer, count it down in update_weapon" pattern Windup uses, just with the visible effect at the other end?
+
+Read [ADR-0003](../../../docs/adr/0003-windup-and-follow-through-are-weapon-level.md) first — it's already settled that `windup_time`/`windup_timer`/`follow_through_time`/`follow_through_timer` are common `Weapon` fields, not per-variant. This ticket is about the *call-site/control-flow* shape, not the field placement.
+
+## Answer
+
+Settled shape:
+
+- **`update_weapon` gains explicit `origin, aim_dir, mouse_world: Vec2` parameters**, matching the convention already used by `try_use_weapon`/`try_fire_gun`/`try_swing_melee`/`try_cast_magic` (these three values are always threaded explicitly through this call chain, never read from a global). Its call site in main.odin moves from its current spot (before aim_dir/mouse_world/player_pos are computed) to right after they're freshly computed each frame, immediately before `try_use_weapon`'s call — so a completing Windup always resolves against this-frame's aim, no staleness.
+- **Follow-on consistency fix, same signature question, different call sites**: `try_swing_melee` and `cast_flamethrower_tick` currently reach into the global `game.enemies` directly rather than taking it as a parameter — the one place this call chain breaks the "thread it explicitly" convention. Unify these too: both gain an explicit `enemies: []Enemy` (or equivalent) parameter, passed down from `resolve_weapon_action` (which itself would read `game.enemies` once, at the top of the call chain, same as `update_weapon`'s own params ultimately originate from `game.player`/`game.camera`/`game.mouse` read once in main.odin). Not required to unblock Windup, but decided here since it's the same question resolved the same way.
+- **Extract `resolve_weapon_action(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) -> bool`**: today's `try_use_weapon` switch-on-variant block (calling `try_fire_gun`/`try_swing_melee`/`try_cast_magic`) moves into this new proc, unchanged in behavior, callable from two call sites instead of being inline in one.
+- **`try_use_weapon` becomes a Trigger-time gate + dispatcher**: checks `cooldown_timer` as today; if `fire_mode == .Semi_Automatic`, starts the cycle only (`windup_timer = windup_fraction / action_rate` — see [Windup vs action-rate upgrades](03-windup-vs-action-rate-upgrades.md)/ADR-0004 for why it's a derived fraction, not a stored duration; `cooldown_timer = 1.0/action_rate`) and returns without resolving; if `fire_mode == .Automatic`, calls `resolve_weapon_action` immediately (unchanged from today's behavior) and, if it acted, sets `cooldown_timer` and starts `follow_through_timer = follow_through_time`.
+- **`update_weapon` ticks three timers**: `cooldown_timer` (unchanged), `windup_timer` (new — when it crosses from >0 to <=0, calls `resolve_weapon_action` with this frame's live origin/aim_dir/mouse_world/enemies), and `follow_through_timer` (new — pure cosmetic countdown, no side effect on completion).
+- **`cooldown_timer` and `windup_timer` start together, at Trigger** — this is what "Windup nested within the cooldown window" requires structurally: the weapon commits to its full `1/action_rate` cycle the instant Windup starts, not staggered.
+- **Switching weapon mid-Windup silently abandons the Windup**: `weapon_create()` already overwrites `game.player.weapon` outright; no special-case guard is added. Simple, and weapon-switching mid-combat is already an edge case (debug-only today, deliberate Shop visits later).
+- **Left open on purpose**: exactly where the Gun ammo-check sits (gating Windup at Trigger vs discovering an empty clip at Resolve) is [Gun empty-clip Windup](02-gun-empty-clip-windup.md)'s call, not this ticket's — this shape accommodates either answer, since `resolve_weapon_action`'s "acted" bool return is exactly the hook that ticket needs.
+
+**Addendum from [Magic windup prototype](06-magic-windup-prototype.md) / ADR-0005**: this state machine's Trigger-time path (the `fire_mode == .Semi_Automatic` branch above) needs one more small hook beyond what's described here — for `spell_kind == .Poison_Cloud` specifically, it must capture `mouse_world` into the `Magic` variant at the moment Windup starts, since Poison_Cloud's ground target locks at Trigger rather than tracking live like every other Windup-gated case this ticket assumed. A no-op for every other weapon/spell. See ADR-0005 for why.

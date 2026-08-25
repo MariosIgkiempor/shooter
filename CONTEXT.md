@@ -12,11 +12,28 @@ _Avoid_: Loadout, armament
 The three concrete `Weapon` variants. Gun keeps the clip/reserve/reload ranged-firing mechanic; Melee_Weapon and Magic are cooldown-only (no stamina/mana economy). Which `Weapon_Kind`s belong to which Class is a separate lookup table — see **Class**.
 
 **Action rate**:
-The generic "actions per second" cadence shared by all weapon types — firing (Gun), swinging (Melee_Weapon), casting (Magic). Gates how often `cooldown_timer` lets a weapon act again.
+The generic "actions per second" cadence shared by all weapon types — firing (Gun), swinging (Melee_Weapon), casting (Magic). Gates how often `cooldown_timer` lets a weapon act again. **Windup** (when present) is carved out of the front of this same cycle as a proportional slice, not added on top — Action rate stays the true pace of a weapon regardless of whether it Windups, and regardless of how much `action_rate` has grown from upgrades.
 _Avoid_: Fire rate (Gun-specific predecessor term, now only correct when talking about Gun specifically)
 
 **Fire mode**:
-Whether a weapon's action re-triggers repeatedly while its input is held (`Automatic`) or once per press (`Semi_Automatic`). Applies generically across all three weapon types, not just Gun.
+Whether a weapon's action re-triggers repeatedly while its input is held (`Automatic`) or once per press (`Semi_Automatic`). Applies generically across all three weapon types, not just Gun. Also the sole gate deciding whether a weapon Windups (`Semi_Automatic` only) or gets a Follow-through instead (`Automatic` only) — see **Windup**.
+
+**Trigger**:
+The player input event that starts a weapon's action cycle — a press for `Semi_Automatic`, each re-fire tick while held for `Automatic`. Distinct from **Resolve** now that `Windup` can delay the effect after the Trigger; the two were interchangeable before Windup existed, since every weapon acted instantly on Trigger.
+
+**Windup**:
+The visible telegraph phase a `Semi_Automatic` weapon shows before it acts, sized by the common `Weapon.windup_fraction` preset (0..1, the portion of the weapon's cycle Windup occupies) and driven at runtime by `windup_timer`. Nested inside the weapon's existing cooldown window (see **Action rate**) as a proportional slice, not an absolute duration — expressing it as a fraction of `1/action_rate` rather than fixed seconds means it stays nested automatically no matter how much `action_rate` has grown from upgrades, with no clamping needed anywhere. Once started, a Windup always completes into **Resolve** — it cannot be cancelled by releasing the trigger early. Aim keeps tracking the mouse live throughout for anything aiming along `aim_dir` (Gun, Melee_Weapon, Fireball, Flamethrower), so the action resolves toward wherever the player is aiming the instant Windup completes, against whatever's actually in range then (it may whiff if the target moved or died) — but a **ground-targeted** cast (Poison_Cloud) is the opposite: its target locks at Trigger and does not track the mouse through Windup at all, see ADR-0005. Mutually exclusive per weapon with **Follow-through**: a weapon shows one or the other, gated by Fire mode, never both — Windup-gated weapons go straight from Resolve to Ready, no separate flourish after.
+_Avoid_: Charge, telegraph alone (telegraph is the effect Windup produces, not the name of the mechanic), windup_time (retired name — Windup is a fraction of the cycle, not a fixed duration; contrast with Follow-through, which is a fixed duration since it has no equivalent invariant to protect)
+
+**Resolve**:
+The instant a weapon's actual effect executes — the bullet spawns, the hit-check runs, the spell casts. For `Automatic` weapons this happens immediately on **Trigger**, same as before Windup existed. For `Semi_Automatic` (Windup-gated) weapons it happens `windup_fraction / action_rate` seconds after Trigger — recomputed fresh at Trigger time from whatever `action_rate` is at that moment — once **Windup** completes.
+
+**Follow-through**:
+The visible cosmetic phase an `Automatic` weapon shows after Resolve, timed by the common `Weapon.follow_through_time`/`follow_through_timer` fields — the generalized, Weapon-level successor to Melee_Weapon's old `swing_time`/`swing_timer` (which drove only Dagger/Sword's post-hit sweep). Purely cosmetic: never gates re-triggering (`cooldown_timer` already does that) or the hit-check (already resolved by the time Follow-through plays). Mutually exclusive per weapon with **Windup** — see there for the split.
+_Avoid_: Flourish (used while this was still being named; Follow-through is the settled term), swing_time/swing_timer (retired name, now Weapon-level and not Melee-specific)
+
+**Weapon readiness**:
+The three mutually-exclusive states a `Weapon` cycles through between actions: **Ready** (`cooldown_timer <= 0`, can Trigger), **Winding Up** (`windup_timer > 0`, Triggered but not yet Resolved), and **Recovering** (`cooldown_timer > 0` but `windup_timer` already 0 — Resolved, or Follow-through playing, but not yet Ready again). A weapon showing Follow-through is always Recovering; a weapon in Winding Up is never Recovering, and vice versa.
 
 **Movement Style**:
 An enemy's per-frame steering archetype, held on `Enemy.movement` as its own bare union — how it gets from where it is to where it's going: `Grounded`, ghostly `Floater` drift, or `Swarmer` surround. Orthogonal to **Attack Style**, held separately on `Enemy.attack`: an enemy picks one of each independently. `speed` belongs to Movement Style (each variant carries its own), not Attack Style, since it's a movement trait.

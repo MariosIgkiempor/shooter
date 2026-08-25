@@ -1,0 +1,11 @@
+# Windup is stored as a fraction of the cycle, not a fixed duration
+
+Status: accepted
+
+`action_rate` upgrades (`upgrade_weapon`) multiply `action_rate` by 1.10 on every pick, stacking with no ceiling across a run — so a weapon's cycle length `1/action_rate` shrinks indefinitely. Windup (see ADR-0003) is defined as nested *within* that cycle, never extending it. If Windup were a fixed duration in seconds, like `follow_through_time` or the `swing_time` it replaced, enough stacked `action_rate` upgrades on any Windup-gated weapon would eventually shrink `1/action_rate` below that fixed duration, breaking the nesting invariant the whole mechanic depends on.
+
+We considered capping `action_rate` upgrades per weapon at the point where `1/action_rate` would go below its Windup duration. Rejected: it couples `upgrade_weapon`, a generic system, to each weapon's Windup duration specifically, and once a heavily-upgraded weapon hits that ceiling, further `action_rate` picks on it become dead stat allocation with no visible effect — a confusing dead end for the player to discover mid-run. We also considered converting a weapon's Windup into a Follow-through once its cycle could no longer fit a meaningful Windup — rejected as solving a numeric-scaling problem with a mechanic bigger than it needs: `Fire_Mode` alone deciding Windup-vs-Follow-through (ADR-0003) is a rule we specifically didn't want weapons crossing at runtime.
+
+Instead `windup_fraction: f32` (0..1) replaces what would have been `windup_time`: it's the proportion of the weapon's *current* cycle Windup occupies, not an absolute duration. The actual `windup_timer` countdown is derived fresh at Trigger — `windup_fraction / action_rate` — using whatever `action_rate` is at that moment, upgrades included. Because Windup is defined relative to the cycle it lives inside, the nesting invariant holds by construction for any number of stacked upgrades; there's no clamp to maintain and no place a future `action_rate`-modifying code path (a debuff, a different upgrade source) could silently desync it.
+
+`follow_through_time` stays a fixed duration in seconds, unchanged — it has no equivalent invariant to protect, since Follow-through is purely cosmetic and simply gets visually truncated by the next Trigger if a weapon's cycle ever shrinks past it, without breaking anything.

@@ -244,9 +244,11 @@ update_game :: proc() {
 		input = linalg.normalize0(input)
 		move_actor(&game.player.rect, game.player.animation, &game.tilemap, input * rl.GetFrameTime() * 100)
 
-		update_weapon(&game.player.weapon, rl.GetFrameTime())
-
-		if is_key_pressed(.R) {
+		// blocked mid-Windup: a manually-triggered reload would otherwise
+		// silently fail the pending Resolve (gun_can_fire would see
+		// reload_timer > 0 once Windup completes), breaking the "a committed
+		// Windup always resolves" invariant (story 17)
+		if is_key_pressed(.R) && game.player.weapon.windup_timer <= 0 {
 			start_reload(&game.player.weapon)
 		}
 
@@ -271,10 +273,22 @@ update_game :: proc() {
 		player_pos := Vec2{game.player.x, game.player.y}
 		game.player.aim_dir = linalg.normalize0(mouse_world - player_pos)
 
+		// moved to after aim_dir/mouse_world/player_pos are freshly computed
+		// this frame (not before, as before Windup existed), so a Resolve on
+		// Windup completion always fires against current-frame aim state
+		update_weapon(
+			&game.player.weapon,
+			rl.GetFrameTime(),
+			player_pos,
+			game.player.aim_dir,
+			mouse_world,
+			game.enemies[:],
+		)
+
 		fire_pressed := game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
 
 		if fire_pressed {
-			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir, mouse_world)
+			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir, mouse_world, game.enemies[:])
 		}
 
 		update_bullets(rl.GetFrameTime())
@@ -447,6 +461,8 @@ draw_game :: proc() {
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
+		draw_poison_staff_telegraph(game.player)
+		draw_fire_wand_windup_glow(game.player)
 		draw_flamethrower_cone(game.player)
 		if game.debug_overlay {
 			draw_debug_colliders()
@@ -578,31 +594,112 @@ draw_game :: proc() {
 		}
 	}
 
+	WEAPON_WINDUP_PULLBACK :: 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
+	WEAPON_RECOIL_KICK :: 8.0 // px kicked back along -aim_dir during Gun's Automatic Follow-through (SMG)
+	FLAME_STAFF_PULSE_SCALE :: 0.35 // extra sprite scale at the start of a Follow-through pulse, decaying to 0
+	SWORD_SWING_OUT_TIME :: 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
+	SWORD_SWING_RETURN_TIME :: 0.11 // seconds, ease-out extreme -> neutral
+
+	ease_out_cubic :: proc(t: f32) -> f32 {
+		u := 1 - clamp(t, 0, 1)
+		return 1 - u * u * u
+	}
+
+	// 0 at Trigger -> 1 the instant Windup completes (and clamped to 1
+	// whenever there's no Windup in flight), shared by draw_weapon's own
+	// pullback and the Poison_Staff/Fire_Wand telegraph draws below so the
+	// windup_fraction/action_rate derivation (ADR-0004) is expressed once.
+	// Recomputes windup_duration from the *current* action_rate every frame,
+	// same as windup_timer's own derivation at Trigger - stable across a
+	// Windup for every reachable path today, but an action_rate upgrade
+	// picked up mid-Windup (e.g. via the level-up modal) would skew this
+	// frame's progress against the untouched windup_timer it started from;
+	// purely a cosmetic wobble, not a Resolve-correctness issue, since
+	// windup_timer itself never depends on this.
+	weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
+		if weapon.windup_timer <= 0 {
+			return 1
+		}
+		windup_duration := weapon.windup_fraction / weapon.action_rate
+		if windup_duration <= 0 {
+			return 1
+		}
+		return clamp(1 - weapon.windup_timer / windup_duration, 0, 1)
+	}
+
 	// a short barrel pivoting at roughly chest height, rotated to face the
-	// player's current aim direction - stands in for a weapon sprite until one exists
+	// player's current aim direction - stands in for a weapon sprite until one
+	// exists. Windup/Follow-through motion below is transform-only placeholder
+	// animation on that same stand-in sprite (validated for timing by ticket
+	// 04/05/06's prototypes, not for "punch" - real per-kind art is out of
+	// scope for this pass, see the spec's Out of Scope).
 	draw_weapon :: proc(player: Player) {
 		tex := atlas_textures[weapon_texture_names[player.weapon.kind]]
+		weapon := player.weapon
 
 		doc := animation_atlas_texture(player.animation).document_size
 		pivot := Vec2{player.x, player.y - doc.y / 2}
 		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
+		pulse_scale: f32 = 1
 
-		// melee swish (ticket 07): sweeps -arc_degrees/2 -> +arc_degrees/2
-		// across swing_time, purely cosmetic - the hit already resolved
-		// instantly in try_swing_melee before this ever plays
-		switch v in player.weapon.variant {
-		case Melee_Weapon:
-			if v.swing_timer > 0 {
-				progress := 1 - v.swing_timer / v.swing_time // 0 -> 1 across the swing
-				angle += (progress - 0.5) * v.arc_degrees
+		// Windup (Semi_Automatic): draw the telegraph ahead of Resolve - melee
+		// sweeps its arc backward, everything else pulls back along -aim_dir
+		if weapon.windup_timer > 0 {
+			progress := weapon_windup_progress(weapon)
+
+			switch v in weapon.variant {
+			case Melee_Weapon:
+				angle -= (v.arc_degrees / 2) * progress
+			case Gun, Magic:
+				pivot -= player.aim_dir * WEAPON_WINDUP_PULLBACK * progress
 			}
-		case Gun, Magic:
+		}
+
+		// Sword's Resolve swing-through (ticket 05): a two-phase eased curve
+		// (a spring was prototyped and rejected as feeling wrong), derived
+		// purely from time-since-Resolve rather than a new persisted timer -
+		// recovered from cooldown_timer, since Windup-gated weapons otherwise
+		// go straight from Resolve to Ready with no separate Follow-through
+		if v, is_melee := weapon.variant.(Melee_Weapon); is_melee && weapon.windup_fraction > 0 {
+			windup_duration := weapon.windup_fraction / weapon.action_rate
+			cycle := 1.0 / weapon.action_rate
+			time_since_resolve := (cycle - windup_duration) - weapon.cooldown_timer
+			swing_total := f32(SWORD_SWING_OUT_TIME + SWORD_SWING_RETURN_TIME)
+
+			if time_since_resolve >= 0 && time_since_resolve < swing_total {
+				draw_back := -(v.arc_degrees / 2)
+				extreme := v.arc_degrees / 2
+
+				if time_since_resolve < SWORD_SWING_OUT_TIME {
+					t := ease_out_cubic(time_since_resolve / SWORD_SWING_OUT_TIME)
+					angle += draw_back + (extreme - draw_back) * t
+				} else {
+					t := ease_out_cubic((time_since_resolve - SWORD_SWING_OUT_TIME) / SWORD_SWING_RETURN_TIME)
+					angle += extreme - extreme * t
+				}
+			}
+		}
+
+		// Follow-through (Automatic): Dagger's post-hit sweep (unchanged from
+		// the old swing_time/swing_timer, now the Weapon-level generalized
+		// fields - ticket 01), SMG's recoil-kick, Flame_Staff's per-tick pulse
+		if weapon.follow_through_timer > 0 && weapon.follow_through_time > 0 {
+			progress := 1 - weapon.follow_through_timer / weapon.follow_through_time // 0 -> 1
+
+			switch v in weapon.variant {
+			case Melee_Weapon:
+				angle += (progress - 0.5) * v.arc_degrees
+			case Gun:
+				pivot -= player.aim_dir * WEAPON_RECOIL_KICK * (1 - progress)
+			case Magic:
+				pulse_scale += FLAME_STAFF_PULSE_SCALE * (1 - progress)
+			}
 		}
 
 		// sprite's muzzle faces +x (right) by default; mirror vertically when
-		// the drawn angle (post swing-offset, not the raw aim_dir) points
-		// left, so the weapon stays right-side up instead of upside-down
-		// mid-swing
+		// the drawn angle (post windup/swing offset, not the raw aim_dir)
+		// points left, so the weapon stays right-side up instead of
+		// upside-down mid-swing
 		atlas_rect := tex.rect
 		offset_top := tex.offset_top
 		if math.cos(math.to_radians(angle)) < 0 {
@@ -614,7 +711,7 @@ draw_game :: proc() {
 		// match the player's size, preserving native aspect ratio - scaling
 		// by the trimmed rect instead would size each weapon inconsistently
 		// depending on how tightly the atlas happened to trim it
-		scale := doc.y / tex.document_size.y
+		scale := doc.y / tex.document_size.y * pulse_scale
 		width := tex.rect.width * scale
 		height := tex.rect.height * scale
 
@@ -628,6 +725,36 @@ draw_game :: proc() {
 		origin := Vec2{-tex.offset_left * scale, (tex.document_size.y / 2 - offset_top) * scale}
 
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
+	}
+
+	// ground-target telegraph ring for Poison_Staff's Windup (story 8/9): shown
+	// at the Trigger-locked target (ADR-0005), not the live mouse, so the
+	// player can see exactly where the cloud will land before it commits -
+	// grows toward full cloud_radius as Windup nears completion
+	draw_poison_staff_telegraph :: proc(player: Player) {
+		weapon := player.weapon
+		magic, is_magic := weapon.variant.(Magic)
+		if !is_magic || magic.spell_kind != .Poison_Cloud || weapon.windup_timer <= 0 {
+			return
+		}
+
+		progress := weapon_windup_progress(weapon)
+		rl.DrawCircleLinesV(magic.locked_target, magic.cloud_radius * progress, rl.Color{50, 180, 60, 200})
+	}
+
+	// Fire_Wand's Windup (story 7): a muzzle glow that grows and brightens
+	// toward Resolve, so casting reads as gathering and releasing energy
+	// before the fireball launches
+	draw_fire_wand_windup_glow :: proc(player: Player) {
+		weapon := player.weapon
+		magic, is_magic := weapon.variant.(Magic)
+		if !is_magic || magic.spell_kind != .Fireball || weapon.windup_timer <= 0 {
+			return
+		}
+
+		progress := weapon_windup_progress(weapon)
+		center := Vec2{player.x, player.y} + player.aim_dir * 14
+		rl.DrawCircleV(center, 3 + progress * 6, rl.Color{255, 140, 30, u8(120 + progress * 100)})
 	}
 
 	// translucent cone, cosmetic only, while the flamethrower is actively
