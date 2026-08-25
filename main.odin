@@ -320,6 +320,8 @@ update_game :: proc() {
 			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir, mouse_world, game.enemies[:])
 		}
 
+		update_magic_cast_particles(game.player.weapon, player_pos, game.player.aim_dir, is_mouse_button_down(.LEFT))
+
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
 		update_poison_clouds(rl.GetFrameTime())
@@ -490,9 +492,6 @@ draw_game :: proc() {
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
-		draw_poison_staff_telegraph(game.player)
-		draw_fire_wand_windup_glow(game.player)
-		draw_flamethrower_cone(game.player)
 		if game.debug_overlay {
 			draw_debug_colliders()
 			draw_debug_weapon_area(game.player)
@@ -641,34 +640,13 @@ draw_game :: proc() {
 		return 1 - u * u * u
 	}
 
-	// 0 at Trigger -> 1 the instant Windup completes (and clamped to 1
-	// whenever there's no Windup in flight), shared by draw_weapon's own
-	// pullback and the Poison_Staff/Fire_Wand telegraph draws below so the
-	// windup_fraction/action_rate derivation (ADR-0004) is expressed once.
-	// Recomputes windup_duration from the *current* action_rate every frame,
-	// same as windup_timer's own derivation at Trigger - stable across a
-	// Windup for every reachable path today, but an action_rate upgrade
-	// picked up mid-Windup (e.g. via the level-up modal) would skew this
-	// frame's progress against the untouched windup_timer it started from;
-	// purely a cosmetic wobble, not a Resolve-correctness issue, since
-	// windup_timer itself never depends on this.
-	weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
-		if weapon.windup_timer <= 0 {
-			return 1
-		}
-		windup_duration := weapon.windup_fraction / weapon.action_rate
-		if windup_duration <= 0 {
-			return 1
-		}
-		return clamp(1 - weapon.windup_timer / windup_duration, 0, 1)
-	}
-
-	// a short barrel pivoting at roughly chest height, rotated to face the
-	// player's current aim direction - stands in for a weapon sprite until one
-	// exists. Windup/Follow-through motion below is transform-only placeholder
-	// animation on that same stand-in sprite (validated for timing by ticket
-	// 04/05/06's prototypes, not for "punch" - real per-kind art is out of
-	// scope for this pass, see the spec's Out of Scope).
+	// draws weapon_texture_names[player.weapon.kind]'s icon pivoting at
+	// roughly chest height, rotated to face the player's current aim
+	// direction. Windup/Follow-through motion below is transform-only
+	// animation on that per-kind sprite (validated for timing by ticket
+	// 04/05/06's prototypes); the "punch" beyond transform comes from Magic's
+	// windup/cast particles (update_magic_cast_particles, weapon.odin), spawned
+	// during update rather than drawn here.
 	draw_weapon :: proc(player: Player) {
 		tex := atlas_textures[weapon_texture_names[player.weapon.kind]]
 		weapon := player.weapon
@@ -743,11 +721,23 @@ draw_game :: proc() {
 			offset_top = tex.offset_bottom
 		}
 
-		// scale the weapon's full document (not just its trimmed rect) up to
-		// match the player's size, preserving native aspect ratio - scaling
-		// by the trimmed rect instead would size each weapon inconsistently
-		// depending on how tightly the atlas happened to trim it
-		scale := doc.y / tex.document_size.y * pulse_scale
+		// scale so the grip-to-tip reach matches the player's size (Gun/Magic),
+		// or matches Melee_Weapon's own range (Sword/Dagger) so the blade's
+		// drawn tip lands exactly where its hit-arc actually reaches, instead
+		// of an icon-sized blade implying a shorter reach than it has. Reach
+		// at scale=1 is rect.width + offset_left (grip-to-visible-tip in the
+		// same dest-local coords `origin` below is expressed in, assuming the
+		// blade tip is the atlas's last opaque pixel with ~0 offset_right).
+		scale: f32
+		switch v in weapon.variant {
+		case Melee_Weapon:
+			reach := tex.rect.width + tex.offset_left
+			scale = reach > 0 ? v.range / reach : doc.y / tex.document_size.y
+		case Gun, Magic:
+			scale = doc.y / tex.document_size.y
+		}
+		scale *= pulse_scale
+
 		width := tex.rect.width * scale
 		height := tex.rect.height * scale
 
@@ -761,56 +751,6 @@ draw_game :: proc() {
 		origin := Vec2{-tex.offset_left * scale, (tex.document_size.y / 2 - offset_top) * scale}
 
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
-	}
-
-	// ground-target telegraph ring for Poison_Staff's Windup (story 8/9): shown
-	// at the Trigger-locked target (ADR-0005), not the live mouse, so the
-	// player can see exactly where the cloud will land before it commits -
-	// grows toward full cloud_radius as Windup nears completion
-	draw_poison_staff_telegraph :: proc(player: Player) {
-		weapon := player.weapon
-		magic, is_magic := weapon.variant.(Magic)
-		if !is_magic || magic.spell_kind != .Poison_Cloud || weapon.windup_timer <= 0 {
-			return
-		}
-
-		progress := weapon_windup_progress(weapon)
-		rl.DrawCircleLinesV(magic.locked_target, magic.cloud_radius * progress, rl.Color{50, 180, 60, 200})
-	}
-
-	// Fire_Wand's Windup (story 7): a muzzle glow that grows and brightens
-	// toward Resolve, so casting reads as gathering and releasing energy
-	// before the fireball launches
-	draw_fire_wand_windup_glow :: proc(player: Player) {
-		weapon := player.weapon
-		magic, is_magic := weapon.variant.(Magic)
-		if !is_magic || magic.spell_kind != .Fireball || weapon.windup_timer <= 0 {
-			return
-		}
-
-		progress := weapon_windup_progress(weapon)
-		center := Vec2{player.x, player.y} + player.aim_dir * 14
-		rl.DrawCircleV(center, 3 + progress * 6, rl.Color{255, 140, 30, u8(120 + progress * 100)})
-	}
-
-	// translucent cone, cosmetic only, while the flamethrower is actively
-	// channeling - the tick damage itself already resolved in
-	// try_cast_magic (cast_flamethrower_tick); this just shows its reach
-	draw_flamethrower_cone :: proc(player: Player) {
-		magic, is_magic := player.weapon.variant.(Magic)
-		if !is_magic || magic.spell_kind != .Flamethrower {
-			return
-		}
-		if !is_mouse_button_down(.LEFT) {
-			return
-		}
-
-		center := Vec2{player.x, player.y}
-		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
-		start := angle - magic.arc_degrees / 2
-		end := angle + magic.arc_degrees / 2
-
-		rl.DrawCircleSector(center, magic.range, start, end, 16, rl.Color{230, 100, 30, 90})
 	}
 
 	// F8 dev view: outlines the player's and every enemy's actual collision
@@ -866,7 +806,7 @@ draw_game :: proc() {
 	}
 
 	// F8 dev view: the equipped weapon's hit area, shown continuously
-	// (unlike draw_flamethrower_cone's held-only fill) so range/arc tuning
+	// (unlike Flamethrower's held-only cone particles) so range/arc tuning
 	// doesn't require attacking to see it. Gun has no player-relative area to
 	// show; fireball's AoE lands wherever it hits, not around the player, so
 	// it's skipped too.

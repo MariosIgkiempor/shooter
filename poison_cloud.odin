@@ -72,6 +72,33 @@ spawn_poison_gas_puff :: proc(cloud: Poison_Cloud) {
 	)
 }
 
+// Poison_Staff's Windup telegraph (ticket 06): gas puffs already filling the
+// eventual cloud's footprint at the Trigger-locked target (ADR-0005) - reuses
+// the same puff distribution/animation as a live cloud's own ambient puffs
+// (spawn_poison_gas_puff), just growing toward full cloud_radius as Windup
+// nears completion instead of a flat telegraph ring. Called once per frame
+// throughout Windup (update_magic_cast_particles, weapon.odin).
+spawn_poison_windup_puff :: proc(target: Vec2, cloud_radius, progress: f32) {
+	radius := cloud_radius * progress
+	angle := rand.float32_range(0, math.TAU)
+	// sqrt of a uniform sample gives a uniform distribution over the disc's
+	// area, not a bias toward the center
+	r := radius * math.sqrt(rand.float32_range(0, 1))
+	offset := Vec2{math.cos(angle), math.sin(angle)} * r
+
+	drift_angle := rand.float32_range(0, math.TAU)
+	drift_speed := rand.float32_range(0, POISON_GAS_MAX_DRIFT_SPEED)
+	drift := Vec2{math.cos(drift_angle), math.sin(drift_angle)} * drift_speed
+
+	spawn_particle_sprite(
+		target + offset,
+		drift,
+		.Particle_Poison_Gas,
+		{POISON_GAS_SPRITE_SIZE, POISON_GAS_SPRITE_SIZE},
+		rand.float32_range(POISON_GAS_MIN_LIFETIME, POISON_GAS_MAX_LIFETIME),
+	)
+}
+
 update_poison_clouds :: proc(dt: f32) {
 	#reverse for &cloud, i in game.poison_clouds {
 		cloud.lifetime -= dt

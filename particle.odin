@@ -24,6 +24,50 @@ DAMAGE_BURST_MAX_LIFETIME :: 0.45
 DAMAGE_BURST_MIN_RADIUS :: 2.5
 DAMAGE_BURST_MAX_RADIUS :: 5.0
 
+// flame-tick-burst preset: small and short-lived, fired once per
+// Flame_Staff Automatic tick (ticket 06's confirmed finding - a discrete
+// per-tick pulse read better than a continuous stream at its 100ms tick
+// rate) - reuses the same flat-circle burst as hit_spark/damage_burst, just
+// warm-colored
+FLAME_TICK_BURST_COUNT :: 5
+FLAME_TICK_BURST_MIN_SPEED :: 40.0
+FLAME_TICK_BURST_MAX_SPEED :: 90.0
+FLAME_TICK_BURST_MIN_LIFETIME :: 0.08
+FLAME_TICK_BURST_MAX_LIFETIME :: 0.15
+FLAME_TICK_BURST_MIN_RADIUS :: 2.0
+FLAME_TICK_BURST_MAX_RADIUS :: 4.0
+
+// Fire_Wand charge-particle preset: tiny embers drifting inward toward the
+// muzzle, spawned one-per-frame throughout Windup (update_magic_cast_particles,
+// weapon.odin) - replaces a single flat growing circle with particles that
+// read as energy gathering into a point
+FIRE_WAND_CHARGE_MIN_LIFETIME :: 0.12
+FIRE_WAND_CHARGE_MAX_LIFETIME :: 0.22
+FIRE_WAND_CHARGE_MIN_RADIUS :: 1.0
+FIRE_WAND_CHARGE_MAX_RADIUS :: 2.2
+FIRE_WAND_CHARGE_SPREAD :: 7.0 // px, shrinks toward the muzzle as Windup progress -> 1
+FIRE_WAND_CHARGE_INWARD_PULL :: 5.0 // 1/s, how fast a charge ember drifts toward the muzzle
+
+// bullet-trail preset: tiny, stationary (no velocity of its own - just fades
+// in place via PARTICLE_DRAG-less lifetime decay), spawned once per bullet
+// per frame so gun pellets and Fireball read as leaving a trail rather than
+// a bare dot in flight
+BULLET_TRAIL_MIN_LIFETIME :: 0.08
+BULLET_TRAIL_MAX_LIFETIME :: 0.16
+BULLET_TRAIL_MIN_RADIUS :: 0.8
+BULLET_TRAIL_MAX_RADIUS :: 1.6
+
+// Flame_Staff cone-fill preset: small embers scattered across the
+// Flamethrower's live cone each frame it's held, replacing a flat translucent
+// sector - distinct from spawn_flame_tick_burst's discrete per-tick pulse at
+// the muzzle, this is the continuous "reach" fill
+FLAME_CONE_MIN_LIFETIME :: 0.1
+FLAME_CONE_MAX_LIFETIME :: 0.2
+FLAME_CONE_MIN_RADIUS :: 1.5
+FLAME_CONE_MAX_RADIUS :: 3.5
+FLAME_CONE_MIN_DRIFT_SPEED :: 10.0
+FLAME_CONE_MAX_DRIFT_SPEED :: 30.0
+
 // what a Particle looks like - a plain filled circle, or an animated atlas
 // sprite. Orthogonal to the rest of Particle's fields (position/velocity/
 // lifetime), same bare-union-on-the-struct-field idiom as Enemy's
@@ -134,6 +178,95 @@ spawn_damage_burst :: proc(position: Vec2) {
 		DAMAGE_BURST_MAX_LIFETIME,
 		DAMAGE_BURST_MIN_RADIUS,
 		DAMAGE_BURST_MAX_RADIUS,
+	)
+}
+
+// preset burst for Flame_Staff's per-tick pulse, called once per
+// cast_flamethrower_tick regardless of whether it hit anything - reads as
+// channeling even when whiffing, same as the continuous cone-fill particles
+spawn_flame_tick_burst :: proc(position: Vec2) {
+	spawn_particle_burst(
+		position,
+		FLAME_TICK_BURST_COUNT,
+		rl.ORANGE,
+		FLAME_TICK_BURST_MIN_SPEED,
+		FLAME_TICK_BURST_MAX_SPEED,
+		FLAME_TICK_BURST_MIN_LIFETIME,
+		FLAME_TICK_BURST_MAX_LIFETIME,
+		FLAME_TICK_BURST_MIN_RADIUS,
+		FLAME_TICK_BURST_MAX_RADIUS,
+	)
+}
+
+// spawns one Fire_Wand charge ember at a random point within
+// FIRE_WAND_CHARGE_SPREAD*(1-progress) of `muzzle`, drifting inward toward
+// it - called once per frame throughout Windup so embers accumulate and
+// tighten as progress approaches 1 (Resolve)
+spawn_fire_wand_charge_particle :: proc(muzzle: Vec2, progress: f32) {
+	spread := FIRE_WAND_CHARGE_SPREAD * (1 - progress)
+	angle := rand.float32_range(0, math.TAU)
+	r := spread * math.sqrt(rand.float32_range(0, 1))
+	position := muzzle + Vec2{math.cos(angle), math.sin(angle)} * r
+	lifetime := rand.float32_range(FIRE_WAND_CHARGE_MIN_LIFETIME, FIRE_WAND_CHARGE_MAX_LIFETIME)
+
+	append(
+		&game.particles,
+		Particle {
+			position = position,
+			velocity = (muzzle - position) * FIRE_WAND_CHARGE_INWARD_PULL,
+			visual = Particle_Circle {
+				color = rl.Color{255, 140, 30, 255},
+				radius = rand.float32_range(FIRE_WAND_CHARGE_MIN_RADIUS, FIRE_WAND_CHARGE_MAX_RADIUS),
+			},
+			lifetime = lifetime,
+			max_lifetime = lifetime,
+		},
+	)
+}
+
+// spawns one Flame_Staff cone-fill ember at a random point within the live
+// Flamethrower cone (uniform over the sector's area), drifting outward along
+// its own angle like embers pushed by the stream - called once per frame
+// while held so the cone reads as filled rather than a flat translucent shape
+spawn_flame_cone_particle :: proc(origin, aim_dir: Vec2, range, arc_degrees: f32) {
+	base_angle := math.atan2(aim_dir.y, aim_dir.x)
+	angle := base_angle + math.to_radians(rand.float32_range(-arc_degrees / 2, arc_degrees / 2))
+	dist := range * math.sqrt(rand.float32_range(0, 1))
+	direction := Vec2{math.cos(angle), math.sin(angle)}
+	lifetime := rand.float32_range(FLAME_CONE_MIN_LIFETIME, FLAME_CONE_MAX_LIFETIME)
+
+	append(
+		&game.particles,
+		Particle {
+			position = origin + direction * dist,
+			velocity = direction * rand.float32_range(FLAME_CONE_MIN_DRIFT_SPEED, FLAME_CONE_MAX_DRIFT_SPEED),
+			visual = Particle_Circle {
+				color = rl.Color{230, 100, 30, 220},
+				radius = rand.float32_range(FLAME_CONE_MIN_RADIUS, FLAME_CONE_MAX_RADIUS),
+			},
+			lifetime = lifetime,
+			max_lifetime = lifetime,
+		},
+	)
+}
+
+// spawns one trail particle at `position` - called once per bullet per frame
+// (update_bullets, bullet.odin) so the trail traces the bullet's actual path
+// rather than a fixed-interval approximation of it
+spawn_bullet_trail_particle :: proc(position: Vec2, color: rl.Color) {
+	lifetime := rand.float32_range(BULLET_TRAIL_MIN_LIFETIME, BULLET_TRAIL_MAX_LIFETIME)
+
+	append(
+		&game.particles,
+		Particle {
+			position = position,
+			visual = Particle_Circle {
+				color = color,
+				radius = rand.float32_range(BULLET_TRAIL_MIN_RADIUS, BULLET_TRAIL_MAX_RADIUS),
+			},
+			lifetime = lifetime,
+			max_lifetime = lifetime,
+		},
 	)
 }
 

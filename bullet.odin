@@ -5,6 +5,8 @@ import "core:math/linalg"
 import rl "vendor:raylib"
 
 BULLET_RADIUS :: 2.0
+BULLET_TRAIL_COLOR :: rl.Color{255, 241, 150, 200} // gun pellets
+FIREBALL_TRAIL_COLOR :: rl.Color{255, 140, 30, 220} // Fire_Wand's explosion_radius > 0 bullets
 
 Bullet :: struct {
 	position:         Vec2,
@@ -95,6 +97,9 @@ update_bullets :: proc(dt: f32) {
 			unordered_remove(&game.bullets, i)
 			continue
 		}
+
+		trail_color := bullet.explosion_radius > 0 ? FIREBALL_TRAIL_COLOR : BULLET_TRAIL_COLOR
+		spawn_bullet_trail_particle(bullet.position, trail_color)
 
 		hit := false
 

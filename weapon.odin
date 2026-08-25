@@ -295,11 +295,9 @@ weapon_texture_names: [Weapon_Kind]Texture_Name = {
 	.Shotgun = .Weapon_Shotgun,
 	.Dagger  = .Weapon_Dagger,
 	.Sword   = .Weapon_Sword,
-	// no magic art yet - reusing the pistol icon as a placeholder for all
-	// three, same as the old single Wand did
-	.Fire_Wand    = .Weapon_Pistol,
-	.Flame_Staff  = .Weapon_Pistol,
-	.Poison_Staff = .Weapon_Pistol,
+	.Fire_Wand    = .Weapon_Fire_Wand,
+	.Flame_Staff  = .Weapon_Flame_Staff,
+	.Poison_Staff = .Weapon_Poison_Staff,
 }
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
@@ -481,6 +479,64 @@ lock_poison_cloud_target :: proc(weapon: ^Weapon, origin, mouse_world: Vec2) {
 	}
 }
 
+// 0 at Trigger -> 1 the instant Windup completes (and clamped to 1 whenever
+// there's no Windup in flight), shared by draw_weapon's pullback (main.odin)
+// and update_magic_cast_particles below so the windup_fraction/action_rate
+// derivation (ADR-0004) is expressed once. Recomputes windup_duration from
+// the *current* action_rate every frame, same as windup_timer's own
+// derivation at Trigger - stable across a Windup for every reachable path
+// today, but an action_rate upgrade picked up mid-Windup (e.g. via the
+// level-up modal) would skew this frame's progress against the untouched
+// windup_timer it started from; purely a cosmetic wobble, not a
+// Resolve-correctness issue, since windup_timer itself never depends on this.
+weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
+	if weapon.windup_timer <= 0 {
+		return 1
+	}
+	windup_duration := weapon.windup_fraction / weapon.action_rate
+	if windup_duration <= 0 {
+		return 1
+	}
+	return clamp(1 - weapon.windup_timer / windup_duration, 0, 1)
+}
+
+MAGIC_MUZZLE_OFFSET :: 14.0 // px along aim_dir that Fire_Wand's charge/Flame_Staff's tick burst spawn from
+
+// spawns this frame's Magic windup/cast particles (ticket 06's confirmed
+// "all three need real new art" finding) - called once per frame from
+// update_game (main.odin), after update_weapon, so windup_timer/locked_target
+// reflect this frame's state. A no-op for anything that isn't Magic, or for
+// a spell_kind with nothing active this frame (no Windup in flight, cone not
+// held). One particle per call is intentional: called every frame, so a
+// ~150-200ms Windup naturally accumulates a handful of embers/puffs without
+// needing a separate spawn-interval timer field.
+update_magic_cast_particles :: proc(weapon: Weapon, origin, aim_dir: Vec2, mouse_held: bool) {
+	magic, is_magic := weapon.variant.(Magic)
+	if !is_magic {
+		return
+	}
+
+	switch magic.spell_kind {
+	case .Fireball:
+		if weapon.windup_timer <= 0 {
+			return
+		}
+		progress := weapon_windup_progress(weapon)
+		spawn_fire_wand_charge_particle(origin + aim_dir * MAGIC_MUZZLE_OFFSET, progress)
+	case .Poison_Cloud:
+		if weapon.windup_timer <= 0 {
+			return
+		}
+		progress := weapon_windup_progress(weapon)
+		spawn_poison_windup_puff(magic.locked_target, magic.cloud_radius, progress)
+	case .Flamethrower:
+		if !mouse_held {
+			return
+		}
+		spawn_flame_cone_particle(origin, aim_dir, magic.range, magic.arc_degrees)
+	}
+}
+
 // shared by try_use_weapon's Semi_Automatic Windup-gate and try_fire_gun's
 // own Resolve-time check (ticket 02), so the empty-clip/reloading condition
 // that decides whether a Gun can act at all is expressed exactly once
@@ -570,7 +626,9 @@ try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, target: Vec2
 // existing cooldown/action_rate gate controls tick rate) - reuses the same
 // arc/cone hit-check as melee (ticket 03), just against Magic's own
 // range/arc_degrees, hitting every enemy in the cone each tick (cleave, no
-// single-target cap)
+// single-target cap). Also fires a cosmetic per-tick particle burst (ticket
+// 06's confirmed finding - see spawn_flame_tick_burst) whether or not it hit
+// anything, same as the always-on flamethrower cone draw.
 cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2, enemies: []Enemy) {
 	cone := Melee_Weapon{range = magic.range, arc_degrees = magic.arc_degrees}
 
@@ -578,6 +636,8 @@ cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2,
 		if !enemy_in_melee_arc(cone, origin, aim_dir, enemy) do continue
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
+
+	spawn_flame_tick_burst(origin + aim_dir * MAGIC_MUZZLE_OFFSET)
 }
 
 // clamps `target` to at most `max_range` from `origin`, preserving direction -
