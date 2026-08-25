@@ -6,6 +6,7 @@ import "core:encoding/json"
 import "core:math"
 import "core:math/linalg"
 import "core:os"
+import "core:reflect"
 import rl "vendor:raylib"
 
 Vec2 :: rl.Vector2
@@ -16,13 +17,19 @@ PIXEL_WINDOW_HEIGHT :: 180
 GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
+// Selecting is first (the zero value) so every launch starts there
+// regardless of what program_mode a stale save file might otherwise imply -
+// see the json:"-" tag below, which already prevents that on its own.
 ProgramMode :: enum {
+	Selecting,
 	Playing,
 	Editing,
 }
 
 game: struct {
-	program_mode:  ProgramMode,
+	// never persisted: every launch starts at .Selecting regardless of
+	// whatever mode was active when the game was last saved
+	program_mode: ProgramMode `json:"-"`,
 	mouse:         MouseState,
 	window_width:  f32,
 	window_height: f32,
@@ -30,12 +37,25 @@ game: struct {
 	camera:        Camera,
 	ui_camera:     Camera,
 	player:        Player,
-	tilemap:       Tilemap,
 
-	// spawners are level data and persist; enemies/bullets/xp_orbs are
-	// transient runtime state spawned/created during play, so they're
-	// never saved
-	spawners:            [dynamic]Spawner,
+	// Playing mode's live map state, instantiated (via clone_map) from the
+	// baked `maps` table once a map is chosen on the Selecting screen. Never
+	// persisted: game_save.json stores only active_map_pointer below, and
+	// every launch re-derives current_map fresh from the baked table -
+	// writing the full tilemap/spawners out here would just bloat the save
+	// file with data that's never read back on load.
+	current_map:        Map `json:"-"`,
+	// game_save.json's pointer to the active map's identity (a Map_Name's
+	// enum-case name - see map_identity_string), read by apply_chosen_map to
+	// decide resume-vs-reset player positioning on the next map choice
+	active_map_pointer: string,
+
+	// Editing mode's own map, isolated from current_map - see editor.odin's
+	// map switcher. Never persisted: edits are silently discarded on
+	// leaving Editing, so there's nothing worth saving between sessions.
+	editing_map:      Map `json:"-"`,
+	editing_map_path: string `json:"-"`,
+
 	enemies:             [dynamic]Enemy `json:"-"`,
 	bullets:             [dynamic]Bullet `json:"-"`,
 	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
@@ -101,16 +121,15 @@ load_game :: proc() {
 
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
 
-	for &spawner in game.spawners {
-		spawner.movement_template = movement_style_from_save(spawner.movement_template_save)
-		spawner.attack_template = attack_style_from_save(spawner.attack_template_save)
-	}
+	// never trust a stale persisted value even though program_mode's
+	// json:"-" tag already prevents it from round-tripping
+	game.program_mode = .Selecting
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
 		game = {
-			program_mode = .Playing,
+			program_mode = .Selecting,
 			window_width = 1920 / 2,
 			window_height = 1080 / 2,
 			window_title = "Game",
@@ -125,7 +144,6 @@ load_game :: proc() {
 				offset = Vec2{1920 / 4, 1080 / 4},
 				zoom = 1.0,
 			},
-			tilemap = {tile_size = Vec2{16, 16}},
 		}
 	}
 }
@@ -134,11 +152,6 @@ save_game :: proc() {
 	log_info("Saving game to save file `{}`", SAVE_GAME_PATH)
 
 	game.player.weapon_variant_save = weapon_variant_to_save(game.player.weapon.variant)
-
-	for &spawner in game.spawners {
-		spawner.movement_template_save = movement_style_to_save(spawner.movement_template)
-		spawner.attack_template_save = attack_style_to_save(spawner.attack_template)
-	}
 
 	json_data, json_error := json.marshal(game, allocator = context.temp_allocator)
 	if json_error != nil {
@@ -197,9 +210,23 @@ update_game :: proc() {
 	}
 
 	if is_key_pressed(.F1) {
-		if game.program_mode == .Playing {
+		switch game.program_mode {
+		case .Selecting:
+		// no-op: F1 does nothing before a map has been chosen
+		case .Playing:
+			// entering Editing always starts from a clone of the map
+			// currently being played (never a plain value copy - see
+			// clone_map's aliasing note), so by default you're editing the
+			// map you're currently playing unless you explicitly switch.
+			// free the previous editing_map's backing arrays first, or
+			// repeated F1 toggles leak one copy of the old map each time.
+			delete_map(game.editing_map)
+			game.editing_map = clone_map(game.current_map)
+			if name, ok := reflect.enum_from_name(Map_Name, game.active_map_pointer); ok {
+				game.editing_map_path = map_path_for_name(name)
+			}
 			game.program_mode = .Editing
-		} else {
+		case .Editing:
 			game.program_mode = .Playing
 		}
 	}
@@ -209,6 +236,8 @@ update_game :: proc() {
 	}
 
 	switch game.program_mode {
+	case .Selecting:
+	// no-op: draw_map_selection_ui's buttons handle their own clicks
 	case .Playing:
 		update_game_state()
 	case .Editing:
@@ -242,7 +271,7 @@ update_game :: proc() {
 		}
 
 		input = linalg.normalize0(input)
-		move_actor(&game.player.rect, game.player.animation, &game.tilemap, input * rl.GetFrameTime() * 100)
+		move_actor(&game.player.rect, game.player.animation, &game.current_map.tilemap, input * rl.GetFrameTime() * 100)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
 		// silently fail the pending Resolve (gun_can_fire would see
@@ -324,7 +353,7 @@ move_actor :: proc(rect: ^Rect, animation: Animation, tilemap: ^Tilemap, delta: 
 			continue
 		}
 
-		tile_rect := tile_world_rect(tile.world_coords)
+		tile_rect := tile_world_rect(tile.world_coords, tilemap.tile_size)
 		if !rl.CheckCollisionRecs(box, tile_rect) {
 			continue
 		}
@@ -343,7 +372,7 @@ move_actor :: proc(rect: ^Rect, animation: Animation, tilemap: ^Tilemap, delta: 
 			continue
 		}
 
-		tile_rect := tile_world_rect(tile.world_coords)
+		tile_rect := tile_world_rect(tile.world_coords, tilemap.tile_size)
 		if !rl.CheckCollisionRecs(box, tile_rect) {
 			continue
 		}
@@ -451,7 +480,7 @@ draw_game :: proc() {
 
 	begin_using_camera(game.camera)
 	{
-		draw_tilemap(&game.tilemap)
+		draw_tilemap(&game.current_map.tilemap)
 		for enemy in game.enemies {
 			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
 			if game.debug_overlay {
@@ -470,7 +499,7 @@ draw_game :: proc() {
 			draw_debug_attack_ranges()
 			draw_debug_movement_styles()
 		}
-		draw_spawners(game.spawners[:])
+		draw_spawners(game.current_map.spawners[:])
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_poison_clouds(game.poison_clouds[:])
@@ -491,6 +520,9 @@ draw_game :: proc() {
 	begin_using_camera(game.ui_camera)
 	{
 		switch game.program_mode {
+		case .Selecting:
+		// no-op: draw_map_selection_ui (below, alongside the other modals)
+		// draws its own full-screen content
 		case .Playing:
 			draw_hud(game.player)
 		case .Editing:
@@ -501,6 +533,10 @@ draw_game :: proc() {
 
 	if game.program_mode == .Editing {
 		draw_editor()
+	}
+
+	if game.program_mode == .Selecting {
+		draw_map_selection_ui()
 	}
 
 	if game.leveling_up {
@@ -551,7 +587,7 @@ draw_game :: proc() {
 	draw_path :: proc(from: Vec2, path: [dynamic]Vec2i) {
 		point := from
 		for cell in path {
-			next := cell_center_to_world(cell)
+			next := cell_center_to_world(cell, game.current_map.tilemap.tile_size)
 			rl.DrawLineV(point, next, rl.YELLOW)
 			point = next
 		}

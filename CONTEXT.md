@@ -70,3 +70,7 @@ _Avoid_: Store, market
 **Weapon tier ladder**:
 The fixed, sequential order of `Weapon_Kind`s a Class progresses through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back.
 _Avoid_: Rank (Level already names the separate XP-progression concept)
+
+**Map**:
+A named, reusable level definition: tile layout, spawner definitions, and a player start position. Stored as its own file under `data/maps/`, and loaded into the game's runtime state at session start. The same struct shape serves both roles — the on-disk file and the live, mutable copy a session plays on — so no separate blueprint/runtime type exists; loading a map copies its data fresh into runtime state, which means in-session mutation (destructible tiles, ticking spawner timers) never touches the file, and reloading the file always resets it.
+_Avoid_: Level (already names the player's XP-progression level, see **Weapon tier ladder**), Blueprint, Room (informal — a map may contain multiple rooms, not itself a modeled concept)

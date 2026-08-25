@@ -398,7 +398,7 @@ reset_enemies :: proc() {
 }
 
 update_spawners :: proc(dt: f32) {
-	for &spawner in game.spawners {
+	for &spawner in game.current_map.spawners {
 		spawner.timer -= dt
 		if spawner.timer > 0 || len(game.enemies) >= MAX_ENEMIES {
 			continue
@@ -429,7 +429,7 @@ spawn_enemy :: proc(spawner: Spawner) {
 }
 
 update_enemies :: proc(dt: f32) {
-	inflated_collision_map := build_inflated_collision_map(&game.tilemap, 1)
+	inflated_collision_map := build_inflated_collision_map(&game.current_map.tilemap, 1)
 	player_pos := Vec2{game.player.x, game.player.y}
 	t := f32(rl.GetTime())
 
@@ -507,7 +507,7 @@ update_enemies :: proc(dt: f32) {
 			enemy.x += delta.x
 			enemy.y += delta.y
 		} else {
-			move_actor(&enemy.rect, enemy.animation, &game.tilemap, delta)
+			move_actor(&enemy.rect, enemy.animation, &game.current_map.tilemap, delta)
 		}
 	}
 }
@@ -551,9 +551,10 @@ chase_to :: proc(
 	separation_strength: f32,
 	dt: f32,
 ) -> Vec2 {
-	enemy_cell := world_to_cell_coord(Vec2{enemy.x, enemy.y})
+	tile_size := game.current_map.tilemap.tile_size
+	enemy_cell := world_to_cell_coord(Vec2{enemy.x, enemy.y}, tile_size)
 
-	enemy_path, ok := find_path(collision_map, enemy_cell, world_to_cell_coord(goal_world))
+	enemy_path, ok := find_path(collision_map, enemy_cell, world_to_cell_coord(goal_world, tile_size))
 	if ok {
 		delete(enemy.path)
 		enemy.path = enemy_path
@@ -564,14 +565,14 @@ chase_to :: proc(
 	path_index := 0
 	ARRIVE_RADIUS: f32 = 4.0
 	for path_index < len(enemy.path) &&
-	    linalg.distance(cell_center_to_world(enemy.path[path_index]), Vec2{enemy.x, enemy.y}) <
+	    linalg.distance(cell_center_to_world(enemy.path[path_index], tile_size), Vec2{enemy.x, enemy.y}) <
 		    ARRIVE_RADIUS {
 		path_index += 1
 	}
 
 	target: Vec2
 	if path_index < len(enemy.path) {
-		target = cell_center_to_world(enemy.path[path_index])
+		target = cell_center_to_world(enemy.path[path_index], tile_size)
 	} else {
 		target = goal_world
 	}
@@ -581,17 +582,21 @@ chase_to :: proc(
 	return blended * speed * dt
 }
 
-world_to_cell_coord :: proc(world_pos: Vec2) -> Vec2i {
+// takes tile_size explicitly rather than always reading game.current_map -
+// shared by Playing's own pathfinding/collision code (current_map) and
+// editor.odin's world-cursor math (editing_map), which can be a different
+// map with the switcher (see the map-baking ticket's isolation invariant)
+world_to_cell_coord :: proc(world_pos: Vec2, tile_size: Vec2) -> Vec2i {
 	return {
-		i32(math.floor(world_pos.x / game.tilemap.tile_size.x)),
-		i32(math.floor(world_pos.y / game.tilemap.tile_size.y)),
+		i32(math.floor(world_pos.x / tile_size.x)),
+		i32(math.floor(world_pos.y / tile_size.y)),
 	}
 }
 
-cell_center_to_world :: proc(cell: Vec2i) -> Vec2 {
+cell_center_to_world :: proc(cell: Vec2i, tile_size: Vec2) -> Vec2 {
 	return {
-		(f32(cell.x) + 0.5) * game.tilemap.tile_size.x,
-		(f32(cell.y) + 0.5) * game.tilemap.tile_size.y,
+		(f32(cell.x) + 0.5) * tile_size.x,
+		(f32(cell.y) + 0.5) * tile_size.y,
 	}
 }
 

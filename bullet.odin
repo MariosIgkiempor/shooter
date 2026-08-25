@@ -73,12 +73,12 @@ cast_fireball :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
 // shared by player and enemy bullets to stop them at walls the same way
 // move_actor stops the player/enemies
 bullet_hits_wall :: proc(position: Vec2) -> bool {
-	for tile in game.tilemap.tiles {
+	for tile in game.current_map.tilemap.tiles {
 		if !tile.collides {
 			continue
 		}
 
-		if rl.CheckCollisionCircleRec(position, BULLET_RADIUS, tile_world_rect(tile.world_coords)) {
+		if rl.CheckCollisionCircleRec(position, BULLET_RADIUS, tile_world_rect(tile.world_coords, game.current_map.tilemap.tile_size)) {
 			return true
 		}
 	}

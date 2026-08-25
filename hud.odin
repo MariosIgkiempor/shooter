@@ -249,6 +249,38 @@ draw_level_up_ui :: proc() {
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
 }
 
+// shown at every launch (ProgramMode.Selecting, the zero value) before
+// Playing/Editing become reachable - one button per Map_Name, labeled by
+// that case's baked display name. Map choice is one-shot per launch: once
+// game.program_mode leaves .Selecting here, there's no in-game way back.
+draw_map_selection_ui :: proc() {
+	previous_theme := ui.theme
+	ui.theme = HUD_THEME
+	defer ui.theme = previous_theme
+
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.begin_frame(game.window_width, game.window_height)
+
+	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+		if ui.begin("Select a Map", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			for name in Map_Name {
+				chosen := maps[name]
+
+				if ui.button(chosen.name, {panel = true}) {
+					// clone_map, never a plain value copy - game.current_map
+					// would otherwise alias the shared baked table's backing
+					// tile/spawner memory (see clone_map's doc comment)
+					game.current_map = clone_map(chosen)
+					apply_chosen_map(chosen, map_identity_string(name))
+					game.program_mode = .Playing
+				}
+			}
+		}
+	}
+
+	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+}
+
 draw_game_over_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME

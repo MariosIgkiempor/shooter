@@ -40,7 +40,7 @@ editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
 	selected_tile: Vec2i,
-	// index into game.spawners; -1 = none selected
+	// index into game.editing_map.spawners; -1 = none selected
 	selected_spawner: int,
 	// whether the pointer was over an editor window last frame; world
 	// painting is suppressed while true
@@ -56,6 +56,9 @@ editor: struct {
 	// editing, so switching back to the editor animates. zoom == 0 means
 	// "not yet initialized, adopt the gameplay view on first entry"
 	camera:        Camera,
+	// whether the map-switcher's list-and-pick panel is open; purely a UI
+	// toggle, unrelated to game.editing_map itself
+	picking_map:   bool,
 }
 
 initialize_editor :: proc() {
@@ -179,14 +182,14 @@ update_editor :: proc() {
 	if is_mouse_button_down(.LEFT) {
 		switch editor.tool {
 		case .Pencil:
-			tilemap_place_tile(&game.tilemap, hovered_coord, editor.selected_tile)
+			tilemap_place_tile(&game.editing_map.tilemap, hovered_coord, editor.selected_tile)
 		case .Erase:
-			tilemap_remove_tile(&game.tilemap, hovered_coord)
+			tilemap_remove_tile(&game.editing_map.tilemap, hovered_coord)
 		case .Rectangle:
 		// handled above
 		}
 	} else if is_mouse_button_down(.RIGHT) {
-		tilemap_remove_tile(&game.tilemap, hovered_coord)
+		tilemap_remove_tile(&game.editing_map.tilemap, hovered_coord)
 	}
 }
 
@@ -204,7 +207,7 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 		return
 	}
 
-	for &tile in game.tilemap.tiles {
+	for &tile in game.editing_map.tilemap.tiles {
 		if tile.world_coords == hovered_coord {
 			tile.collides = collides
 			return
@@ -227,17 +230,17 @@ update_spawners_mode :: proc(hovered_coord: Vec2i) {
 }
 
 spawner_place :: proc(cell: Vec2i) {
-	for spawner, i in game.spawners {
-		if world_to_cell_coord(spawner.position) == cell {
+	for spawner, i in game.editing_map.spawners {
+		if world_to_cell_coord(spawner.position, game.editing_map.tilemap.tile_size) == cell {
 			editor.selected_spawner = i
 			return
 		}
 	}
 
 	append(
-		&game.spawners,
+		&game.editing_map.spawners,
 		Spawner {
-			position = cell_center_to_world(cell),
+			position = cell_center_to_world(cell, game.editing_map.tilemap.tile_size),
 			interval = DEFAULT_SPAWNER_INTERVAL,
 			animation = .Player_Walk,
 			movement_template = Grounded{speed = 40},
@@ -245,14 +248,14 @@ spawner_place :: proc(cell: Vec2i) {
 		},
 	)
 
-	editor.selected_spawner = len(game.spawners) - 1
+	editor.selected_spawner = len(game.editing_map.spawners) - 1
 }
 
 spawner_remove :: proc(cell: Vec2i) {
-	for spawner, i in game.spawners {
-		if world_to_cell_coord(spawner.position) == cell {
-			last := len(game.spawners) - 1
-			unordered_remove(&game.spawners, i)
+	for spawner, i in game.editing_map.spawners {
+		if world_to_cell_coord(spawner.position, game.editing_map.tilemap.tile_size) == cell {
+			last := len(game.editing_map.spawners) - 1
+			unordered_remove(&game.editing_map.spawners, i)
 
 			if editor.selected_spawner == i {
 				editor.selected_spawner = -1
@@ -295,9 +298,9 @@ update_rectangle_tool :: proc(hovered_coord: Vec2i) {
 	for y in min_coord.y ..= max_coord.y {
 		for x in min_coord.x ..= max_coord.x {
 			if editor.drag_erasing {
-				tilemap_remove_tile(&game.tilemap, {x, y})
+				tilemap_remove_tile(&game.editing_map.tilemap, {x, y})
 			} else {
-				tilemap_place_tile(&game.tilemap, {x, y}, editor.selected_tile)
+				tilemap_place_tile(&game.editing_map.tilemap, {x, y}, editor.selected_tile)
 			}
 		}
 	}
@@ -314,7 +317,7 @@ coord_rect :: proc(a, b: Vec2i) -> (min_coord, max_coord: Vec2i) {
 hovered_tile_coords :: proc() -> Vec2i {
 	world := rl.GetScreenToWorld2D(game.mouse, game.camera)
 
-	cel := world_to_cell_coord(world)
+	cel := world_to_cell_coord(world, game.editing_map.tilemap.tile_size)
 	return {i32(cel.x), i32(cel.y)}
 }
 
@@ -340,9 +343,11 @@ tilemap_remove_tile :: proc(tilemap: ^Tilemap, world_coords: Vec2i) {
 
 COLLIDER_SHADE_COLOR :: Color{230, 41, 55, 110}
 
-tile_world_rect :: proc(coords: Vec2i) -> Rect {
-	tile_size := game.tilemap.tile_size
-
+// tile_size is passed explicitly (rather than always reading a global)
+// since callers span both Playing (game.current_map) and Editing
+// (game.editing_map), which can be different maps once the map switcher is
+// in play - see world_to_cell_coord/cell_center_to_world's doc comment
+tile_world_rect :: proc(coords: Vec2i, tile_size: Vec2) -> Rect {
 	return {
 		f32(coords.x) * tile_size.x,
 		f32(coords.y) * tile_size.y,
@@ -354,20 +359,20 @@ tile_world_rect :: proc(coords: Vec2i) -> Rect {
 // collider shading, plus the outline of the tile under the cursor or of the
 // in-flight rectangle drag; call inside the world camera
 draw_editor_world_overlay :: proc() {
-	tile_size := game.tilemap.tile_size
+	tile_size := game.editing_map.tilemap.tile_size
 
 	// the player's collision box, so collider alignment can be eyeballed
 	draw_rectangle_lines(actor_collision_rect(game.player.rect, game.player.animation), rl.SKYBLUE, 1)
 
 	if editor.mode == .Collisions {
-		for tile in game.tilemap.tiles {
+		for tile in game.editing_map.tilemap.tiles {
 			if tile.collides {
-				draw_rectangle(tile_world_rect(tile.world_coords), COLLIDER_SHADE_COLOR)
+				draw_rectangle(tile_world_rect(tile.world_coords, tile_size), COLLIDER_SHADE_COLOR)
 			}
 		}
 
 		if !editor.ui_hovered {
-			draw_rectangle_lines(tile_world_rect(hovered_tile_coords()), rl.ORANGE, 1)
+			draw_rectangle_lines(tile_world_rect(hovered_tile_coords(), tile_size), rl.ORANGE, 1)
 		}
 
 		return
@@ -375,11 +380,11 @@ draw_editor_world_overlay :: proc() {
 
 	if editor.mode == .Spawners {
 		if !editor.ui_hovered {
-			rl.DrawCircleLinesV(cell_center_to_world(hovered_tile_coords()), 8, rl.ORANGE)
+			rl.DrawCircleLinesV(cell_center_to_world(hovered_tile_coords(), tile_size), 8, rl.ORANGE)
 		}
 
-		if editor.selected_spawner >= 0 && editor.selected_spawner < len(game.spawners) {
-			rl.DrawCircleLinesV(game.spawners[editor.selected_spawner].position, 10, rl.YELLOW)
+		if editor.selected_spawner >= 0 && editor.selected_spawner < len(game.editing_map.spawners) {
+			rl.DrawCircleLinesV(game.editing_map.spawners[editor.selected_spawner].position, 10, rl.YELLOW)
 		}
 
 		return
@@ -402,7 +407,7 @@ draw_editor_world_overlay :: proc() {
 		return
 	}
 
-	rect := tile_world_rect(hovered_tile_coords())
+	rect := tile_world_rect(hovered_tile_coords(), tile_size)
 	draw_rectangle_lines(rect, editor.tool == .Erase ? rl.RED : rl.YELLOW, 1)
 }
 
@@ -457,6 +462,26 @@ editor_window :: proc() {
 	if ui.begin("Tilemap Editor") {
 		record_ui_hover()
 
+		// always-visible, independent of which tool mode is active - which
+		// map is open in the editor is orthogonal to which tool edits it
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Map: {}", game.editing_map.name)
+			if ui.button("Switch") {
+				editor.picking_map = !editor.picking_map
+			}
+		}
+
+		if editor.picking_map {
+			if ui.row({gap = ui.theme.gap}) {
+				for name in Map_Name {
+					if ui.button(maps[name].name) {
+						switch_editing_map(name)
+						editor.picking_map = false
+					}
+				}
+			}
+		}
+
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
@@ -474,17 +499,36 @@ editor_window :: proc() {
 
 		if ui.row({gap = ui.theme.gap}) {
 			if ui.button("Save") {
-				save_game()
+				save_map(game.editing_map_path, game.editing_map)
 			}
 
 			if ui.button("Clear") {
-				clear(&game.tilemap.tiles)
+				clear(&game.editing_map.tilemap.tiles)
 			}
 
 			ui.spacer()
-			ui.text("Tiles: {}", len(game.tilemap.tiles))
+			ui.text("Tiles: {}", len(game.editing_map.tilemap.tiles))
 		}
 	}
+}
+
+// loads a different map into the editor from its live file - never touches
+// the baked `maps` table (Editing stays file-based, see the map-baking
+// ticket), so this always reflects whatever was last saved to disk, not
+// necessarily what Playing currently has compiled in
+switch_editing_map :: proc(name: Map_Name) {
+	path := map_path_for_name(name)
+
+	loaded, ok := load_map(path)
+	if !ok {
+		return
+	}
+
+	// free the map being switched away from, or repeated Switch clicks leak
+	// one copy of each previously-open map
+	delete_map(game.editing_map)
+	game.editing_map = loaded
+	game.editing_map_path = path
 }
 
 tiles_mode_ui :: proc() {
@@ -509,7 +553,7 @@ tiles_mode_ui :: proc() {
 
 collisions_mode_ui :: proc() {
 	collider_count := 0
-	for tile in game.tilemap.tiles {
+	for tile in game.editing_map.tilemap.tiles {
 		if tile.collides {
 			collider_count += 1
 		}
@@ -522,13 +566,13 @@ collisions_mode_ui :: proc() {
 
 spawners_mode_ui :: proc() {
 	ui.text("Click to place a spawner, right-click to remove.")
-	ui.text("Spawners: {}", len(game.spawners))
+	ui.text("Spawners: {}", len(game.editing_map.spawners))
 
-	if editor.selected_spawner < 0 || editor.selected_spawner >= len(game.spawners) {
+	if editor.selected_spawner < 0 || editor.selected_spawner >= len(game.editing_map.spawners) {
 		return
 	}
 
-	spawner := &game.spawners[editor.selected_spawner]
+	spawner := &game.editing_map.spawners[editor.selected_spawner]
 
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Interval")
