@@ -151,11 +151,13 @@ explode_bullet :: proc(bullet: Bullet) {
 // spark and, on death, an xp orb + pickup drop + removal - shared by bullet
 // collision above and melee's arc/cone hit-check (weapon.odin's
 // try_swing_melee), so death handling is never duplicated between weapon
-// types
+// types. God Mode (debug.odin) 1-shot kills: the applied damage is bumped up
+// to exactly the enemy's remaining health, regardless of the weapon's actual
+// damage, so even a single Flamethrower tick or Pistol shot kills outright.
 apply_hit_to_enemy :: proc(index: int, damage: f32, hit_position: Vec2) {
 	enemy := &game.enemies[index]
 
-	enemy.health -= damage
+	enemy.health -= game.debug.god_mode ? enemy.health : damage
 	spawn_hit_spark(hit_position)
 
 	if enemy.health <= 0 {

@@ -87,11 +87,12 @@ game: struct {
 	// same rationale as leveling_up.
 	shopping:      bool `json:"-"`,
 
-	// F8-toggled dev view: gates enemy pathfinding-debug lines (previously
-	// always drawn), and additionally shows actor colliders and the
-	// currently-equipped weapon's hit area. Never saved, same rationale as
-	// leveling_up/game_over.
-	debug_overlay: bool `json:"-"`,
+	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
+	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
+	// toggles independently instead of the old single debug_overlay bool
+	// that gated all of them together, plus a Gold grant and God Mode. Never
+	// saved, same rationale as leveling_up/game_over/shopping.
+	debug: Debug_State `json:"-"`,
 }
 
 MouseState :: struct {
@@ -281,8 +282,21 @@ update_game :: proc() {
 		}
 	}
 
-	if is_key_pressed(.F8) {
-		game.debug_overlay = !game.debug_overlay
+	// Only reachable from Playing, and mutually exclusive with Shop: both
+	// panels drive the same vendor/ui library, which tracks click state in
+	// package-level globals via a single ui.set_pointer_state call per frame
+	// - draw_game would otherwise call it twice in one frame (once for each
+	// open panel), and the second call always sees its own just-written
+	// mouse-down state as "already down", so pointer_released (what a click
+	// requires) can never fire for whichever panel draws second. Requiring
+	// .Playing also keeps it from ever coexisting with the always-drawn
+	// Editing-mode editor, which hits the same collision.
+	if is_key_pressed(.F8) &&
+	   game.program_mode == .Playing &&
+	   !game.leveling_up &&
+	   !game.game_over &&
+	   !game.shopping {
+		game.debug.panel_open = !game.debug.panel_open
 	}
 
 	// Shop open/close: a dedicated key (TAB - unused elsewhere), mirroring F1
@@ -290,8 +304,14 @@ update_game :: proc() {
 	// level-up/game-over modals already have their own pause up - those can
 	// never become true while shopping anyway, since game.shopping already
 	// pauses update_game_state below, but this keeps the open trigger itself
-	// just as guarded as F1 is against Choosing_Class/Selecting.
-	if is_key_pressed(.TAB) && game.program_mode == .Playing && !game.leveling_up && !game.game_over {
+	// just as guarded as F1 is against Choosing_Class/Selecting. Also
+	// mutually exclusive with the debug panel - see its own guard above for
+	// why two open panels in one frame is unsafe.
+	if is_key_pressed(.TAB) &&
+	   game.program_mode == .Playing &&
+	   !game.leveling_up &&
+	   !game.game_over &&
+	   !game.debug.panel_open {
 		game.shopping = !game.shopping
 	}
 
@@ -307,7 +327,7 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.leveling_up || game.game_over || game.shopping {
+		if game.leveling_up || game.game_over || game.shopping || game.debug.panel_open {
 			return
 		}
 
@@ -501,8 +521,15 @@ Player :: struct {
 PLAYER_BASE_MOVE_SPEED :: 100
 PLAYER_BASE_MAX_HEALTH :: 100
 
-// applies enemy damage to the player, opening the game-over modal at 0 hp
+// applies enemy damage to the player, opening the game-over modal at 0 hp.
+// God Mode (debug.odin) makes the player fully invulnerable - skipped before
+// any damage-taken effects (burst/shake) fire, so a god-mode hit reads as a
+// clean whiff rather than a damage flash with no health lost.
 damage_player :: proc(amount: f32) {
+	if game.debug.god_mode {
+		return
+	}
+
 	spawn_damage_burst(Vec2{game.player.x, game.player.y})
 	trigger_screen_shake(amount / game.player.max_health)
 
@@ -599,17 +626,23 @@ draw_game :: proc() {
 		draw_tilemap(&game.current_map.tilemap)
 		for enemy in game.enemies {
 			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
-			if game.debug_overlay {
+			if game.debug.visualizers[.Pathfinding] {
 				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
 			}
 			draw_health_bar(enemy)
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
-		if game.debug_overlay {
+		if game.debug.visualizers[.Colliders] {
 			draw_debug_colliders()
+		}
+		if game.debug.visualizers[.Weapon_Area] {
 			draw_debug_weapon_area(game.player)
+		}
+		if game.debug.visualizers[.Attack_Ranges] {
 			draw_debug_attack_ranges()
+		}
+		if game.debug.visualizers[.Movement_Styles] {
 			draw_debug_movement_styles()
 		}
 		draw_spawners(game.current_map.spawners[:])
@@ -669,6 +702,15 @@ draw_game :: proc() {
 
 	if game.shopping {
 		draw_shop_ui()
+	}
+
+	// re-checks .Playing (not just the panel_open flag the guard above
+	// already restricts to Playing) since F1 can switch into Editing while
+	// the panel is still open, and draw_editor also drives the same ui
+	// library - see the F8 guard's comment on why two openers in one frame
+	// is unsafe
+	if game.debug.panel_open && game.program_mode == .Playing {
+		draw_debug_panel_ui()
 	}
 
 	end_drawing()
@@ -878,7 +920,7 @@ draw_game :: proc() {
 		draw_atlas_tile(atlas_rect, dest, origin, angle)
 	}
 
-	// F8 dev view: outlines the player's and every enemy's actual collision
+	// F8 debug panel visualizer: outlines the player's and every enemy's actual collision
 	// rect (actor_collision_rect - the same box move_actor/melee/bullets hit
 	// test against), not just their sprite bounds
 	draw_debug_colliders :: proc() {
@@ -888,7 +930,7 @@ draw_game :: proc() {
 		}
 	}
 
-	// F8 dev view: each enemy's attack-trigger radius - a single circle at
+	// F8 debug panel visualizer: each enemy's attack-trigger radius - a single circle at
 	// attack_range for Melee (contact distance to land a hit), or two
 	// circles (min_range/max_range) for Ranged marking the band it holds
 	// inside to fire rather than chase or retreat. Enemies with no Attack
@@ -907,7 +949,7 @@ draw_game :: proc() {
 		}
 	}
 
-	// F8 dev view: each enemy's Separation neighbour radius (how close
+	// F8 debug panel visualizer: each enemy's Separation neighbour radius (how close
 	// same-Movement-Style enemies must be before they push apart), plus a
 	// dedicated ring for Swarmer's surround distance - the band around the
 	// player it seeks to orbit, read from its own Attack Style's engagement
@@ -930,7 +972,7 @@ draw_game :: proc() {
 		}
 	}
 
-	// F8 dev view: the equipped weapon's hit area, shown continuously
+	// F8 debug panel visualizer: the equipped weapon's hit area, shown continuously
 	// (unlike Flamethrower's held-only cone particles) so range/arc tuning
 	// doesn't require attacking to see it. Gun has no player-relative area to
 	// show; fireball's AoE lands wherever it hits, not around the player, so
