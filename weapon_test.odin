@@ -149,23 +149,24 @@ test_empty_clip_never_starts_windup_or_cooldown :: proc(t: ^testing.T) {
 
 @(test)
 test_stacked_upgrades_never_let_windup_exceed_cooldown_window :: proc(t: ^testing.T) {
+	previous_stacks := game.player.upgrade_stacks
+	defer game.player.upgrade_stacks = previous_stacks
+
 	for kind in Weapon_Kind {
 		preset := weapon_presets[kind]
 		if preset.fire_mode != .Semi_Automatic {
 			continue
 		}
 
+		game.player.upgrade_stacks[.Action_Rate] = upgrade_presets[.Action_Rate].max_stack
 		weapon := weapon_create(kind)
-		for _ in 0 ..< 50 {
-			upgrade_weapon(&weapon)
-		}
 
 		windup_duration := weapon.windup_fraction / weapon.action_rate
 		cycle := 1.0 / weapon.action_rate
 		testing.expectf(
 			t,
 			windup_duration <= cycle,
-			"%v's derived Windup duration (%v) must never exceed its cooldown window (%v), even after 50 action_rate upgrades",
+			"%v's derived Windup duration (%v) must never exceed its cooldown window (%v), even at max Action_Rate stacks",
 			kind,
 			windup_duration,
 			cycle,

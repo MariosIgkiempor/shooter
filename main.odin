@@ -81,6 +81,12 @@ game: struct {
 	// saved, same rationale as leveling_up.
 	game_over:     bool `json:"-"`,
 
+	// true while the Shop panel is open; simulation is paused the same way
+	// leveling_up/game_over already gate update_game_state (see CONTEXT.md's
+	// Shop entry). Never saved - a save taken mid-Shop simply reopens closed,
+	// same rationale as leveling_up.
+	shopping:      bool `json:"-"`,
+
 	// F8-toggled dev view: gates enemy pathfinding-debug lines (previously
 	// always drawn), and additionally shows actor colliders and the
 	// currently-equipped weapon's hit area. Never saved, same rationale as
@@ -125,7 +131,28 @@ load_game :: proc() {
 		return
 	}
 
+	// a save file predating move_speed/max_health (this feature's addition)
+	// unmarshals them as Odin's zero value, not their real defaults - left
+	// unguarded, a 0 max_health freezes movement (move_actor scales by
+	// move_speed) and divides-by-zero in damage_player/the HUD health bar.
+	// Neither field can legitimately be <= 0 in a valid Run (Upgrades only
+	// ever raise them above their base constants), so this is a safe
+	// missing-field signal, not a false positive on real data.
+	if game.player.move_speed <= 0 {
+		game.player.move_speed = PLAYER_BASE_MOVE_SPEED
+	}
+	if game.player.max_health <= 0 {
+		game.player.max_health = PLAYER_BASE_MAX_HEALTH
+	}
+
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
+
+	// re-derive the loaded Weapon's stats from its preset baseline plus the
+	// just-loaded upgrade_stacks (ADR-0007) - idempotent and a no-op if the
+	// save already reflects them correctly, but keeps a hand-edited or
+	// future-migrated save file self-healing instead of trusting its
+	// damage/action_rate/etc fields to already be consistent with its stacks
+	apply_upgrades(&game.player.weapon, game.player.upgrade_stacks)
 
 	// never trust a stale persisted value even though program_mode's
 	// json:"-" tag already prevents it from round-tripping. Skip straight
@@ -139,6 +166,13 @@ load_game :: proc() {
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
+		// zeroed explicitly, ahead of the literal below: weapon_create(.Sword)
+		// in that literal reads the global game.player.upgrade_stacks before
+		// the `game = {...}` assignment takes effect, so a prior (possibly
+		// partially-unmarshaled, then discarded) game.player.upgrade_stacks
+		// would otherwise leak into this supposedly-fresh starting weapon
+		game.player.upgrade_stacks = {}
+
 		game = {
 			program_mode = .Choosing_Class,
 			window_width = 1920 / 2,
@@ -150,6 +184,8 @@ load_game :: proc() {
 				class = .Melee,
 				weapon = weapon_create(.Sword),
 				level = 1,
+				move_speed = PLAYER_BASE_MOVE_SPEED,
+				max_health = PLAYER_BASE_MAX_HEALTH,
 			},
 			camera = Camera {
 				target = Vec2{1920 / 4, 1080 / 4},
@@ -196,7 +232,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_screen_shake()
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
-	game.player.health = PLAYER_MAX_HEALTH
+	game.player.health = game.player.max_health
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -249,6 +285,16 @@ update_game :: proc() {
 		game.debug_overlay = !game.debug_overlay
 	}
 
+	// Shop open/close: a dedicated key (TAB - unused elsewhere), mirroring F1
+	// for Editing (ticket 03). Only reachable from Playing, and not while the
+	// level-up/game-over modals already have their own pause up - those can
+	// never become true while shopping anyway, since game.shopping already
+	// pauses update_game_state below, but this keeps the open trigger itself
+	// just as guarded as F1 is against Choosing_Class/Selecting.
+	if is_key_pressed(.TAB) && game.program_mode == .Playing && !game.leveling_up && !game.game_over {
+		game.shopping = !game.shopping
+	}
+
 	switch game.program_mode {
 	case .Choosing_Class:
 	// no-op: draw_class_selection_ui's buttons handle their own clicks
@@ -261,7 +307,7 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.leveling_up || game.game_over {
+		if game.leveling_up || game.game_over || game.shopping {
 			return
 		}
 
@@ -287,7 +333,7 @@ update_game :: proc() {
 		}
 
 		input = linalg.normalize0(input)
-		move_actor(&game.player.rect, game.player.animation, &game.current_map.tilemap, input * rl.GetFrameTime() * 100)
+		move_actor(&game.player.rect, game.player.animation, &game.current_map.tilemap, input * rl.GetFrameTime() * game.player.move_speed)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
 		// silently fail the pending Resolve (gun_can_fire would see
@@ -429,18 +475,36 @@ Player :: struct {
 	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
 	xp:         int, // progress toward next level; persisted run progression
 	level:      int, // persisted run progression, starts at 1
+	// Run-scoped (ADR-0006): spent in the Shop, reset to 0 on Restart but
+	// otherwise persisted through save/quit like xp/level already are.
+	gold:       int,
+	// Run-scoped (ADR-0007): how many times each Upgrade_Kind has been
+	// bought this Run - the sole source of truth an equipped Weapon's live
+	// stats are recomputed from (see apply_upgrades), never mutated
+	// in-place. Zeroed on Restart.
+	upgrade_stacks: [Upgrade_Kind]int,
+	// Run-scoped (ADR-0007): replaces the old hardcoded `100` movement
+	// literal - the live, Move Speed-Upgrade-scaled value, reset to
+	// PLAYER_BASE_MOVE_SPEED on Restart.
+	move_speed: f32,
+	// Run-scoped (ADR-0007): replaces the old PLAYER_MAX_HEALTH constant -
+	// the live, Max Health-Upgrade-scaled cap, reset to
+	// PLAYER_BASE_MAX_HEALTH on Restart. A Max Health purchase heals current
+	// health by the same amount it raises this (see try_buy_upgrade).
+	max_health: f32,
 	// runtime combat state, not persisted (see initialize_program) - a saved
 	// game predating this field would otherwise unmarshal it as 0 and trigger
 	// an instant game-over on load
 	health:     f32 `json:"-"`,
 }
 
-PLAYER_MAX_HEALTH :: 100
+PLAYER_BASE_MOVE_SPEED :: 100
+PLAYER_BASE_MAX_HEALTH :: 100
 
 // applies enemy damage to the player, opening the game-over modal at 0 hp
 damage_player :: proc(amount: f32) {
 	spawn_damage_burst(Vec2{game.player.x, game.player.y})
-	trigger_screen_shake(amount / PLAYER_MAX_HEALTH)
+	trigger_screen_shake(amount / game.player.max_health)
 
 	game.player.health -= amount
 	if game.player.health <= 0 {
@@ -451,7 +515,32 @@ damage_player :: proc(amount: f32) {
 
 // restores player hp from a pickup, clamped so healing can't exceed max health
 heal_player :: proc(amount: f32) {
-	game.player.health = min(game.player.health + amount, PLAYER_MAX_HEALTH)
+	game.player.health = min(game.player.health + amount, game.player.max_health)
+}
+
+// resets Run-scoped state to a fresh Run's starting values (ADR-0006): Gold,
+// upgrade_stacks, move_speed, max_health, and the equipped weapon (back to
+// the Class's tier-1, with zeroed stacks reapplying as a no-op) all reset.
+// Class/class_chosen/xp/level are Account progression and stay untouched.
+// Extracted from draw_game_over_ui's Restart button, which is still its only
+// caller.
+restart_game :: proc() {
+	clear(&game.enemies)
+	clear(&game.bullets)
+	clear(&game.enemy_bullets)
+	clear(&game.xp_orbs)
+	clear(&game.pickups)
+	clear(&game.particles)
+	reset_screen_shake()
+
+	game.player.gold = 0
+	game.player.upgrade_stacks = {}
+	game.player.move_speed = PLAYER_BASE_MOVE_SPEED
+	game.player.max_health = PLAYER_BASE_MAX_HEALTH
+	game.player.weapon = weapon_create(class_weapon_kinds[game.player.class][0])
+	game.player.health = game.player.max_health
+
+	game.game_over = false
 }
 
 XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
@@ -576,6 +665,10 @@ draw_game :: proc() {
 
 	if game.game_over {
 		draw_game_over_ui()
+	}
+
+	if game.shopping {
+		draw_shop_ui()
 	}
 
 	end_drawing()

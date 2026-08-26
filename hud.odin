@@ -61,7 +61,7 @@ draw_hud :: proc(player: Player) {
 	draw_hud_label_row(center_x, y, fmt.tprintf("Lv{}", player.level), xp_frac, HUD_XP_COLOR)
 	y += HUD_ROW_HEIGHT + HUD_ROW_GAP
 
-	health_frac := clamp(player.health / PLAYER_MAX_HEALTH, 0, 1)
+	health_frac := clamp(player.health / player.max_health, 0, 1)
 	health_color := rl.ColorLerp(HUD_CRITICAL_COLOR, HUD_HEALTHY_COLOR, health_frac)
 	draw_hud_icon_row(center_x, y, .Pickup_Heart, health_frac, health_color, "")
 	y += HUD_ROW_HEIGHT + HUD_ROW_GAP
@@ -220,6 +220,11 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f3
 	}
 }
 
+// Continue-only (ADR-0006): XP level-ups no longer grant a free in-Run stat
+// upgrade - that's the Shop's job now - so this modal keeps Level/XP as
+// still-meaningful Account-progression context, reserved for a future
+// Account-progression payoff not yet designed (see CONTEXT.md's Account
+// progression entry), without anything to actually choose.
 draw_level_up_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -230,17 +235,12 @@ draw_level_up_ui :: proc() {
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
 		if ui.begin("Level Up!", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			ui.text("Level {} - choose an upgrade", game.player.level)
+			ui.text("Level {}", game.player.level)
+			// no slash in the HUD font's glyph set (atlas.odin's
+			// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
+			ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
 
-			if ui.button("Upgrade Weapon", {panel = true}) {
-				upgrade_weapon(&game.player.weapon)
-				game.leveling_up = false
-			}
-			if ui.button("Refill Ammo", {panel = true}) {
-				refill_weapon_reserve(&game.player.weapon)
-				game.leveling_up = false
-			}
-			if ui.button("Skip", {panel = true}) {
+			if ui.button("Continue", {panel = true}) {
 				game.leveling_up = false
 			}
 		}
@@ -326,18 +326,109 @@ draw_game_over_ui :: proc() {
 			ui.text("You died")
 
 			if ui.button("Restart", {panel = true}) {
-				clear(&game.enemies)
-				clear(&game.bullets)
-				clear(&game.enemy_bullets)
-				clear(&game.xp_orbs)
-				clear(&game.pickups)
-				clear(&game.particles)
-				reset_screen_shake()
-				game.player.health = PLAYER_MAX_HEALTH
-				game.game_over = false
+				restart_game()
 			}
 		}
 	}
 
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+}
+
+// on-demand panel (a dedicated TAB key - see main.odin's update_game),
+// pausing the game while open (game.shopping - see update_game_state).
+// Two-column layout validated via prototypes/03-shop-panel.html: the Weapon
+// tier ladder on the left, Upgrades (general above, the equipped Class's one
+// Class-specific slot below) on the right - both visible at once so a tier
+// purchase and an Upgrade purchase stay directly comparable without
+// tab-switching (issue 03-shop-ui-and-ux).
+draw_shop_ui :: proc() {
+	previous_theme := ui.theme
+	ui.theme = HUD_THEME
+	defer ui.theme = previous_theme
+
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.begin_frame(game.window_width, game.window_height)
+
+	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+		if ui.begin("Shop", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			ui.text("Gold: {}", game.player.gold)
+
+			if ui.row({gap = ui.theme.gap}) {
+				if ui.column({gap = ui.theme.gap}) {
+					draw_shop_weapon_ladder()
+				}
+				if ui.column({gap = ui.theme.gap}) {
+					draw_shop_upgrades()
+				}
+			}
+
+			if ui.button("Close", {panel = true}) {
+				game.shopping = false
+			}
+		}
+	}
+
+	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+}
+
+// current weapon plus either a "buy next tier" button or, at the ladder's
+// top, a disabled-in-spirit "Fully Upgraded" label (the ui library has no
+// disabled-button state, so a maxed tier renders as plain text with no
+// button at all rather than an unclickable one - see draw_shop_upgrade_row
+// for the same tradeoff on Upgrades)
+draw_shop_weapon_ladder :: proc() {
+	ui.text("Weapon Ladder")
+	ui.text("{}", weapon_display_name[game.player.weapon.kind])
+
+	if next, has_next := weapon_next_tier(game.player.weapon.kind).?; has_next {
+		price := weapon_tier_price(weapon_tier_index(next))
+		if ui.button(fmt.tprintf("Buy {} - {}g", weapon_display_name[next], price), {panel = true}) {
+			try_buy_next_weapon_tier()
+		}
+	} else {
+		ui.text("Fully Upgraded")
+	}
+}
+
+// general Upgrades first, then the equipped Class's one Class-specific slot -
+// both queries reuse upgrade_available_to_class rather than re-inlining its
+// upgrade_presets[kind].class.? check, so the gating rule only lives in one
+// place (upgrade.odin)
+draw_shop_upgrades :: proc() {
+	ui.text("General")
+	for kind in Upgrade_Kind {
+		_, gated := upgrade_presets[kind].class.?
+		if !gated && upgrade_available_to_class(kind, game.player.class) {
+			draw_shop_upgrade_row(kind)
+		}
+	}
+
+	ui.text("{}", class_display_name[game.player.class])
+	for kind in Upgrade_Kind {
+		_, gated := upgrade_presets[kind].class.?
+		if gated && upgrade_available_to_class(kind, game.player.class) {
+			draw_shop_upgrade_row(kind)
+		}
+	}
+}
+
+// current stack/cap plus either a buy button or, at the cap, a "MAXED" label
+// in place of one (see draw_shop_weapon_ladder's note on the ui library
+// having no disabled-button state)
+draw_shop_upgrade_row :: proc(kind: Upgrade_Kind) {
+	preset := upgrade_presets[kind]
+	stack := game.player.upgrade_stacks[kind]
+
+	// parens/slash aren't in the HUD font's glyph set (atlas.odin's
+	// LETTERS_IN_FONT) and render as "?" - brackets/hyphen are
+	ui.text("{} [{}-{}]", preset.display_name, stack, preset.max_stack)
+
+	if upgrade_maxed(kind) {
+		ui.text("MAXED")
+	} else {
+		price := upgrade_price(kind, stack)
+		if ui.button(fmt.tprintf("Buy - {}g", price), {panel = true}) {
+			try_buy_upgrade(kind)
+		}
+	}
 }

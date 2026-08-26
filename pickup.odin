@@ -2,6 +2,7 @@ package shooter
 
 import "core:math/linalg"
 import "core:math/rand"
+import rl "vendor:raylib"
 
 PICKUP_DROP_CHANCE :: 0.25 // chance an enemy death drops any pickup at all
 PICKUP_MAGNET_RADIUS :: 40.0
@@ -9,15 +10,25 @@ PICKUP_PICKUP_RADIUS :: 6.0
 PICKUP_HOMING_ACCEL :: 800.0 // px/s^2 once inside magnet radius
 PICKUP_MAX_SPEED :: 260.0
 PICKUP_HEAL_AMOUNT :: 50.0 // health pickup heal amount
+PICKUP_GOLD_AMOUNT :: 10 // gold granted per Gold pickup, spent in the Shop
+PICKUP_GOLD_RADIUS :: 5.0 // world-space draw radius (no dedicated art yet - see draw_pickups)
 
+// Gold reuses all existing pickup machinery (roll odds, homing, collection) -
+// it's a third uniform option in maybe_spawn_pickup's rand.choice_enum roll,
+// same as Health/Ammo, spent entirely in the Shop (CONTEXT.md's Gold entry)
 Pickup_Kind :: enum {
 	Health,
 	Ammo,
+	Gold,
 }
 
+// Gold has no atlas art yet (.None, never actually looked up - draw_pickups
+// special-cases it to a plain circle instead, mirroring xp_orb.odin's own
+// atlas-less circle draw for the same reason)
 pickup_texture_names: [Pickup_Kind]Texture_Name = {
 	.Health = .Pickup_Heart,
 	.Ammo   = .Pickup_Ammo,
+	.Gold   = .None,
 }
 
 Pickup :: struct {
@@ -74,11 +85,18 @@ collect_pickup :: proc(pickup: Pickup) {
 		heal_player(PICKUP_HEAL_AMOUNT)
 	case .Ammo:
 		refill_weapon_reserve(&game.player.weapon)
+	case .Gold:
+		game.player.gold += PICKUP_GOLD_AMOUNT
 	}
 }
 
 draw_pickups :: proc(pickups: []Pickup) {
 	for pickup in pickups {
+		if pickup.kind == .Gold {
+			rl.DrawCircleV(pickup.position, PICKUP_GOLD_RADIUS, rl.GOLD)
+			continue
+		}
+
 		tex := atlas_textures[pickup_texture_names[pickup.kind]]
 		dest := Rect{pickup.position.x, pickup.position.y, tex.rect.width, tex.rect.height}
 		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}

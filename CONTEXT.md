@@ -60,16 +60,28 @@ The player's permanent choice — made once, at game start — of which `Weapon`
 _Avoid_: Loadout, role, archetype
 
 **Gold**:
-Currency earned from enemy kills (a `Pickup_Kind.Gold` drop) and spent in the Shop to buy the next tier of the player's Class weapon ladder. A progression axis separate from XP: XP grants free generic stat upgrades on level-up; Gold buys a discrete weapon-kind upgrade via deliberate purchase.
+Currency earned from enemy kills (a `Pickup_Kind.Gold` drop), spent entirely within the Shop — on the next tier of the player's Class weapon ladder, and on repeatable stat Upgrades. Wholly a Run concept: resets to zero on Restart, unlike Account progression (XP/Level), which survives it.
 _Avoid_: Currency, coins, cash
 
 **Shop**:
-The on-demand UI panel where the player spends Gold to buy the next `Weapon_Kind` in their Class's tier ladder. Opened at the player's discretion, unlike the level-up upgrade-choice UI which only appears on an XP level-up.
+The on-demand UI panel where the player spends Gold, pausing the game while open. Sells two things: the next `Weapon_Kind` in the Class's Weapon tier ladder, and repeatable Upgrades (general or Class-specific). Opened at the player's discretion, unlike the level-up popup, which only appears on an XP level-up and (see Account progression) no longer sells anything itself.
 _Avoid_: Store, market
 
 **Weapon tier ladder**:
-The fixed, sequential order of `Weapon_Kind`s a Class progresses through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back.
+The fixed, sequential order of `Weapon_Kind`s a Class progresses through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back. Purchased Upgrade stacks are tracked separately from the equipped weapon and are unaffected by a tier purchase — see **Upgrade**.
 _Avoid_: Rank (Level already names the separate XP-progression concept)
+
+**Upgrade**:
+A repeatable Shop purchase that raises one stat by a fixed amount per purchase, at a rising Gold price, up to a hard per-Upgrade stack cap. Either **general** (available regardless of Class — e.g. move speed, max health) or **Class-specific** (gated by the equipped Class's weapon variant — e.g. Melee's arc width). Purchased stacks are Run-scoped but tier-independent: they persist through a Weapon tier purchase, reapplying on top of whichever tier is currently equipped, and only clear on a new Run. Replaces the retired XP-driven `upgrade_weapon` mechanism (see ADR-0006).
+_Avoid_: Stat boost, perk, tier (tier is reserved for the Weapon tier ladder's fixed sequence; an Upgrade's stack count is repeatable, not a sequential ladder)
+
+**Run**:
+The current attempt at play, bounded by Restart: Gold balance, the equipped `Weapon_Kind`, and every Upgrade's purchased stack count all belong to a Run and reset to their starting values on Restart. Contrast **Account progression**, which survives it.
+_Avoid_: Session, game (ambiguous with the global `game` struct), attempt
+
+**Account progression**:
+State that survives Restart: XP, Level, and the player's chosen Class. No login/profile system backs this — "Account" is this repo's chosen name for "survives a Restart" against a single local save file, not a literal user account. Reaching a new Level no longer grants an in-Run Upgrade (see ADR-0006): the level-up popup still appears, but only as a Continue-only acknowledgement, reserved for a future Account-progression payoff not yet designed.
+_Avoid_: Meta progression, permanent progression
 
 **Map**:
 A named, reusable level definition: tile layout, spawner definitions, and a player start position. Stored as its own file under `data/maps/`, and loaded into the game's runtime state at session start. The same struct shape serves both roles — the on-disk file and the live, mutable copy a session plays on — so no separate blueprint/runtime type exists; loading a map copies its data fresh into runtime state, which means in-session mutation (destructible tiles, ticking spawner timers) never touches the file, and reloading the file always resets it.

@@ -302,8 +302,28 @@ weapon_texture_names: [Weapon_Kind]Texture_Name = {
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
 
+// hud.odin's Shop panel weapon-tier-ladder button labels
+weapon_display_name: [Weapon_Kind]string = {
+	.Pistol       = "Pistol",
+	.SMG          = "SMG",
+	.Shotgun      = "Shotgun",
+	.Dagger       = "Dagger",
+	.Sword        = "Sword",
+	.Fire_Wand    = "Fire Wand",
+	.Flame_Staff  = "Flame Staff",
+	.Poison_Staff = "Poison Staff",
+}
+
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	w := weapon_presets[kind]
+	// reapplies owned Upgrade stacks onto the fresh preset baseline
+	// (ADR-0007) - a no-op if none are owned yet. Every caller is
+	// responsible for game.player.upgrade_stacks already holding the right
+	// value before calling this (initialize_default_game_state explicitly
+	// zeroes it first, restart_game likewise, and the Shop/load paths only
+	// ever call this after upgrade_stacks is already correct) - weapon_create
+	// itself has no Player to read a "should be zero here" invariant from.
+	apply_upgrades(&w, game.player.upgrade_stacks)
 	switch &v in w.variant {
 	case Gun:
 		v.ammo_in_clip = v.clip_size
@@ -359,24 +379,6 @@ start_reload :: proc(weapon: ^Weapon) {
 		}
 		v.reload_timer = v.reload_time
 	case Melee_Weapon, Magic: // no reload concept
-	}
-}
-
-WEAPON_UPGRADE_DAMAGE_MULT :: 1.15 // +15% damage per pick
-WEAPON_UPGRADE_ACTION_RATE_MULT :: 1.10 // +10% action rate per pick
-WEAPON_UPGRADE_CLIP_BONUS :: 1 // +1 clip capacity per pick
-
-// boosts the current weapon's stats in place; stacks across multiple picks
-// over a run (mutation persists via game.player.weapon)
-upgrade_weapon :: proc(weapon: ^Weapon) {
-	weapon.damage *= WEAPON_UPGRADE_DAMAGE_MULT
-	weapon.action_rate *= WEAPON_UPGRADE_ACTION_RATE_MULT
-
-	switch &v in weapon.variant {
-	case Gun:
-		v.clip_size += WEAPON_UPGRADE_CLIP_BONUS
-		v.ammo_in_clip += WEAPON_UPGRADE_CLIP_BONUS
-	case Melee_Weapon, Magic: // no clip-equivalent upgrade yet - ticket 06
 	}
 }
 

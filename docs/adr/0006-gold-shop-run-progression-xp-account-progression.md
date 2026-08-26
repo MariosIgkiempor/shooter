@@ -1,0 +1,7 @@
+# Gold/Shop is the sole in-Run power curve; XP becomes Account progression
+
+Status: accepted
+
+Originally (ADR-0002, weapon-types map ticket 06) XP level-ups granted free generic stat upgrades (`upgrade_weapon`) alongside Gold-bought weapon tiers as two coexisting progression axes. This is superseded: XP/Level and Class now form **Account progression** — state that survives Restart — while Gold, the equipped `Weapon_Kind`, and every Shop Upgrade's purchased stack count are **Run**-scoped and reset to their starting values on Restart. The level-up popup stays (kept for a future Account-progression payoff not yet designed) but drops its "Upgrade Weapon"/"Refill Ammo" buttons down to a single Continue.
+
+Consequences: `upgrade_weapon` and its `WEAPON_UPGRADE_*` constants are retired in favor of the Shop's table-driven Upgrade catalog. Restart, previously a soft reset that explicitly left weapon/XP/level untouched (the old weapon-types map's "true roguelite reset" call, rejected at the time), now resets weapon/Gold/Upgrade-stacks but still leaves Class and XP/Level untouched — a partial reversal of that earlier ruling, not a full one. Buying the next Weapon tier still discards the old weapon outright, but purchased Upgrade stacks are tracked independently of the equipped weapon and reapply on top of the new tier automatically — only a Restart clears them, which is what makes saving toward a big tier purchase versus spending incrementally on Upgrades a real in-Run tradeoff.
