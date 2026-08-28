@@ -12,6 +12,14 @@ ENEMY_SIZE: i32 = 12
 DEFAULT_SPAWNER_INTERVAL :: 3
 ENEMY_MAX_HEALTH :: 50
 
+// which per-kind XP payout (enemy_xp_presets, account_progression.odin) an
+// Enemy grants on death - a single placeholder member today, but the lookup
+// is kept extensible for enemy variety that doesn't exist yet (see the
+// Account Progression Rework map's XP formula ticket)
+Enemy_Kind :: enum {
+	Basic,
+}
+
 Enemy :: struct {
 	using rect: Rect, // bottom-center "feet" anchor, same convention as Player
 	animation:  Animation,
@@ -20,6 +28,7 @@ Enemy :: struct {
 	attack:     Attack_Style,
 	path:       Path,
 	health:     f32,
+	kind:       Enemy_Kind,
 }
 
 // an enemy's per-frame steering archetype - orthogonal to Attack_Style; nil
@@ -423,6 +432,7 @@ spawn_enemy :: proc(spawner: Spawner) {
 		movement  = movement,
 		attack    = spawner.attack_template,
 		health    = ENEMY_MAX_HEALTH,
+		kind      = .Basic,
 	}
 
 	append(&game.enemies, enemy)

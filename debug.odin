@@ -60,6 +60,9 @@ draw_debug_panel_ui :: proc() {
 				}
 			}
 
+			// deliberately bumps `gold` only, not gold_earned - a dev cheat
+			// feeding compute_run_xp's Run-end formula would let testing
+			// inflate real Account progression (account_progression.odin)
 			if ui.button(fmt.tprintf("Add {} Gold", DEBUG_GOLD_GRANT), {panel = true}) {
 				game.player.gold += DEBUG_GOLD_GRANT
 			}

@@ -18,19 +18,18 @@ import "core:testing"
 test_apply_hit_to_enemy_god_mode_kills_in_one_hit_regardless_of_damage :: proc(t: ^testing.T) {
 	previous_god_mode := game.debug.god_mode
 	previous_enemies := game.enemies
-	previous_xp_orbs := game.xp_orbs
 	previous_pickups := game.pickups
 	previous_particles := game.particles
+	previous_kills := game.player.kills
 	defer {
 		game.debug.god_mode = previous_god_mode
 		game.enemies = previous_enemies
-		game.xp_orbs = previous_xp_orbs
 		game.pickups = previous_pickups
 		game.particles = previous_particles
+		game.player.kills = previous_kills
 	}
 
 	game.enemies = {}
-	game.xp_orbs = {}
 	game.pickups = {}
 	game.particles = {}
 	game.debug.god_mode = true
@@ -42,7 +41,6 @@ test_apply_hit_to_enemy_god_mode_kills_in_one_hit_regardless_of_damage :: proc(t
 	testing.expect(t, len(game.enemies) == 0, "a god-mode hit should kill the enemy outright, however small the incoming damage")
 
 	clear(&game.enemies)
-	clear(&game.xp_orbs)
 	clear(&game.pickups)
 	clear(&game.particles)
 }
@@ -52,10 +50,12 @@ test_apply_hit_to_enemy_normal_mode_only_applies_actual_damage :: proc(t: ^testi
 	previous_god_mode := game.debug.god_mode
 	previous_enemies := game.enemies
 	previous_particles := game.particles
+	previous_kills := game.player.kills
 	defer {
 		game.debug.god_mode = previous_god_mode
 		game.enemies = previous_enemies
 		game.particles = previous_particles
+		game.player.kills = previous_kills
 	}
 
 	game.enemies = {}
@@ -77,21 +77,21 @@ test_apply_hit_to_enemy_normal_mode_only_applies_actual_damage :: proc(t: ^testi
 test_damage_player_god_mode_prevents_all_damage :: proc(t: ^testing.T) {
 	previous_god_mode := game.debug.god_mode
 	previous_health := game.player.health
-	previous_game_over := game.game_over
+	previous_run_ended := game.run_ended
 	defer {
 		game.debug.god_mode = previous_god_mode
 		game.player.health = previous_health
-		game.game_over = previous_game_over
+		game.run_ended = previous_run_ended
 	}
 
 	game.debug.god_mode = true
 	game.player.health = 50
-	game.game_over = false
+	game.run_ended = false
 
 	damage_player(9999)
 
 	testing.expect(t, game.player.health == 50, "God Mode should leave the player's health untouched")
-	testing.expect(t, !game.game_over, "God Mode should never trigger game-over")
+	testing.expect(t, !game.run_ended, "God Mode should never trigger the Run End screen")
 }
 
 @(test)
@@ -100,21 +100,89 @@ test_damage_player_normal_mode_still_applies_damage :: proc(t: ^testing.T) {
 	previous_health := game.player.health
 	previous_particles := game.particles
 	previous_trauma := game.screen_shake_trauma
+	previous_run_ended := game.run_ended
 	defer {
 		game.debug.god_mode = previous_god_mode
 		game.player.health = previous_health
 		game.particles = previous_particles
 		game.screen_shake_trauma = previous_trauma
+		game.run_ended = previous_run_ended
 	}
 
 	game.debug.god_mode = false
 	game.player.health = 50
 	game.particles = {}
 	game.screen_shake_trauma = 0
+	game.run_ended = false
 
 	damage_player(10)
 
 	testing.expect(t, game.player.health == 40, "outside God Mode, damage should still apply as normal")
+
+	clear(&game.particles)
+}
+
+// a twin-stick shooter routinely lands more than one hit on the player in a
+// single frame (e.g. two Melee enemies whose attack_timers both expire that
+// frame - enemy.odin's update_enemies calls damage_player once per attacker)
+// - without a re-entrancy guard, every hit after the killing one would
+// re-enter the health <= 0 branch and grant this Run's XP again
+@(test)
+test_damage_player_does_not_double_grant_xp_on_repeated_hits_after_death :: proc(t: ^testing.T) {
+	previous_god_mode := game.debug.god_mode
+	previous_health := game.player.health
+	previous_particles := game.particles
+	previous_trauma := game.screen_shake_trauma
+	previous_run_ended := game.run_ended
+	previous_unspent := game.player.unspent_xp
+	previous_xp := game.player.xp
+	previous_level := game.player.level
+	previous_kills := game.player.kills
+	previous_survival := game.player.survival_seconds
+	previous_gold_earned := game.player.gold_earned
+	defer {
+		game.debug.god_mode = previous_god_mode
+		game.player.health = previous_health
+		game.particles = previous_particles
+		game.screen_shake_trauma = previous_trauma
+		game.run_ended = previous_run_ended
+		game.player.unspent_xp = previous_unspent
+		game.player.xp = previous_xp
+		game.player.level = previous_level
+		game.player.kills = previous_kills
+		game.player.survival_seconds = previous_survival
+		game.player.gold_earned = previous_gold_earned
+	}
+
+	game.debug.god_mode = false
+	game.particles = {}
+	game.screen_shake_trauma = 0
+	game.run_ended = false
+	game.player.unspent_xp = 0
+	game.player.xp = 0
+	game.player.level = 1
+	game.player.kills = {}
+	game.player.kills[.Basic] = 1
+	game.player.survival_seconds = 0
+	game.player.gold_earned = 0
+
+	// the killing hit, then a second hit landing the same "frame" - as if two
+	// attackers both connected before update_game_state's next-frame
+	// run_ended guard could take effect
+	game.player.health = 5
+	damage_player(10)
+	xp_after_first_hit := game.player.unspent_xp
+
+	damage_player(10)
+
+	testing.expect(t, game.run_ended, "sanity check: the first hit should have ended the Run")
+	testing.expectf(
+		t,
+		game.player.unspent_xp == xp_after_first_hit,
+		"a second hit landing after death should not grant XP again, got %v then %v",
+		xp_after_first_hit,
+		game.player.unspent_xp,
+	)
 
 	clear(&game.particles)
 }

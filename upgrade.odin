@@ -2,9 +2,9 @@ package shooter
 
 import "core:math"
 
-// One repeatable Shop purchase per member - four general (any Class) plus
-// one per Class, gated by upgrade_presets[kind].class (see CONTEXT.md's
-// Upgrade entry and issue 01-upgrade-catalog-contents). Player.upgrade_stacks
+// One repeatable Shop purchase per member - four general (any Weapon_Family)
+// plus one per family, gated by upgrade_presets[kind].family (see
+// CONTEXT.md's Upgrade entry and issue 01-upgrade-catalog-contents). Player.upgrade_stacks
 // tracks how many times each has been bought; stacks are Run-scoped
 // (ADR-0006) and the sole source of truth an equipped Weapon's live stats
 // are recomputed from - never mutated in place (ADR-0007).
@@ -37,7 +37,7 @@ Upgrade_Preset :: struct {
 	price_growth: f32, // price multiplier per stack already owned
 	max_stack:    int,
 	effect:       Upgrade_Effect,
-	class:        Maybe(Class), // nil = general, available to any Class
+	family:       Maybe(Weapon_Family), // nil = general, available to any family
 }
 
 // exact prices/growth/caps stay placeholder content-authoring (map's "Not
@@ -80,7 +80,7 @@ upgrade_presets: [Upgrade_Kind]Upgrade_Preset = {
 		price_growth = 1.15,
 		max_stack    = 10,
 		effect       = Additive(2),
-		class        = .Ranged,
+		family       = .Ranged,
 	},
 	.Arc_Width = {
 		display_name = "Arc Width",
@@ -88,7 +88,7 @@ upgrade_presets: [Upgrade_Kind]Upgrade_Preset = {
 		price_growth = 1.15,
 		max_stack    = 10,
 		effect       = Additive(10),
-		class        = .Melee,
+		family       = .Melee,
 	},
 	.Range = {
 		display_name = "Range",
@@ -96,15 +96,16 @@ upgrade_presets: [Upgrade_Kind]Upgrade_Preset = {
 		price_growth = 1.15,
 		max_stack    = 10,
 		effect       = Additive(10),
-		class        = .Magic,
+		family       = .Magic,
 	},
 }
 
-// true if `kind` is buyable by `class` - general Upgrades (class == nil) are
-// buyable by any Class, Class-specific ones only by their matching Class
-upgrade_available_to_class :: proc(kind: Upgrade_Kind, class: Class) -> bool {
-	gated_class, gated := upgrade_presets[kind].class.?
-	return !gated || gated_class == class
+// true if `kind` is buyable by `family` - general Upgrades (family == nil)
+// are buyable by any Weapon_Family, family-specific ones only by their
+// matching family
+upgrade_available_to_family :: proc(kind: Upgrade_Kind, family: Weapon_Family) -> bool {
+	gated_family, gated := upgrade_presets[kind].family.?
+	return !gated || gated_family == family
 }
 
 // gold cost of the next purchase of `kind`, given how many stacks are
@@ -135,30 +136,32 @@ apply_upgrade_effect :: proc(base: f32, kind: Upgrade_Kind, n: int) -> f32 {
 }
 
 // derives a Weapon's live damage/action_rate and variant-specific stat from
-// weapon_presets[weapon.kind]'s baseline plus owned Upgrade stacks - run
-// every time a Weapon is (re)created (Class_Select, a tier purchase's
-// weapon_create, load from save) and again after every relevant Upgrade
-// purchase so the Shop's effect is immediate without recreating the Weapon
-// (ADR-0007). Gun's ammo_in_clip is deliberately untouched here - it's a
-// runtime counter, not a preset-derived stat, and callers that need the
-// Clip_Size delta reflected in it apply that separately (see
-// try_buy_upgrade).
-apply_upgrades :: proc(weapon: ^Weapon, stacks: [Upgrade_Kind]int) {
+// weapon_presets[weapon.kind]'s baseline, layered under Account_Stat's Might
+// (permanent, CONTEXT.md's Account_Stat entry) and then owned Run-scoped
+// Upgrade stacks - run every time a Weapon is (re)created (a fresh Run's
+// starter pick, a tier purchase's weapon_create, load from save) and again
+// after every relevant Upgrade purchase so the Shop's effect is immediate
+// without recreating the Weapon (ADR-0007). Gun's ammo_in_clip is
+// deliberately untouched here - it's a runtime counter, not a preset-derived
+// stat, and callers that need the Clip_Size delta reflected in it apply that
+// separately (see try_buy_upgrade).
+apply_upgrades :: proc(weapon: ^Weapon, upgrade_stacks: [Upgrade_Kind]int, account_stat_stacks: [Account_Stat]int) {
 	preset := weapon_presets[weapon.kind]
 
-	weapon.damage = apply_upgrade_effect(preset.damage, .Damage, stacks[.Damage])
-	weapon.action_rate = apply_upgrade_effect(preset.action_rate, .Action_Rate, stacks[.Action_Rate])
+	might_base := apply_account_stat_effect(preset.damage, .Might, account_stat_stacks[.Might])
+	weapon.damage = apply_upgrade_effect(might_base, .Damage, upgrade_stacks[.Damage])
+	weapon.action_rate = apply_upgrade_effect(preset.action_rate, .Action_Rate, upgrade_stacks[.Action_Rate])
 
 	switch &v in weapon.variant {
 	case Gun:
 		base := preset.variant.(Gun)
-		v.clip_size = base.clip_size + int(apply_upgrade_effect(0, .Clip_Size, stacks[.Clip_Size]))
+		v.clip_size = base.clip_size + int(apply_upgrade_effect(0, .Clip_Size, upgrade_stacks[.Clip_Size]))
 	case Melee_Weapon:
 		base := preset.variant.(Melee_Weapon)
-		v.arc_degrees = apply_upgrade_effect(base.arc_degrees, .Arc_Width, stacks[.Arc_Width])
+		v.arc_degrees = apply_upgrade_effect(base.arc_degrees, .Arc_Width, upgrade_stacks[.Arc_Width])
 	case Magic:
 		base := preset.variant.(Magic)
-		apply_magic_range_upgrade(&v, base, stacks[.Range])
+		apply_magic_range_upgrade(&v, base, upgrade_stacks[.Range])
 	}
 }
 

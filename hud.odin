@@ -189,7 +189,7 @@ HUD_THEME :: ui.Theme {
 	gap               = 8,
 }
 
-// shared by draw_level_up_ui/draw_game_over_ui: walks the ui library's
+// shared by every modal/full-screen panel below: walks the ui library's
 // render commands, drawing any node opted into `panel = true` (see the
 // ui.begin/ui.button calls below) as a tinted nine-slice panel instead of a
 // flat rect. the editor uses the same ui library but never sets `panel`, so
@@ -220,12 +220,17 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f3
 	}
 }
 
-// Continue-only (ADR-0006): XP level-ups no longer grant a free in-Run stat
-// upgrade - that's the Shop's job now - so this modal keeps Level/XP as
-// still-meaningful Account-progression context, reserved for a future
-// Account-progression payoff not yet designed (see CONTEXT.md's Account
-// progression entry), without anything to actually choose.
-draw_level_up_ui :: proc() {
+// shown once per Run (ProgramMode.Run_Start - the zero value, so a fresh
+// save always starts here) before Selecting/Playing/Editing become
+// reachable: three columns, one per Weapon_Family (Decision 01, Variant A),
+// each listing that family's Weapon_Kinds as buttons. Picking a weapon
+// starts a fresh Run (start_new_run) and proceeds to the existing map-select
+// screen, not straight into Playing - mirrors the old Class-select -> map-
+// select order, just re-entered every Run instead of once ever.
+// game.player.run_started makes load_game skip straight past this screen
+// when resuming a Run already in progress (see CONTEXT.md's Run entry and
+// ADR-0008); the Run End screen's Continue clears it again after death.
+draw_run_start_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
 	defer ui.theme = previous_theme
@@ -234,45 +239,18 @@ draw_level_up_ui :: proc() {
 	ui.begin_frame(game.window_width, game.window_height)
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-		if ui.begin("Level Up!", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			ui.text("Level {}", game.player.level)
-			// no slash in the HUD font's glyph set (atlas.odin's
-			// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
-			ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
-
-			if ui.button("Continue", {panel = true}) {
-				game.leveling_up = false
-			}
-		}
-	}
-
-	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
-}
-
-// shown only until a Class is ever chosen (ProgramMode.Choosing_Class, the
-// zero value) before Selecting/Playing/Editing become reachable - one button
-// per Class, labeled via class_display_name. Picking a Class equips
-// class_weapon_kinds' first Weapon_Kind for it and locks the choice in for
-// the whole game: game.player.class_chosen makes load_game skip straight
-// past this screen on every later launch, so it - unlike map choice - never
-// runs again for a save that already has a Class (see CONTEXT.md's Class
-// entry and ADR-0002).
-draw_class_selection_ui :: proc() {
-	previous_theme := ui.theme
-	ui.theme = HUD_THEME
-	defer ui.theme = previous_theme
-
-	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
-	ui.begin_frame(game.window_width, game.window_height)
-
-	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-		if ui.begin("Choose a Class", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			for class in Class {
-				if ui.button(class_display_name[class], {panel = true}) {
-					game.player.class = class
-					game.player.weapon = weapon_create(class_weapon_kinds[class][0])
-					game.player.class_chosen = true
-					game.program_mode = .Selecting
+		if ui.begin("Choose a Weapon", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			if ui.row({gap = ui.theme.gap}) {
+				for family in Weapon_Family {
+					if ui.column({gap = ui.theme.gap}) {
+						ui.text("{}", weapon_family_display_name[family])
+						for kind in weapon_family_kinds[family] {
+							if ui.button(weapon_display_name[kind], {panel = true}) {
+								start_new_run(kind)
+								game.program_mode = .Selecting
+							}
+						}
+					}
 				}
 			}
 		}
@@ -313,7 +291,16 @@ draw_map_selection_ui :: proc() {
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
 }
 
-draw_game_over_ui :: proc() {
+// shown once at death (game.run_ended, set by damage_player - see
+// CONTEXT.md's Account progression entry and ADR-0009), replacing the old
+// Game Over screen entirely rather than stacking alongside it. Two-column
+// layout (Decision 01, Variant A): left is the Run summary (Kills/Survived/
+// Gold earned/XP earned) plus the Account Level/XP-into-level bar and
+// unspent-XP balance; right is the Account_Stat spend list, mirroring the
+// Shop's Upgrade buy-row pattern (draw_shop_upgrade_row) but with no MAXED
+// state since Account_Stat has no cap (ticket 02). Continue is never
+// disabled on unspent XP - spending is optional and XP banks indefinitely.
+draw_run_end_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
 	defer ui.theme = previous_theme
@@ -322,11 +309,32 @@ draw_game_over_ui :: proc() {
 	ui.begin_frame(game.window_width, game.window_height)
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-		if ui.begin("Game Over", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			ui.text("You died")
+		if ui.begin("Run Ended", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			if ui.row({gap = ui.theme.gap}) {
+				if ui.column({gap = ui.theme.gap}) {
+					ui.text("Kills: {}", total_kills(game.player.kills))
+					ui.text("Survived: {}s", int(game.player.survival_seconds))
+					ui.text("Gold earned: {}", game.player.gold_earned)
+					ui.text("XP earned: {}", game.last_run_xp_earned)
 
-			if ui.button("Restart", {panel = true}) {
-				restart_game()
+					ui.text("Account Lv. {}", game.player.level)
+					// no slash in the HUD font's glyph set (atlas.odin's
+					// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
+					ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
+					ui.text("Unspent: {} XP", game.player.unspent_xp)
+				}
+				if ui.column({gap = ui.theme.gap}) {
+					ui.text("Spend XP - Account Stats")
+					for stat in Account_Stat {
+						draw_account_stat_row(stat)
+					}
+				}
+			}
+
+			if ui.button("Continue", {panel = true}) {
+				game.run_ended = false
+				game.player.run_started = false
+				game.program_mode = .Run_Start
 			}
 		}
 	}
@@ -334,11 +342,24 @@ draw_game_over_ui :: proc() {
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
 }
 
+// current stack plus a buy button - never a MAXED label (unlike
+// draw_shop_upgrade_row), since Account_Stat purchases have no cap and are
+// always available, just costing more XP the more of it is already owned
+draw_account_stat_row :: proc(stat: Account_Stat) {
+	preset := account_stat_presets[stat]
+	stack := game.player.account_stat_stacks[stat]
+
+	ui.text("{} [{}]", preset.display_name, stack)
+	if ui.button(fmt.tprintf("Spend {} XP", account_stat_price(stat, stack)), {panel = true}) {
+		try_buy_account_stat(stat)
+	}
+}
+
 // on-demand panel (a dedicated TAB key - see main.odin's update_game),
 // pausing the game while open (game.shopping - see update_game_state).
 // Two-column layout validated via prototypes/03-shop-panel.html: the Weapon
-// tier ladder on the left, Upgrades (general above, the equipped Class's one
-// Class-specific slot below) on the right - both visible at once so a tier
+// tier ladder on the left, Upgrades (general above, the equipped weapon's
+// family's one family-specific slot below) on the right - both visible at once so a tier
 // purchase and an Upgrade purchase stay directly comparable without
 // tab-switching (issue 03-shop-ui-and-ux).
 draw_shop_ui :: proc() {
@@ -390,23 +411,25 @@ draw_shop_weapon_ladder :: proc() {
 	}
 }
 
-// general Upgrades first, then the equipped Class's one Class-specific slot -
-// both queries reuse upgrade_available_to_class rather than re-inlining its
-// upgrade_presets[kind].class.? check, so the gating rule only lives in one
-// place (upgrade.odin)
+// general Upgrades first, then the equipped weapon's family's one
+// family-specific slot - both queries reuse upgrade_available_to_family
+// rather than re-inlining its upgrade_presets[kind].family.? check, so the
+// gating rule only lives in one place (upgrade.odin)
 draw_shop_upgrades :: proc() {
+	family := weapon_kind_family[game.player.weapon.kind]
+
 	ui.text("General")
 	for kind in Upgrade_Kind {
-		_, gated := upgrade_presets[kind].class.?
-		if !gated && upgrade_available_to_class(kind, game.player.class) {
+		_, gated := upgrade_presets[kind].family.?
+		if !gated && upgrade_available_to_family(kind, family) {
 			draw_shop_upgrade_row(kind)
 		}
 	}
 
-	ui.text("{}", class_display_name[game.player.class])
+	ui.text("{}", weapon_family_display_name[family])
 	for kind in Upgrade_Kind {
-		_, gated := upgrade_presets[kind].class.?
-		if gated && upgrade_available_to_class(kind, game.player.class) {
+		_, gated := upgrade_presets[kind].family.?
+		if gated && upgrade_available_to_family(kind, family) {
 			draw_shop_upgrade_row(kind)
 		}
 	}

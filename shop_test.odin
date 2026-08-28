@@ -2,7 +2,7 @@ package shooter
 
 import "core:testing"
 
-// try_buy_upgrade/try_buy_next_weapon_tier/restart_game all read and mutate
+// try_buy_upgrade/try_buy_next_weapon_tier/start_new_run all read and mutate
 // game.player - snapshot and restore whatever fields each test touches, same
 // discipline weapon_test.odin's suite already applies to game.bullets/etc
 // (see that file's header comment on ODIN_TEST_THREADS=1).
@@ -241,56 +241,76 @@ test_try_buy_next_weapon_tier_fails_at_top_tier :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_restart_game_resets_run_scoped_state_but_not_account_progression :: proc(t: ^testing.T) {
+test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t: ^testing.T) {
 	previous_gold := game.player.gold
+	previous_gold_earned := game.player.gold_earned
+	previous_kills := game.player.kills
+	previous_survival := game.player.survival_seconds
 	previous_stacks := game.player.upgrade_stacks
 	previous_speed := game.player.move_speed
 	previous_max := game.player.max_health
 	previous_health := game.player.health
 	previous_weapon := game.player.weapon
-	previous_class := game.player.class
+	previous_run_started := game.player.run_started
 	previous_xp := game.player.xp
 	previous_level := game.player.level
+	previous_unspent := game.player.unspent_xp
+	previous_account_stat_stacks := game.player.account_stat_stacks
 	defer {
 		game.player.gold = previous_gold
+		game.player.gold_earned = previous_gold_earned
+		game.player.kills = previous_kills
+		game.player.survival_seconds = previous_survival
 		game.player.upgrade_stacks = previous_stacks
 		game.player.move_speed = previous_speed
 		game.player.max_health = previous_max
 		game.player.health = previous_health
 		game.player.weapon = previous_weapon
-		game.player.class = previous_class
+		game.player.run_started = previous_run_started
 		game.player.xp = previous_xp
 		game.player.level = previous_level
-		game.game_over = false
+		game.player.unspent_xp = previous_unspent
+		game.player.account_stat_stacks = previous_account_stat_stacks
+		game.run_ended = false
 	}
 
-	game.player.class = .Ranged
+	game.player.account_stat_stacks = {}
 	game.player.xp = 42
 	game.player.level = 7
+	game.player.unspent_xp = 15
 	game.player.gold = 500
+	game.player.gold_earned = 500
+	game.player.kills = {}
+	game.player.kills[.Basic] = 9
+	game.player.survival_seconds = 123
 	game.player.upgrade_stacks = {}
 	game.player.upgrade_stacks[.Damage] = 4
 	game.player.move_speed = 250
 	game.player.max_health = 300
 	game.player.health = 3
 	game.player.weapon = weapon_create(.Shotgun)
-	game.game_over = true
+	game.player.run_started = false
+	game.run_ended = true
 
-	restart_game()
+	start_new_run(weapon_family_kinds[.Ranged][0])
 
-	testing.expect(t, game.player.gold == 0, "Restart should zero Gold")
-	testing.expect(t, game.player.upgrade_stacks[.Damage] == 0, "Restart should zero every Upgrade stack")
-	testing.expect(t, game.player.move_speed == PLAYER_BASE_MOVE_SPEED, "Restart should reset move_speed to base")
-	testing.expect(t, game.player.max_health == PLAYER_BASE_MAX_HEALTH, "Restart should reset max_health to base")
-	testing.expect(t, game.player.health == game.player.max_health, "Restart should heal to the reset max_health")
+	testing.expect(t, game.player.gold == 0, "start_new_run should zero Gold")
+	testing.expect(t, game.player.gold_earned == 0, "start_new_run should zero gold_earned")
+	testing.expect(t, total_kills(game.player.kills) == 0, "start_new_run should zero kills")
+	testing.expect(t, game.player.survival_seconds == 0, "start_new_run should zero survival_seconds")
+	testing.expect(t, game.player.upgrade_stacks[.Damage] == 0, "start_new_run should zero every Upgrade stack")
+	testing.expect(t, game.player.move_speed == PLAYER_BASE_MOVE_SPEED, "start_new_run should reset move_speed to base")
+	testing.expect(t, game.player.max_health == PLAYER_BASE_MAX_HEALTH, "start_new_run should reset max_health to base")
+	testing.expect(t, game.player.health == game.player.max_health, "start_new_run should heal to the reset max_health")
 	testing.expect(
 		t,
-		game.player.weapon.kind == class_weapon_kinds[.Ranged][0],
-		"Restart should re-equip the Class's tier-1 weapon",
+		game.player.weapon.kind == weapon_family_kinds[.Ranged][0],
+		"start_new_run should equip the picked starter weapon",
 	)
-	testing.expect(t, !game.game_over, "Restart should close the game-over modal")
+	testing.expect(t, game.player.run_started, "start_new_run should mark the Run as started")
+	testing.expect(t, !game.run_ended, "start_new_run should close the Run End modal")
 
-	testing.expect(t, game.player.class == .Ranged, "Restart must not touch Class (Account progression)")
-	testing.expect(t, game.player.xp == 42, "Restart must not touch xp (Account progression)")
-	testing.expect(t, game.player.level == 7, "Restart must not touch level (Account progression)")
+	testing.expect(t, game.player.xp == 42, "start_new_run must not touch xp (Account progression)")
+	testing.expect(t, game.player.level == 7, "start_new_run must not touch level (Account progression)")
+	testing.expect(t, game.player.unspent_xp == 15, "start_new_run must not touch unspent_xp (Account progression)")
 }

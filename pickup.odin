@@ -23,8 +23,7 @@ Pickup_Kind :: enum {
 }
 
 // Gold has no atlas art yet (.None, never actually looked up - draw_pickups
-// special-cases it to a plain circle instead, mirroring xp_orb.odin's own
-// atlas-less circle draw for the same reason)
+// special-cases it to a plain circle instead)
 pickup_texture_names: [Pickup_Kind]Texture_Name = {
 	.Health = .Pickup_Heart,
 	.Ammo   = .Pickup_Ammo,
@@ -79,6 +78,10 @@ update_pickups :: proc(dt: f32) {
 	}
 }
 
+// Gold pickups scale with Account_Stat's Fortune (CONTEXT.md's Account_Stat
+// entry: "Fortune (Gold-gain rate)") and count toward gold_earned - one of
+// compute_run_xp's three Run-end inputs, tracked separately from `gold`
+// since spending in the Shop must not shrink it (account_progression.odin).
 collect_pickup :: proc(pickup: Pickup) {
 	switch pickup.kind {
 	case .Health:
@@ -86,7 +89,9 @@ collect_pickup :: proc(pickup: Pickup) {
 	case .Ammo:
 		refill_weapon_reserve(&game.player.weapon)
 	case .Gold:
-		game.player.gold += PICKUP_GOLD_AMOUNT
+		amount := int(apply_account_stat_effect(f32(PICKUP_GOLD_AMOUNT), .Fortune, game.player.account_stat_stacks[.Fortune]))
+		game.player.gold += amount
+		game.player.gold_earned += amount
 	}
 }
 

@@ -9,7 +9,7 @@ The player's single currently-equipped combat tool. Common state (kind, fire mod
 _Avoid_: Loadout, armament
 
 **Gun** / **Melee_Weapon** / **Magic**:
-The three concrete `Weapon` variants. Gun keeps the clip/reserve/reload ranged-firing mechanic; Melee_Weapon and Magic are cooldown-only (no stamina/mana economy). Which `Weapon_Kind`s belong to which Class is a separate lookup table — see **Class**.
+The three concrete `Weapon` variants. Gun keeps the clip/reserve/reload ranged-firing mechanic; Melee_Weapon and Magic are cooldown-only (no stamina/mana economy). Which `Weapon_Kind`s belong to which Weapon family is a separate lookup table — see **Weapon family**.
 
 **Action rate**:
 The generic "actions per second" cadence shared by all weapon types — firing (Gun), swinging (Melee_Weapon), casting (Magic). Gates how often `cooldown_timer` lets a weapon act again. **Windup** (when present) is carved out of the front of this same cycle as a proportional slice, not added on top — Action rate stays the true pace of a weapon regardless of whether it Windups, and regardless of how much `action_rate` has grown from upgrades.
@@ -49,39 +49,43 @@ The ghostly Movement Style variant: ignores tilemap collision and drifts erratic
 The Movement Style variant that flanks the player instead of converging with other Swarmers on the same point — a genuinely new surround/flank mechanic, not just `Grounded` movement with tuned-up **Separation**. Exact mechanic is this map's Swarmer surround mechanic ticket.
 
 **Attack Style**:
-An enemy's combat archetype, held on `Enemy.attack` as its own bare union, independent of **Movement Style** — `Melee` (contact damage in range), `Ranged` (fires enemy bullets in a distance band), or nil (no attack). Attack Style's `Melee` is unrelated to `Weapon`'s `Melee_Weapon`/player Class:Melee — enemies keep their own separate combat system by design (see the weapon-types map's Out of scope).
+An enemy's combat archetype, held on `Enemy.attack` as its own bare union, independent of **Movement Style** — `Melee` (contact damage in range), `Ranged` (fires enemy bullets in a distance band), or nil (no attack). Attack Style's `Melee` is unrelated to `Weapon`'s `Melee_Weapon`/the player's Melee weapon family — enemies keep their own separate combat system by design (see the weapon-types map's Out of scope).
 
 **Separation**:
 The steering force that pushes enemies of the same Movement Style apart from each other so they don't clump on the same point or path. Layered on top of Movement Style (e.g. blended with the BFS-chase direction), not integrated into pathfinding itself.
 _Avoid_: Flocking (the boids term bundles separation with alignment/cohesion, neither of which is in scope)
 
-**Class**:
-The player's permanent choice — made once, at game start — of which `Weapon` family they can ever equip: `Melee`, `Magic`, or `Ranged`. `Weapon_Kind` stays the single flat enum from [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md); a separate lookup table buckets its members by Class. See [ADR-0002](docs/adr/0002-class-locked-weapon-acquisition.md) for why acquisition is Class-locked rather than a free cross-type swap.
-_Avoid_: Loadout, role, archetype
+**Weapon family**:
+Which group (`Ranged`, `Melee`, `Magic`) a given `Weapon_Kind` belongs to. `Weapon_Kind` stays the single flat enum from [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md); a separate lookup table buckets its members by family. Purely descriptive of the *currently equipped weapon*, not a persistent player choice — the player picks any weapon fresh at the start of every Run (see **Run**), and family is derived from whichever weapon that is; nothing on `Player` stores it directly. Still drives the Weapon tier ladder and family-specific Upgrade slots exactly as before — only the permanence is gone. See [ADR-0008](docs/adr/0008-weapon-family-is-run-scoped.md).
+_Avoid_: Class (retired name — implied a permanent, once-ever player choice, which is no longer true), Loadout, role, archetype
 
 **Gold**:
-Currency earned from enemy kills (a `Pickup_Kind.Gold` drop), spent entirely within the Shop — on the next tier of the player's Class weapon ladder, and on repeatable stat Upgrades. Wholly a Run concept: resets to zero on Restart, unlike Account progression (XP/Level), which survives it.
+Currency earned from enemy kills (a `Pickup_Kind.Gold` drop), spent entirely within the Shop — on the next tier of the equipped weapon's family's tier ladder, and on repeatable stat Upgrades. Wholly a Run concept: resets to zero at the start of the next Run, unlike Account progression (XP/Level/Account_Stat), which survives across Runs.
 _Avoid_: Currency, coins, cash
 
 **Shop**:
-The on-demand UI panel where the player spends Gold, pausing the game while open. Sells two things: the next `Weapon_Kind` in the Class's Weapon tier ladder, and repeatable Upgrades (general or Class-specific). Opened at the player's discretion, unlike the level-up popup, which only appears on an XP level-up and (see Account progression) no longer sells anything itself.
+The on-demand UI panel where the player spends Gold, pausing the game while open. Sells two things: the next `Weapon_Kind` in the equipped weapon's family's tier ladder, and repeatable Upgrades (general or family-specific). Opened at the player's discretion mid-Run, unlike the end-of-Run summary screen, which appears once at death and is not player-invoked — see **Account progression**.
 _Avoid_: Store, market
 
 **Weapon tier ladder**:
-The fixed, sequential order of `Weapon_Kind`s a Class progresses through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back. Purchased Upgrade stacks are tracked separately from the equipped weapon and are unaffected by a tier purchase — see **Upgrade**.
+The fixed, sequential order of `Weapon_Kind`s within a Weapon family, progressed through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back. Purchased Upgrade stacks are tracked separately from the equipped weapon and are unaffected by a tier purchase — see **Upgrade**.
 _Avoid_: Rank (Level already names the separate XP-progression concept)
 
 **Upgrade**:
-A repeatable Shop purchase that raises one stat by a fixed amount per purchase, at a rising Gold price, up to a hard per-Upgrade stack cap. Either **general** (available regardless of Class — e.g. move speed, max health) or **Class-specific** (gated by the equipped Class's weapon variant — e.g. Melee's arc width). Purchased stacks are Run-scoped but tier-independent: they persist through a Weapon tier purchase, reapplying on top of whichever tier is currently equipped, and only clear on a new Run. Replaces the retired XP-driven `upgrade_weapon` mechanism (see ADR-0006).
+A repeatable Shop purchase that raises one stat by a fixed amount per purchase, at a rising Gold price, up to a hard per-Upgrade stack cap. Either **general** (available regardless of Weapon family — e.g. move speed, max health) or **family-specific** (gated by the currently equipped weapon's family — e.g. Melee's arc width). Purchased stacks are Run-scoped but tier-independent: they persist through a Weapon tier purchase, reapplying on top of whichever tier is currently equipped, and only clear at the start of a new Run. Contrast **Account_Stat**, the equivalent purchase but Account-scoped instead of Run-scoped. Replaces the retired XP-driven `upgrade_weapon` mechanism (see ADR-0006).
 _Avoid_: Stat boost, perk, tier (tier is reserved for the Weapon tier ladder's fixed sequence; an Upgrade's stack count is repeatable, not a sequential ladder)
 
 **Run**:
-The current attempt at play, bounded by Restart: Gold balance, the equipped `Weapon_Kind`, and every Upgrade's purchased stack count all belong to a Run and reset to their starting values on Restart. Contrast **Account progression**, which survives it.
-_Avoid_: Session, game (ambiguous with the global `game` struct), attempt
+One attempt at play, from freshly picking a starting `Weapon` and a Map through to death. Gold balance, the equipped `Weapon_Kind`, and every Upgrade's purchased stack count all belong to a Run and reset at the start of the next one. Every Run begins the same way — picking a starting weapon (`ProgramMode.Run_Start`), then a Map — whether it's the very first Run of a session or the next one after death; see [ADR-0008](docs/adr/0008-weapon-family-is-run-scoped.md). Contrast **Account progression**, which survives across Runs.
+_Avoid_: Session, game (ambiguous with the global `game` struct), attempt, Restart (retired as a named action — a Run now always ends by choosing the next Run's weapon on the Run End screen, not a dedicated Restart button; see **Account progression**)
 
 **Account progression**:
-State that survives Restart: XP, Level, and the player's chosen Class. No login/profile system backs this — "Account" is this repo's chosen name for "survives a Restart" against a single local save file, not a literal user account. Reaching a new Level no longer grants an in-Run Upgrade (see ADR-0006): the level-up popup still appears, but only as a Continue-only acknowledgement, reserved for a future Account-progression payoff not yet designed.
+State that survives across Runs: XP, Level, and purchased `Account_Stat` stacks. XP is granted once, at the end of a Run (not collected in real time — the old XP-orb pickup and mid-Run Level-Up popup are both retired), from a formula weighted across kills, survival time, and Gold earned that Run. Spent, optionally, on `Account_Stat` — see that entry; Level itself grants no purchasing power, it's an XP-threshold milestone only, shown on the same "Run Ended" screen the spending happens on. No login/profile system backs any of this — "Account" is this repo's chosen name for "survives across Runs" against a single local save file, not a literal user account. See [ADR-0009](docs/adr/0009-xp-is-a-run-end-grant.md).
 _Avoid_: Meta progression, permanent progression
+
+**Account_Stat**:
+The permanent stat taxonomy Account progression's XP buys into, spent between Runs on any of four stats — **Vigor** (Max Health), **Might** (Damage), **Swiftness** (Move Speed), **Fortune** (Gold-gain rate) — all `Multiplicative`. Purchased independently of, and layered underneath, a Run's `Upgrade` stacks: baseline weapon preset → Account_Stat allocations → Run-scoped Upgrade stacks, applied via the same recompute-not-mutate model as `Upgrade` ([ADR-0007](docs/adr/0007-upgrade-stacks-recomputed-not-mutated.md)). Priced on the same geometric mechanism as `Upgrade_Preset`, but with a gentler growth factor and no max-stack cap, reflecting that it accumulates across many Runs rather than one.
+_Avoid_: Perk, Meta stat (Account progression already names the "survives Restart" bucket this belongs to)
 
 **Map**:
 A named, reusable level definition: tile layout, spawner definitions, and a player start position. Stored as its own file under `data/maps/`, and loaded into the game's runtime state at session start. The same struct shape serves both roles — the on-disk file and the live, mutable copy a session plays on — so no separate blueprint/runtime type exists; loading a map copies its data fresh into runtime state, which means in-session mutation (destructible tiles, ticking spawner timers) never touches the file, and reloading the file always resets it.

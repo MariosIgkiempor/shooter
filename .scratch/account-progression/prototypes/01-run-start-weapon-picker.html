@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE — Run-start weapon picker (throwaway)</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1c1f27;
+    --panel-2: #232733;
+    --border: #333850;
+    --text: #e8e9ee;
+    --dim: #8b90a3;
+    --gold: #e8c25a;
+    --accent: #5a8fe8;
+    --ok: #4caf6e;
+    --disabled: #4a4d58;
+    --ranged: #5a8fe8;
+    --melee: #d4634a;
+    --magic: #9a6ae8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #05060a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .prototype-banner {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    background: #7a2020;
+    color: #fff;
+    text-align: center;
+    font-size: 12px;
+    padding: 4px;
+    z-index: 100;
+    letter-spacing: 0.5px;
+  }
+  .game-frame {
+    width: 960px;
+    height: 640px;
+    background: #0d1220;
+    border: 2px solid #000;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  .game-backdrop {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(45deg, #10131c, #10131c 20px, #0c0f17 20px, #0c0f17 40px);
+    opacity: 0.6;
+  }
+
+  .picker-panel {
+    position: absolute;
+    top: 30px; left: 50%;
+    transform: translateX(-50%);
+    width: 900px;
+    height: 580px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .picker-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .picker-title { font-size: 18px; font-weight: 600; }
+  .picker-title .sub { font-size: 12px; font-weight: 400; color: var(--dim); margin-top: 2px; }
+  .account-meta { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--dim); }
+  .account-chip {
+    background: #1a2440;
+    border: 1px solid #2c3a5e;
+    padding: 4px 10px;
+    border-radius: 12px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .stat-pill {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+
+  .picker-body { flex: 1; padding: 16px 18px; overflow: auto; }
+
+  .weapon-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: border-color 0.1s;
+  }
+  .weapon-card:hover { border-color: var(--accent); }
+  .weapon-card.selected { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+  .weapon-icon {
+    width: 40px; height: 40px; border-radius: 4px;
+    background: linear-gradient(135deg, #3a4160, #23273a);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .weapon-info { flex: 1; min-width: 0; }
+  .weapon-name { font-weight: 600; font-size: 14px; }
+  .weapon-sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .family-badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 8px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .family-badge.Ranged { background: rgba(90,143,232,0.18); color: var(--ranged); }
+  .family-badge.Melee { background: rgba(212,99,74,0.18); color: var(--melee); }
+  .family-badge.Magic { background: rgba(154,106,232,0.18); color: var(--magic); }
+
+  .start-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .start-btn:disabled { background: var(--disabled); color: var(--dim); cursor: default; }
+  .picker-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .footer-hint { font-size: 12px; color: var(--dim); }
+
+  /* Variant A: three columns by family */
+  .family-cols { display: flex; gap: 16px; height: 100%; }
+  .family-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .family-col-heading {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    padding-bottom: 6px; border-bottom: 2px solid var(--border);
+    margin-bottom: 4px;
+  }
+  .family-col-heading.Ranged { color: var(--ranged); border-color: var(--ranged); }
+  .family-col-heading.Melee { color: var(--melee); border-color: var(--melee); }
+  .family-col-heading.Magic { color: var(--magic); border-color: var(--magic); }
+  .family-cols .weapon-card { flex-direction: column; align-items: flex-start; text-align: left; }
+  .family-cols .weapon-icon { align-self: center; }
+
+  /* Variant B: tabs by family */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab-btn {
+    background: none; border: none; color: var(--dim);
+    padding: 8px 16px; font-size: 14px; cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn.active { color: var(--text); }
+  .tab-btn.Ranged.active { border-bottom-color: var(--ranged); color: var(--ranged); }
+  .tab-btn.Melee.active { border-bottom-color: var(--melee); color: var(--melee); }
+  .tab-btn.Magic.active { border-bottom-color: var(--magic); color: var(--magic); }
+  .tab-pane { display: none; flex-direction: column; gap: 8px; }
+  .tab-pane.active { display: flex; }
+
+  /* Variant C: flat list */
+  .flat-list { display: flex; flex-direction: column; gap: 8px; }
+  .flat-list .weapon-card { justify-content: space-between; }
+  .flat-list .weapon-name-row { display: flex; align-items: center; gap: 8px; }
+
+  /* switcher bar */
+  .switcher {
+    position: fixed;
+    bottom: 18px; left: 50%;
+    transform: translateX(-50%);
+    background: #000;
+    border: 1px solid #444;
+    border-radius: 999px;
+    padding: 8px 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .switcher button {
+    background: #222; color: #fff; border: 1px solid #555;
+    border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: 16px;
+  }
+  .switcher .label { font-size: 13px; padding: 0 8px; min-width: 260px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="prototype-banner">PROTOTYPE — Run-start weapon picker, throwaway (ticket: account-progression/01-run-start-and-run-end-screens). Not game code.</div>
+
+<div class="game-frame">
+  <div class="game-backdrop"></div>
+
+  <div class="picker-panel">
+    <div class="picker-topbar">
+      <div class="picker-title">
+        Choose your weapon
+        <div class="sub">This Run's starting weapon. Upgrade its tier ladder in-Run with Gold.</div>
+      </div>
+      <div class="account-meta">
+        <div class="account-chip">Account Lv. 6</div>
+        <div class="stat-pill">Vigor 2</div>
+        <div class="stat-pill">Might 3</div>
+        <div class="stat-pill">Swiftness 1</div>
+        <div class="stat-pill">Fortune 0</div>
+      </div>
+    </div>
+    <div class="picker-body" id="pickerBody"><!-- variant renders here --></div>
+    <div class="picker-footer">
+      <div class="footer-hint" id="footerHint">Select a weapon to begin.</div>
+      <button class="start-btn" id="startBtn" disabled>Start Run</button>
+    </div>
+  </div>
+</div>
+
+<div class="switcher">
+  <button onclick="cycle(-1)">◀</button>
+  <div class="label" id="variantLabel"></div>
+  <button onclick="cycle(1)">▶</button>
+</div>
+
+<script>
+const WEAPONS = [
+  { name: 'Pistol', family: 'Ranged', icon: '🔫', sub: 'Fast, low damage, unlimited ammo' },
+  { name: 'SMG', family: 'Ranged', icon: '🔫', sub: 'High rate of fire, tight clip' },
+  { name: 'Shotgun', family: 'Ranged', icon: '🔫', sub: 'Heavy damage, short range spread' },
+  { name: 'Dagger', family: 'Melee', icon: '🗡️', sub: 'Fast swings, short reach' },
+  { name: 'Sword', family: 'Melee', icon: '⚔️', sub: 'Wide arc, slower swing' },
+  { name: 'Fire Wand', family: 'Magic', icon: '🪄', sub: 'Single-target bolt' },
+  { name: 'Flame Staff', family: 'Magic', icon: '🔥', sub: 'Cone of fire, ongoing burn' },
+  { name: 'Poison Staff', family: 'Magic', icon: '☠️', sub: 'Ground-targeted lingering cloud' },
+];
+
+let selected = null;
+
+function selectWeapon(name) {
+  selected = name;
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('footerHint').textContent = `Starting weapon: ${name}`;
+  render();
+}
+
+function cardHTML(w, vertical) {
+  const isSel = selected === w.name;
+  if (vertical) {
+    return `
+      <div class="weapon-card ${isSel ? 'selected' : ''}" onclick="selectWeapon('${w.name}')">
+        <div class="weapon-icon">${w.icon}</div>
+        <div class="weapon-info">
+          <div class="weapon-name">${w.name}</div>
+          <div class="weapon-sub">${w.sub}</div>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="weapon-card ${isSel ? 'selected' : ''}" onclick="selectWeapon('${w.name}')">
+      <div class="weapon-name-row">
+        <div class="weapon-icon">${w.icon}</div>
+        <div class="weapon-info">
+          <div class="weapon-name">${w.name} <span class="family-badge ${w.family}">${w.family}</span></div>
+          <div class="weapon-sub">${w.sub}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function variantA() {
+  // Three columns, one per family
+  const families = ['Ranged', 'Melee', 'Magic'];
+  return `
+    <div class="family-cols">
+      ${families.map(f => `
+        <div class="family-col">
+          <div class="family-col-heading ${f}">${f}</div>
+          ${WEAPONS.filter(w => w.family === f).map(w => cardHTML(w, true)).join('')}
+        </div>`).join('')}
+    </div>`;
+}
+
+let activeTab = 'Ranged';
+function variantB() {
+  const families = ['Ranged', 'Melee', 'Magic'];
+  return `
+    <div class="tabs">
+      ${families.map(f => `<button class="tab-btn ${f} ${activeTab === f ? 'active' : ''}" onclick="switchTab('${f}')">${f}</button>`).join('')}
+    </div>
+    ${families.map(f => `
+      <div class="tab-pane ${activeTab === f ? 'active' : ''}" data-fam="${f}">
+        ${WEAPONS.filter(w => w.family === f).map(w => cardHTML(w, false)).join('')}
+      </div>`).join('')}
+  `;
+}
+
+function switchTab(f) {
+  activeTab = f;
+  render();
+}
+
+function variantC() {
+  // Flat list, no grouping UI, family shown only as a badge
+  return `<div class="flat-list">${WEAPONS.map(w => cardHTML(w, false)).join('')}</div>`;
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'Three columns by family', render: variantA },
+  { key: 'B', name: 'Tabbed by family', render: variantB },
+  { key: 'C', name: 'Flat list, family as a badge', render: variantC },
+];
+let current = 0;
+
+function render() {
+  const v = VARIANTS[current];
+  document.getElementById('pickerBody').innerHTML = v.render();
+  document.getElementById('variantLabel').textContent = `${v.key} — ${v.name}`;
+}
+
+function cycle(delta) {
+  current = (current + delta + VARIANTS.length) % VARIANTS.length;
+  render();
+}
+
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+
+render();
+</script>
+</body>
+</html>

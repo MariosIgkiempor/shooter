@@ -43,13 +43,13 @@ test_upgrade_maxed_true_only_at_or_above_cap :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_upgrade_available_to_class_gates_class_specific_upgrades :: proc(t: ^testing.T) {
-	testing.expect(t, upgrade_available_to_class(.Damage, .Melee), "general Upgrades should be available to every Class")
-	testing.expect(t, upgrade_available_to_class(.Damage, .Ranged), "general Upgrades should be available to every Class")
+test_upgrade_available_to_family_gates_family_specific_upgrades :: proc(t: ^testing.T) {
+	testing.expect(t, upgrade_available_to_family(.Damage, .Melee), "general Upgrades should be available to every family")
+	testing.expect(t, upgrade_available_to_family(.Damage, .Ranged), "general Upgrades should be available to every family")
 
-	testing.expect(t, upgrade_available_to_class(.Clip_Size, .Ranged), "Clip_Size should be available to Ranged")
-	testing.expect(t, !upgrade_available_to_class(.Clip_Size, .Melee), "Clip_Size should be gated away from Melee")
-	testing.expect(t, !upgrade_available_to_class(.Clip_Size, .Magic), "Clip_Size should be gated away from Magic")
+	testing.expect(t, upgrade_available_to_family(.Clip_Size, .Ranged), "Clip_Size should be available to Ranged")
+	testing.expect(t, !upgrade_available_to_family(.Clip_Size, .Melee), "Clip_Size should be gated away from Melee")
+	testing.expect(t, !upgrade_available_to_family(.Clip_Size, .Magic), "Clip_Size should be gated away from Magic")
 }
 
 @(test)
@@ -89,7 +89,7 @@ test_apply_upgrades_recomputes_from_preset_baseline_not_the_live_weapon :: proc(
 	// call here would double-count on top of it
 	weapon.damage = 99999
 
-	apply_upgrades(&weapon, game.player.upgrade_stacks)
+	apply_upgrades(&weapon, game.player.upgrade_stacks, game.player.account_stat_stacks)
 
 	expected := apply_upgrade_effect(weapon_presets[.Pistol].damage, .Damage, 2)
 	testing.expectf(
@@ -98,6 +98,38 @@ test_apply_upgrades_recomputes_from_preset_baseline_not_the_live_weapon :: proc(
 		"apply_upgrades should derive damage from the preset baseline (expected %v), not compound on the live field (got %v)",
 		expected,
 		weapon.damage,
+	)
+}
+
+@(test)
+test_apply_upgrades_layers_might_account_stat_under_damage_upgrade :: proc(t: ^testing.T) {
+	previous_upgrade_stacks := game.player.upgrade_stacks
+	previous_account_stat_stacks := game.player.account_stat_stacks
+	defer {
+		game.player.upgrade_stacks = previous_upgrade_stacks
+		game.player.account_stat_stacks = previous_account_stat_stacks
+	}
+	game.player.upgrade_stacks = {}
+	game.player.upgrade_stacks[.Damage] = 2
+	game.player.account_stat_stacks = {}
+	game.player.account_stat_stacks[.Might] = 3
+
+	weapon := weapon_create(.Pistol)
+
+	might_base := apply_account_stat_effect(weapon_presets[.Pistol].damage, .Might, 3)
+	expected := apply_upgrade_effect(might_base, .Damage, 2)
+	testing.expectf(
+		t,
+		weapon.damage == expected,
+		"Might should raise the preset baseline before Damage-Upgrade stacks compound on top (expected %v, got %v)",
+		expected,
+		weapon.damage,
+	)
+
+	testing.expectf(
+		t,
+		weapon.damage > apply_upgrade_effect(weapon_presets[.Pistol].damage, .Damage, 2),
+		"Might should raise damage above what Damage-Upgrade stacks alone would produce",
 	)
 }
 

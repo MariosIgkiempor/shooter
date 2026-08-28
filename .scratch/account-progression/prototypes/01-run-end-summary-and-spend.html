@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE — Run-end summary + Account_Stat spend (throwaway)</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1c1f27;
+    --panel-2: #232733;
+    --border: #333850;
+    --text: #e8e9ee;
+    --dim: #8b90a3;
+    --gold: #e8c25a;
+    --xp: #9a6ae8;
+    --accent: #5a8fe8;
+    --ok: #4caf6e;
+    --disabled: #4a4d58;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #05060a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .prototype-banner {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    background: #7a2020;
+    color: #fff;
+    text-align: center;
+    font-size: 12px;
+    padding: 4px;
+    z-index: 100;
+    letter-spacing: 0.5px;
+  }
+  .game-frame {
+    width: 960px;
+    height: 640px;
+    background: #0d1220;
+    border: 2px solid #000;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  .game-backdrop {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(45deg, #10131c, #10131c 20px, #0c0f17 20px, #0c0f17 40px);
+    opacity: 0.6;
+  }
+
+  .panel {
+    position: absolute;
+    top: 30px; left: 50%;
+    transform: translateX(-50%);
+    width: 860px;
+    height: 580px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .title { font-size: 18px; font-weight: 600; }
+  .title .sub { font-size: 12px; font-weight: 400; color: var(--dim); margin-top: 2px; }
+  .xp-chip {
+    background: #241a40;
+    color: var(--xp);
+    border: 1px solid #3c2a5e;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .body { flex: 1; padding: 16px 18px; overflow: auto; }
+
+  .section-heading {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    margin: 0 0 8px;
+  }
+
+  /* Run summary strip */
+  .summary-strip {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .summary-tile {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .summary-tile .value { font-size: 20px; font-weight: 700; }
+  .summary-tile .label { font-size: 11px; color: var(--dim); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .summary-tile.xp .value { color: var(--xp); }
+
+  .account-level-row {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+  }
+  .account-level-row .lv { font-weight: 700; font-size: 15px; white-space: nowrap; }
+  .xp-bar { flex: 1; height: 8px; background: #0d0f16; border-radius: 4px; overflow: hidden; }
+  .xp-bar-fill { height: 100%; background: var(--xp); transition: width 0.3s; }
+  .unspent-chip { font-size: 12px; color: var(--dim); white-space: nowrap; }
+
+  .stat-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-2);
+    margin-bottom: 8px;
+  }
+  .stat-icon { font-size: 18px; width: 24px; text-align: center; }
+  .stat-info { flex: 1; }
+  .stat-name { font-weight: 600; font-size: 14px; }
+  .stat-sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .stack-dots { display: flex; gap: 3px; margin-top: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--disabled); }
+  .dot.filled { background: var(--ok); }
+  .buy-btn {
+    background: var(--xp);
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .buy-btn:disabled { background: var(--disabled); color: var(--dim); cursor: default; }
+
+  .footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .footer-hint { font-size: 12px; color: var(--dim); }
+  .continue-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /* Variant A: two column (summary left, spend right) */
+  .cols { display: flex; gap: 18px; height: 100%; }
+  .col { flex: 1; min-width: 0; }
+  .cols .summary-strip { flex-direction: column; }
+  .cols .summary-tile { display: flex; align-items: center; justify-content: space-between; text-align: left; padding: 8px 12px; }
+  .cols .summary-tile .label { margin-top: 0; }
+
+  /* Variant B: vertical flow, continue pinned bottom (footer already pinned, so just stacked) */
+
+  /* Variant C: tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab-btn {
+    background: none; border: none; color: var(--dim);
+    padding: 8px 16px; font-size: 14px; cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  .switcher {
+    position: fixed;
+    bottom: 18px; left: 50%;
+    transform: translateX(-50%);
+    background: #000;
+    border: 1px solid #444;
+    border-radius: 999px;
+    padding: 8px 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .switcher button {
+    background: #222; color: #fff; border: 1px solid #555;
+    border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: 16px;
+  }
+  .switcher .label { font-size: 13px; padding: 0 8px; min-width: 260px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="prototype-banner">PROTOTYPE — Run-end summary + Account_Stat spend, throwaway (ticket: account-progression/01-run-start-and-run-end-screens). Not game code.</div>
+
+<div class="game-frame">
+  <div class="game-backdrop"></div>
+
+  <div class="panel">
+    <div class="topbar">
+      <div class="title">
+        Run Ended
+        <div class="sub">Killed by an enemy at 04:12. Spend earned XP, then continue.</div>
+      </div>
+      <div class="xp-chip" id="xpChip">+0 XP</div>
+    </div>
+    <div class="body" id="body"><!-- variant renders here --></div>
+    <div class="footer">
+      <div class="footer-hint" id="footerHint">Unspent XP carries over — spending is optional.</div>
+      <button class="continue-btn" onclick="alert('Continues to the weapon picker for the next Run.')">Continue</button>
+    </div>
+  </div>
+</div>
+
+<div class="switcher">
+  <button onclick="cycle(-1)">◀</button>
+  <div class="label" id="variantLabel"></div>
+  <button onclick="cycle(1)">▶</button>
+</div>
+
+<script>
+const RUN_RESULT = { kills: 27, survivalSeconds: 252, goldEarned: 340 };
+const XP_FORMULA_NOTE = 'kills*XP_PER_KILL + survival_seconds*XP_PER_SECOND + gold_earned*XP_PER_GOLD (exact weights: ticket 02)';
+const totalXP = 214; // placeholder, computed off-prototype
+
+let accountLevel = 6;
+let accountXPIntoLevel = 340;
+let accountXPForLevel = 500;
+let unspent = totalXP;
+
+const STATS = [
+  { key: 'vigor', icon: '❤️', name: 'Vigor', sub: 'Permanent Max Health', stack: 2, price: 40 },
+  { key: 'might', icon: '⚔️', name: 'Might', sub: 'Permanent Damage', stack: 3, price: 55 },
+  { key: 'swiftness', icon: '👟', name: 'Swiftness', sub: 'Permanent Move Speed', stack: 1, price: 30 },
+  { key: 'fortune', icon: '🍀', name: 'Fortune', sub: 'Permanent Gold-gain rate', stack: 0, price: 25 },
+];
+const MAX_STACK = 10;
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60), sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+function buy(key) {
+  const s = STATS.find(s => s.key === key);
+  if (unspent < s.price || s.stack >= MAX_STACK) return;
+  unspent -= s.price;
+  s.stack += 1;
+  s.price = Math.round(s.price * 1.35);
+  render();
+}
+
+function summaryTilesHTML() {
+  return `
+    <div class="summary-tile"><div class="value">${RUN_RESULT.kills}</div><div class="label">Kills</div></div>
+    <div class="summary-tile"><div class="value">${fmtTime(RUN_RESULT.survivalSeconds)}</div><div class="label">Survived</div></div>
+    <div class="summary-tile"><div class="value">${RUN_RESULT.goldEarned}g</div><div class="label">Gold earned</div></div>
+    <div class="summary-tile xp"><div class="value">+${totalXP}</div><div class="label">XP earned</div></div>
+  `;
+}
+
+function accountLevelRowHTML() {
+  const pct = Math.min(100, Math.round((accountXPIntoLevel / accountXPForLevel) * 100));
+  return `
+    <div class="account-level-row">
+      <div class="lv">Account Lv. ${accountLevel}</div>
+      <div class="xp-bar"><div class="xp-bar-fill" style="width:${pct}%"></div></div>
+      <div class="unspent-chip">Unspent: ${unspent} XP</div>
+    </div>`;
+}
+
+function statRowHTML(s) {
+  const capped = s.stack >= MAX_STACK;
+  const affordable = unspent >= s.price && !capped;
+  const dots = Array.from({length: MAX_STACK}, (_, i) =>
+    `<div class="dot ${i < s.stack ? 'filled' : ''}"></div>`).join('');
+  return `
+    <div class="stat-row">
+      <div class="stat-icon">${s.icon}</div>
+      <div class="stat-info">
+        <div class="stat-name">${s.name}</div>
+        <div class="stat-sub">${s.sub}</div>
+        <div class="stack-dots">${dots}</div>
+      </div>
+      <button class="buy-btn" ${affordable ? '' : 'disabled'} onclick="buy('${s.key}')">
+        ${capped ? 'MAXED' : 'Spend ' + s.price + ' XP'}
+      </button>
+    </div>`;
+}
+
+function variantA() {
+  // two column: summary+level left, spend list right
+  return `
+    <div class="cols">
+      <div class="col">
+        <div class="section-heading">This Run</div>
+        <div class="summary-strip">${summaryTilesHTML()}</div>
+        ${accountLevelRowHTML()}
+      </div>
+      <div class="col">
+        <div class="section-heading">Spend XP — Account Stats</div>
+        ${STATS.map(statRowHTML).join('')}
+      </div>
+    </div>`;
+}
+
+function variantB() {
+  // vertical flow: compact strip on top, spend list below
+  return `
+    <div class="summary-strip">${summaryTilesHTML()}</div>
+    ${accountLevelRowHTML()}
+    <div class="section-heading">Spend XP — Account Stats</div>
+    ${STATS.map(statRowHTML).join('')}
+  `;
+}
+
+let activeTab = 'summary';
+function switchTab(t) { activeTab = t; render(); }
+function variantC() {
+  return `
+    <div class="tabs">
+      <button class="tab-btn ${activeTab === 'summary' ? 'active' : ''}" onclick="switchTab('summary')">Run Summary</button>
+      <button class="tab-btn ${activeTab === 'spend' ? 'active' : ''}" onclick="switchTab('spend')">Spend XP</button>
+    </div>
+    <div class="tab-pane ${activeTab === 'summary' ? 'active' : ''}">
+      <div class="summary-strip">${summaryTilesHTML()}</div>
+      ${accountLevelRowHTML()}
+    </div>
+    <div class="tab-pane ${activeTab === 'spend' ? 'active' : ''}">
+      ${STATS.map(statRowHTML).join('')}
+    </div>`;
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'Two-column (summary left, spend right)', render: variantA },
+  { key: 'B', name: 'Vertical flow (strip, then spend list)', render: variantB },
+  { key: 'C', name: 'Tabbed (Run Summary / Spend XP)', render: variantC },
+];
+let current = 0;
+
+function render() {
+  const v = VARIANTS[current];
+  document.getElementById('body').innerHTML = v.render();
+  document.getElementById('variantLabel').textContent = `${v.key} — ${v.name}`;
+  document.getElementById('xpChip').textContent = `+${totalXP} XP`;
+  document.getElementById('footerHint').textContent =
+    `Unspent XP carries over — spending is optional. Formula (placeholder): ${XP_FORMULA_NOTE}`;
+}
+
+function cycle(delta) {
+  current = (current + delta + VARIANTS.length) % VARIANTS.length;
+  render();
+}
+
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+
+render();
+</script>
+</body>
+</html>

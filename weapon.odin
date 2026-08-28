@@ -7,8 +7,8 @@ Weapon_Kind :: enum {
 	Pistol,
 	SMG,
 	Shotgun,
-	// placeholder melee content so try_swing_melee (ticket 03) and the Class
-	// cycle below are actually usable for testing - real tier-ladder
+	// placeholder melee content so try_swing_melee (ticket 03) and the
+	// weapon-family cycle below are actually usable for testing - real tier-ladder
 	// naming/stats for Melee are still content-authoring for a later ticket
 	// (map's "Not yet specified")
 	Dagger,
@@ -316,14 +316,15 @@ weapon_display_name: [Weapon_Kind]string = {
 
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	w := weapon_presets[kind]
-	// reapplies owned Upgrade stacks onto the fresh preset baseline
-	// (ADR-0007) - a no-op if none are owned yet. Every caller is
-	// responsible for game.player.upgrade_stacks already holding the right
-	// value before calling this (initialize_default_game_state explicitly
-	// zeroes it first, restart_game likewise, and the Shop/load paths only
-	// ever call this after upgrade_stacks is already correct) - weapon_create
-	// itself has no Player to read a "should be zero here" invariant from.
-	apply_upgrades(&w, game.player.upgrade_stacks)
+	// reapplies owned Account_Stat allocations and Upgrade stacks onto the
+	// fresh preset baseline (ADR-0007) - a no-op for whichever is empty.
+	// Every caller is responsible for game.player.upgrade_stacks already
+	// holding the right value before calling this (initialize_default_game_state
+	// explicitly zeroes it first, start_new_run likewise, and the Shop/load
+	// paths only ever call this after upgrade_stacks is already correct) -
+	// weapon_create itself has no Player to read a "should be zero here"
+	// invariant from.
+	apply_upgrades(&w, game.player.upgrade_stacks, game.player.account_stat_stacks)
 	switch &v in w.variant {
 	case Gun:
 		v.ammo_in_clip = v.clip_size
@@ -654,31 +655,33 @@ clamp_point_to_range :: proc(origin, target: Vec2, max_range: f32) -> Vec2 {
 	return origin + offset * (max_range / dist)
 }
 
-// -- Class (see CONTEXT.md's Class entry and ADR-0002) ---------------------
+// -- Weapon_Family (see CONTEXT.md's Weapon family entry and ADR-0008) -----
 //
-// The player's permanent choice, made once at game start on main.odin's
-// Choosing_Class screen (hud.odin's draw_class_selection_ui): which Weapon
-// family they can ever equip. class_weapon_kinds[chosen][0] becomes the
-// starting weapon; weapon_kind_class is the reverse lookup dev/debug weapon
-// switching (arrow keys, main.odin) uses to stay within the locked-in
-// Class while cycling Weapon_Kinds for testing, ahead of the real
-// Shop/tier-ladder progression (tickets 08/10) - class_weapon_kinds is only
-// a cycle order for that debug tool, not ticket 10's priced tier ladder.
+// Purely descriptive of whichever Weapon is currently equipped - the player
+// picks any weapon fresh at the start of every Run (main.odin's Run_Start
+// screen, hud.odin's draw_run_start_ui), so nothing on Player stores a
+// family directly; it's always derived via weapon_kind_family from
+// game.player.weapon.kind. weapon_family_kinds[family][0] becomes a fresh
+// Run's starting weapon when that family is picked; weapon_kind_family is
+// also the reverse lookup dev/debug weapon switching (arrow keys, main.odin)
+// uses to stay within the equipped weapon's family while cycling
+// Weapon_Kinds for testing - weapon_family_kinds is only a cycle order for
+// that debug tool, not the Shop's priced tier ladder (shop.odin).
 
-Class :: enum {
+Weapon_Family :: enum {
 	Ranged,
 	Melee,
 	Magic,
 }
 
-// hud.odin's draw_class_selection_ui button labels
-class_display_name: [Class]string = {
+// hud.odin's draw_run_start_ui button labels
+weapon_family_display_name: [Weapon_Family]string = {
 	.Ranged = "Ranged",
 	.Melee  = "Melee",
 	.Magic  = "Magic",
 }
 
-weapon_kind_class: [Weapon_Kind]Class = {
+weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 	.Pistol  = .Ranged,
 	.SMG     = .Ranged,
 	.Shotgun = .Ranged,
@@ -689,17 +692,16 @@ weapon_kind_class: [Weapon_Kind]Class = {
 	.Poison_Staff = .Magic,
 }
 
-class_weapon_kinds: [Class][]Weapon_Kind = {
+weapon_family_kinds: [Weapon_Family][]Weapon_Kind = {
 	.Ranged = {.Pistol, .SMG, .Shotgun},
 	.Melee  = {.Dagger, .Sword},
 	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff},
 }
 
-// steps to the next/previous Weapon_Kind within current's class (wrapping) -
-// never crosses into another Class, since Class is locked in for the whole
-// game once chosen on the Choosing_Class screen
+// steps to the next/previous Weapon_Kind within current's family (wrapping) -
+// never crosses into another family
 cycle_weapon_kind :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
-	kinds := class_weapon_kinds[weapon_kind_class[current]]
+	kinds := weapon_family_kinds[weapon_kind_family[current]]
 
 	index := 0
 	for k, i in kinds {

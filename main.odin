@@ -17,23 +17,24 @@ PIXEL_WINDOW_HEIGHT :: 180
 GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
-// Choosing_Class is first (the zero value) so a save with no Class chosen
-// yet always starts there, regardless of what program_mode a stale save
-// file might otherwise imply - see the json:"-" tag below, which already
-// prevents that on its own. Unlike Selecting (map choice, which re-runs
-// every launch), load_game skips straight past Choosing_Class once
-// Player.class_chosen is true, since Class must stay locked in for the
-// whole game rather than be re-pickable launch to launch.
+// Run_Start is first (the zero value) so a fresh save, or one with no Run in
+// progress, always starts there, regardless of what program_mode a stale
+// save file might otherwise imply - see the json:"-" tag below, which
+// already prevents that on its own. Unlike Selecting (map choice, which
+// re-runs every launch regardless), load_game skips straight past Run_Start
+// once Player.run_started is true, since a Run already in progress
+// shouldn't be discarded by re-picking a starter weapon on every relaunch -
+// see CONTEXT.md's Run entry and ADR-0008.
 ProgramMode :: enum {
-	Choosing_Class,
+	Run_Start,
 	Selecting,
 	Playing,
 	Editing,
 }
 
 game: struct {
-	// never persisted: every launch starts at .Choosing_Class (or .Selecting,
-	// once player.class_chosen - see load_game) regardless of whatever mode
+	// never persisted: every launch starts at .Run_Start (or .Selecting,
+	// once player.run_started - see load_game) regardless of whatever mode
 	// was active when the game was last saved
 	program_mode: ProgramMode `json:"-"`,
 	mouse:         MouseState,
@@ -66,32 +67,33 @@ game: struct {
 	bullets:             [dynamic]Bullet `json:"-"`,
 	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
 	poison_clouds:       [dynamic]Poison_Cloud `json:"-"`,
-	xp_orbs:             [dynamic]Xp_Orb `json:"-"`,
 	pickups:             [dynamic]Pickup `json:"-"`,
 	particles:           [dynamic]Particle `json:"-"`,
 	screen_shake_trauma: f32 `json:"-"`,
 
-	// true while the level-up modal is open; simulation is paused and only
-	// draw_level_up_ui's buttons are live. never saved - a save taken
-	// mid-modal simply reopens closed, which is fine since no run state is
-	// lost (xp/level are already committed by collect_xp).
-	leveling_up:   bool `json:"-"`,
+	// true while the Run End modal is open (death - see damage_player);
+	// simulation is paused. Never saved - a save taken mid-modal simply
+	// reopens closed, which is fine since no Run state is lost (the XP grant
+	// is already committed by grant_account_xp at the moment of death).
+	run_ended:     bool `json:"-"`,
 
-	// true while the game-over modal is open; simulation is paused. never
-	// saved, same rationale as leveling_up.
-	game_over:     bool `json:"-"`,
+	// the XP grant computed at the moment of death (compute_run_xp), kept
+	// only for draw_run_end_ui to display - not itself a source of truth for
+	// anything (game.player.xp/level/unspent_xp already reflect it via
+	// grant_account_xp), so it's never saved.
+	last_run_xp_earned: int `json:"-"`,
 
 	// true while the Shop panel is open; simulation is paused the same way
-	// leveling_up/game_over already gate update_game_state (see CONTEXT.md's
-	// Shop entry). Never saved - a save taken mid-Shop simply reopens closed,
-	// same rationale as leveling_up.
+	// run_ended already gates update_game_state (see CONTEXT.md's Shop
+	// entry). Never saved - a save taken mid-Shop simply reopens closed,
+	// same rationale as run_ended.
 	shopping:      bool `json:"-"`,
 
 	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
 	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
 	// toggles independently instead of the old single debug_overlay bool
 	// that gated all of them together, plus a Gold grant and God Mode. Never
-	// saved, same rationale as leveling_up/game_over/shopping.
+	// saved, same rationale as run_ended/shopping.
 	debug: Debug_State `json:"-"`,
 }
 
@@ -132,58 +134,35 @@ load_game :: proc() {
 		return
 	}
 
-	// a save file predating move_speed/max_health (this feature's addition)
-	// unmarshals them as Odin's zero value, not their real defaults - left
-	// unguarded, a 0 max_health freezes movement (move_actor scales by
-	// move_speed) and divides-by-zero in damage_player/the HUD health bar.
-	// Neither field can legitimately be <= 0 in a valid Run (Upgrades only
-	// ever raise them above their base constants), so this is a safe
-	// missing-field signal, not a false positive on real data.
-	if game.player.move_speed <= 0 {
-		game.player.move_speed = PLAYER_BASE_MOVE_SPEED
-	}
-	if game.player.max_health <= 0 {
-		game.player.max_health = PLAYER_BASE_MAX_HEALTH
-	}
-
 	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
 
-	// re-derive the loaded Weapon's stats from its preset baseline plus the
-	// just-loaded upgrade_stacks (ADR-0007) - idempotent and a no-op if the
-	// save already reflects them correctly, but keeps a hand-edited or
-	// future-migrated save file self-healing instead of trusting its
-	// damage/action_rate/etc fields to already be consistent with its stacks
-	apply_upgrades(&game.player.weapon, game.player.upgrade_stacks)
+	// re-derive the loaded Weapon's stats, and move_speed/max_health, from
+	// their preset/base-constant baselines plus the just-loaded
+	// account_stat_stacks/upgrade_stacks (ADR-0007) - idempotent and a no-op
+	// if the save already reflects them correctly, but keeps a hand-edited
+	// save file self-healing instead of trusting its damage/action_rate/
+	// move_speed/max_health fields to already be consistent with its stacks
+	apply_upgrades(&game.player.weapon, game.player.upgrade_stacks, game.player.account_stat_stacks)
+	recompute_player_stats()
 
 	// never trust a stale persisted value even though program_mode's
 	// json:"-" tag already prevents it from round-tripping. Skip straight
-	// past Choosing_Class on a save that already locked one in - showing it
-	// again would let a same-class re-click in draw_class_selection_ui blow
-	// away the just-loaded (possibly Shop/level-up upgraded) weapon above,
-	// and Class is meant to be permanent for the whole game, not just
-	// one-shot-per-launch the way map choice is.
-	game.program_mode = game.player.class_chosen ? .Selecting : .Choosing_Class
+	// past Run_Start on a save with a Run already in progress - showing it
+	// again would let a re-click in draw_run_start_ui blow away the
+	// just-loaded (possibly Shop-upgraded) weapon/Gold/Upgrade-stacks above.
+	game.program_mode = game.player.run_started ? .Selecting : .Run_Start
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
-		// zeroed explicitly, ahead of the literal below: weapon_create(.Sword)
-		// in that literal reads the global game.player.upgrade_stacks before
-		// the `game = {...}` assignment takes effect, so a prior (possibly
-		// partially-unmarshaled, then discarded) game.player.upgrade_stacks
-		// would otherwise leak into this supposedly-fresh starting weapon
-		game.player.upgrade_stacks = {}
-
 		game = {
-			program_mode = .Choosing_Class,
+			program_mode = .Run_Start,
 			window_width = 1920 / 2,
 			window_height = 1080 / 2,
 			window_title = "Game",
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
 				animation = animation_create(.Player_Walk),
-				class = .Melee,
-				weapon = weapon_create(.Sword),
 				level = 1,
 				move_speed = PLAYER_BASE_MOVE_SPEED,
 				max_health = PLAYER_BASE_MAX_HEALTH,
@@ -227,7 +206,6 @@ initialize_program :: proc() -> runtime.Context {
 	reset_bullets()
 	reset_enemy_bullets()
 	reset_poison_clouds()
-	reset_xp_orbs()
 	reset_pickups()
 	reset_particles()
 	reset_screen_shake()
@@ -260,8 +238,8 @@ update_game :: proc() {
 
 	if is_key_pressed(.F1) {
 		switch game.program_mode {
-		case .Choosing_Class:
-		// no-op: F1 does nothing before a Class has been chosen
+		case .Run_Start:
+		// no-op: F1 does nothing before a starter weapon has been chosen
 		case .Selecting:
 		// no-op: F1 does nothing before a map has been chosen
 		case .Playing:
@@ -293,31 +271,29 @@ update_game :: proc() {
 	// Editing-mode editor, which hits the same collision.
 	if is_key_pressed(.F8) &&
 	   game.program_mode == .Playing &&
-	   !game.leveling_up &&
-	   !game.game_over &&
+	   !game.run_ended &&
 	   !game.shopping {
 		game.debug.panel_open = !game.debug.panel_open
 	}
 
 	// Shop open/close: a dedicated key (TAB - unused elsewhere), mirroring F1
 	// for Editing (ticket 03). Only reachable from Playing, and not while the
-	// level-up/game-over modals already have their own pause up - those can
-	// never become true while shopping anyway, since game.shopping already
-	// pauses update_game_state below, but this keeps the open trigger itself
-	// just as guarded as F1 is against Choosing_Class/Selecting. Also
-	// mutually exclusive with the debug panel - see its own guard above for
-	// why two open panels in one frame is unsafe.
+	// Run End modal already has its own pause up - that can never become
+	// true while shopping anyway, since game.shopping already pauses
+	// update_game_state below, but this keeps the open trigger itself just
+	// as guarded as F1 is against Run_Start/Selecting. Also mutually
+	// exclusive with the debug panel - see its own guard above for why two
+	// open panels in one frame is unsafe.
 	if is_key_pressed(.TAB) &&
 	   game.program_mode == .Playing &&
-	   !game.leveling_up &&
-	   !game.game_over &&
+	   !game.run_ended &&
 	   !game.debug.panel_open {
 		game.shopping = !game.shopping
 	}
 
 	switch game.program_mode {
-	case .Choosing_Class:
-	// no-op: draw_class_selection_ui's buttons handle their own clicks
+	case .Run_Start:
+	// no-op: draw_run_start_ui's buttons handle their own clicks
 	case .Selecting:
 	// no-op: draw_map_selection_ui's buttons handle their own clicks
 	case .Playing:
@@ -327,9 +303,11 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.leveling_up || game.game_over || game.shopping || game.debug.panel_open {
+		if game.run_ended || game.shopping || game.debug.panel_open {
 			return
 		}
+
+		game.player.survival_seconds += rl.GetFrameTime()
 
 		input: Vec2
 
@@ -363,11 +341,10 @@ update_game :: proc() {
 			start_reload(&game.player.weapon)
 		}
 
-		// dev/debug weapon switching: left/right cycles within the player's
-		// locked-in Class (see weapon.odin's cycle_weapon_kind) - never
-		// crosses into another Class, since Class is chosen once on the
-		// Choosing_Class screen and locked in for the whole game. Arrow keys
-		// are free for this since WASD alone already covers movement.
+		// dev/debug weapon switching: left/right cycles within the equipped
+		// weapon's family (see weapon.odin's cycle_weapon_kind) - never
+		// crosses into another family. Arrow keys are free for this since
+		// WASD alone already covers movement.
 		if is_key_pressed(.LEFT) {
 			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, -1))
 		}
@@ -402,7 +379,6 @@ update_game :: proc() {
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
 		update_poison_clouds(rl.GetFrameTime())
-		update_xp_orbs(rl.GetFrameTime())
 		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
 
@@ -472,20 +448,6 @@ Player :: struct {
 	using rect: Rect,
 	animation:  Animation,
 	flip_x:     bool,
-	// chosen once on the Choosing_Class screen (hud.odin's
-	// draw_class_selection_ui) and locked in for the whole game from then on
-	// - see CONTEXT.md's Class entry and ADR-0002. Persisted so the choice
-	// survives relaunches; class_chosen (below) is what actually gates
-	// whether Choosing_Class shows again, since Class's own zero value
-	// (.Ranged) is indistinguishable from a real choice of Ranged.
-	class:      Class,
-	// true once `class` has been set via draw_class_selection_ui - load_game
-	// uses this to skip straight past Choosing_Class on a resumed save,
-	// unlike map choice (ProgramMode.Selecting), which re-shows every
-	// launch. Without this gate, re-showing the picker would let a
-	// same-class re-click wipe out an already-loaded, possibly upgraded
-	// weapon (draw_class_selection_ui always equips the class's base tier).
-	class_chosen: bool,
 	weapon:     Weapon,
 	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
 	// this is the plain, persisted view of it, converted explicitly at the
@@ -493,40 +455,89 @@ Player :: struct {
 	// guessing never runs on player-owned weapon state.
 	weapon_variant_save: Weapon_Variant_Save,
 	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
-	xp:         int, // progress toward next level; persisted run progression
-	level:      int, // persisted run progression, starts at 1
-	// Run-scoped (ADR-0006): spent in the Shop, reset to 0 on Restart but
-	// otherwise persisted through save/quit like xp/level already are.
+
+	// -- Account progression (survives Runs - see CONTEXT.md's Account
+	// progression entry and ADR-0009). Only ever changed by grant_account_xp
+	// (Run-end XP grant) and try_buy_account_stat (Account_Stat spend).
+	xp:                  int, // progress toward next Account level; a milestone only, grants no purchasing power
+	level:               int, // Account level, starts at 1
+	unspent_xp:          int, // spendable balance for Account_Stat purchases; banks indefinitely, spending is optional
+	account_stat_stacks: [Account_Stat]int, // how many times each Account_Stat has been bought, ever
+
+	// true once a starter weapon has been picked for the Run currently in
+	// progress (hud.odin's draw_run_start_ui) - load_game uses this to skip
+	// straight past ProgramMode.Run_Start on a resumed save, unlike map
+	// choice (ProgramMode.Selecting), which re-shows every launch
+	// regardless. Cleared by the Run End screen's Continue after death, so
+	// (unlike the retired class_chosen) it's re-earned every Run rather than
+	// permanent.
+	run_started: bool,
+	// Run-scoped (ADR-0006): spent in the Shop, reset to 0 by start_new_run
+	// but otherwise persisted through save/quit like xp/level already are.
 	gold:       int,
+	// Run-scoped: total Gold ever picked up this Run (never decreases when
+	// spent in the Shop, unlike `gold` above) - one of compute_run_xp's
+	// three inputs. Reset to 0 by start_new_run.
+	gold_earned: int,
+	// Run-scoped: kills this Run, tallied per Enemy_Kind - another of
+	// compute_run_xp's inputs (see apply_hit_to_enemy). Reset to {} by
+	// start_new_run.
+	kills: [Enemy_Kind]int,
+	// Run-scoped: seconds actually spent Playing this Run (see
+	// update_game_state) - the third of compute_run_xp's inputs. Reset to 0
+	// by start_new_run.
+	survival_seconds: f32,
 	// Run-scoped (ADR-0007): how many times each Upgrade_Kind has been
 	// bought this Run - the sole source of truth an equipped Weapon's live
 	// stats are recomputed from (see apply_upgrades), never mutated
-	// in-place. Zeroed on Restart.
+	// in-place. Zeroed by start_new_run.
 	upgrade_stacks: [Upgrade_Kind]int,
-	// Run-scoped (ADR-0007): replaces the old hardcoded `100` movement
-	// literal - the live, Move Speed-Upgrade-scaled value, reset to
-	// PLAYER_BASE_MOVE_SPEED on Restart.
+	// Run-scoped (ADR-0007), layered on top of any owned Account_Stat
+	// Swiftness (see recompute_player_stats) - the live, Upgrade-scaled
+	// value, reset by start_new_run.
 	move_speed: f32,
-	// Run-scoped (ADR-0007): replaces the old PLAYER_MAX_HEALTH constant -
-	// the live, Max Health-Upgrade-scaled cap, reset to
-	// PLAYER_BASE_MAX_HEALTH on Restart. A Max Health purchase heals current
-	// health by the same amount it raises this (see try_buy_upgrade).
+	// Run-scoped (ADR-0007), layered on top of any owned Account_Stat Vigor
+	// (see recompute_player_stats) - the live, Upgrade-scaled cap, reset by
+	// start_new_run. A Max Health purchase (Upgrade or Vigor) heals current
+	// health by the same amount it raises this.
 	max_health: f32,
 	// runtime combat state, not persisted (see initialize_program) - a saved
 	// game predating this field would otherwise unmarshal it as 0 and trigger
-	// an instant game-over on load
+	// an instant Run End on load
 	health:     f32 `json:"-"`,
 }
 
 PLAYER_BASE_MOVE_SPEED :: 100
 PLAYER_BASE_MAX_HEALTH :: 100
 
-// applies enemy damage to the player, opening the game-over modal at 0 hp.
-// God Mode (debug.odin) makes the player fully invulnerable - skipped before
-// any damage-taken effects (burst/shake) fire, so a god-mode hit reads as a
-// clean whiff rather than a damage flash with no health lost.
+// derives move_speed/max_health fresh from PLAYER_BASE_MOVE_SPEED/
+// PLAYER_BASE_MAX_HEALTH, layered through Account_Stat's Swiftness/Vigor
+// (permanent) and then Run-scoped Move_Speed/Max_Health Upgrade stacks -
+// mirrors apply_upgrades' weapon-side derivation (ADR-0007, CONTEXT.md's
+// Account_Stat entry: "baseline weapon preset -> Account_Stat allocations ->
+// Run-scoped Upgrade stacks"). Run every time a relevant Upgrade or
+// Account_Stat is purchased, and at Run start / load, so both are always
+// self-consistent with their sources of truth rather than accumulated in
+// place.
+recompute_player_stats :: proc() {
+	swiftness := apply_account_stat_effect(PLAYER_BASE_MOVE_SPEED, .Swiftness, game.player.account_stat_stacks[.Swiftness])
+	game.player.move_speed = apply_upgrade_effect(swiftness, .Move_Speed, game.player.upgrade_stacks[.Move_Speed])
+
+	vigor := apply_account_stat_effect(PLAYER_BASE_MAX_HEALTH, .Vigor, game.player.account_stat_stacks[.Vigor])
+	game.player.max_health = apply_upgrade_effect(vigor, .Max_Health, game.player.upgrade_stacks[.Max_Health])
+}
+
+// applies enemy damage to the player, granting this Run's XP and opening the
+// Run End screen at 0 hp (ADR-0009). God Mode (debug.odin) makes the player
+// fully invulnerable - skipped before any damage-taken effects (burst/shake)
+// fire, so a god-mode hit reads as a clean whiff rather than a damage flash
+// with no health lost. Also bails once game.run_ended is already true - more
+// than one attacking enemy/bullet can land a hit in the same frame (multiple
+// update_enemies/update_enemy_bullets hits before the next frame's Playing
+// guard kicks in), and without this guard each of those re-enters the
+// health <= 0 branch below and double-grants this Run's XP.
 damage_player :: proc(amount: f32) {
-	if game.debug.god_mode {
+	if game.debug.god_mode || game.run_ended {
 		return
 	}
 
@@ -536,7 +547,9 @@ damage_player :: proc(amount: f32) {
 	game.player.health -= amount
 	if game.player.health <= 0 {
 		game.player.health = 0
-		game.game_over = true
+		game.last_run_xp_earned = compute_run_xp(game.player.kills, game.player.survival_seconds, game.player.gold_earned)
+		grant_account_xp(game.last_run_xp_earned)
+		game.run_ended = true
 	}
 }
 
@@ -545,29 +558,32 @@ heal_player :: proc(amount: f32) {
 	game.player.health = min(game.player.health + amount, game.player.max_health)
 }
 
-// resets Run-scoped state to a fresh Run's starting values (ADR-0006): Gold,
-// upgrade_stacks, move_speed, max_health, and the equipped weapon (back to
-// the Class's tier-1, with zeroed stacks reapplying as a no-op) all reset.
-// Class/class_chosen/xp/level are Account progression and stay untouched.
-// Extracted from draw_game_over_ui's Restart button, which is still its only
-// caller.
-restart_game :: proc() {
+// resets Run-scoped state to a fresh Run's starting values and equips the
+// freshly chosen starter weapon: Gold, gold_earned, kills, survival_seconds,
+// upgrade_stacks, move_speed, max_health, and the equipped weapon all reset.
+// Account progression (xp/level/unspent_xp/account_stat_stacks) stays
+// untouched. Called from the Run_Start screen's weapon-pick button
+// (hud.odin's draw_run_start_ui), both for the very first Run and every Run
+// after a death.
+start_new_run :: proc(starter_kind: Weapon_Kind) {
 	clear(&game.enemies)
 	clear(&game.bullets)
 	clear(&game.enemy_bullets)
-	clear(&game.xp_orbs)
 	clear(&game.pickups)
 	clear(&game.particles)
 	reset_screen_shake()
 
 	game.player.gold = 0
+	game.player.gold_earned = 0
+	game.player.kills = {}
+	game.player.survival_seconds = 0
 	game.player.upgrade_stacks = {}
-	game.player.move_speed = PLAYER_BASE_MOVE_SPEED
-	game.player.max_health = PLAYER_BASE_MAX_HEALTH
-	game.player.weapon = weapon_create(class_weapon_kinds[game.player.class][0])
+	recompute_player_stats()
+	game.player.weapon = weapon_create(starter_kind)
 	game.player.health = game.player.max_health
+	game.player.run_started = true
 
-	game.game_over = false
+	game.run_ended = false
 }
 
 XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
@@ -576,22 +592,6 @@ XP_LEVEL_GROWTH :: 1.25 // multiplicative growth per level
 // xp required to advance from `level` to `level + 1`
 xp_required_for_level :: proc(level: int) -> int {
 	return int(f32(XP_LEVEL_BASE) * math.pow(f32(XP_LEVEL_GROWTH), f32(level - 1)))
-}
-
-// adds xp and, if it crosses the current threshold, levels up and opens the
-// choice modal. XP_ORB_VALUE is always well under XP_LEVEL_BASE, the curve's
-// smallest threshold, so at most one level lands per call - if that
-// invariant ever changes (e.g. a bigger orb value), turn the `if` below into
-// a `for` loop to handle multiple crossings.
-collect_xp :: proc(amount: int) {
-	game.player.xp += amount
-
-	required := xp_required_for_level(game.player.level)
-	if game.player.xp >= required {
-		game.player.xp -= required
-		game.player.level += 1
-		game.leveling_up = true
-	}
 }
 
 Tile :: struct {
@@ -649,7 +649,6 @@ draw_game :: proc() {
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_poison_clouds(game.poison_clouds[:])
-		draw_xp_orbs(game.xp_orbs[:])
 		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
 
@@ -666,8 +665,8 @@ draw_game :: proc() {
 	begin_using_camera(game.ui_camera)
 	{
 		switch game.program_mode {
-		case .Choosing_Class:
-		// no-op: draw_class_selection_ui (below, alongside the other modals)
+		case .Run_Start:
+		// no-op: draw_run_start_ui (below, alongside the other modals)
 		// draws its own full-screen content
 		case .Selecting:
 		// no-op: draw_map_selection_ui (below, alongside the other modals)
@@ -684,20 +683,16 @@ draw_game :: proc() {
 		draw_editor()
 	}
 
-	if game.program_mode == .Choosing_Class {
-		draw_class_selection_ui()
+	if game.program_mode == .Run_Start {
+		draw_run_start_ui()
 	}
 
 	if game.program_mode == .Selecting {
 		draw_map_selection_ui()
 	}
 
-	if game.leveling_up {
-		draw_level_up_ui()
-	}
-
-	if game.game_over {
-		draw_game_over_ui()
+	if game.run_ended {
+		draw_run_end_ui()
 	}
 
 	if game.shopping {
@@ -787,12 +782,6 @@ draw_game :: proc() {
 			angle := math.to_degrees(math.atan2(bullet.velocity.y, bullet.velocity.x)) + 90
 			dest := Rect{bullet.position.x, bullet.position.y, tex.rect.width, tex.rect.height}
 			draw_atlas_tile(tex.rect, dest, origin, angle, rl.RED)
-		}
-	}
-
-	draw_xp_orbs :: proc(orbs: []Xp_Orb) {
-		for orb in orbs {
-			rl.DrawCircleV(orb.position, XP_ORB_RADIUS, rl.SKYBLUE)
 		}
 	}
 
