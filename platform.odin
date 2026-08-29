@@ -20,6 +20,10 @@ is_key_pressed :: proc(key: KeyCode) -> bool {
 	return rl.IsKeyPressed(key)
 }
 
+is_any_key_pressed :: proc() -> bool {
+	return rl.GetKeyPressed() != .KEY_NULL
+}
+
 MouseButton :: rl.MouseButton
 
 get_mouse_position :: proc() -> Vec2 {

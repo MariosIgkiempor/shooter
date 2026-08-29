@@ -220,16 +220,84 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f3
 	}
 }
 
-// shown once per Run (ProgramMode.Run_Start - the zero value, so a fresh
-// save always starts here) before Selecting/Playing/Editing become
-// reachable: three columns, one per Weapon_Family (Decision 01, Variant A),
-// each listing that family's Weapon_Kinds as buttons. Picking a weapon
-// starts a fresh Run (start_new_run) and proceeds to the existing map-select
-// screen, not straight into Playing - mirrors the old Class-select -> map-
-// select order, just re-entered every Run instead of once ever.
-// game.player.run_started makes load_game skip straight past this screen
-// when resuming a Run already in progress (see CONTEXT.md's Run entry and
-// ADR-0008); the Run End screen's Continue clears it again after death.
+// shown once per process launch (ProgramMode.Splash - the zero value, so a
+// fresh or stale save always starts here) ahead of everything else. Purely
+// cosmetic - loading is already synchronous and effectively instant (the
+// atlas is #load'd into the binary, maps are pre-baked - see renderer.odin),
+// so there's nothing real to report progress on, just the Splash_Background
+// atlas tile (data/textures/splash_background.png) drawn full-window. No ui
+// library involvement at all (unlike every other screen in this file) -
+// update_game's .Splash case advances program_mode on a timer or the first
+// key/click, so there's nothing here to be clickable.
+draw_splash_ui :: proc() {
+	tex := atlas_textures[.Splash_Background]
+	tex_size := Vec2{tex.rect.width, tex.rect.height}
+	window_size := Vec2{game.window_width, game.window_height}
+
+	// scale to cover the whole window with no letterboxing, cropping
+	// whichever axis overflows (background-size: cover), rather than
+	// stretching non-uniformly to fit
+	scale := max(window_size.x / tex_size.x, window_size.y / tex_size.y)
+	dest_size := tex_size * scale
+	dest := Rect {
+		(window_size.x - dest_size.x) / 2,
+		(window_size.y - dest_size.y) / 2,
+		dest_size.x,
+		dest_size.y,
+	}
+
+	draw_atlas_tile(tex.rect, dest, {})
+}
+
+// shown once per process launch, right after Splash, when there's no Run
+// already in progress (see update_game's .Splash case - a resumed Run skips
+// straight past this to Selecting, same as it always skipped Run_Start).
+// Single-column panel: Account Level/XP-into-level bar, unspent-XP balance,
+// then the Account_Stat spend list - moved here from the old Run End screen
+// (see CONTEXT.md's Account progression entry) since spending is now a
+// pre-Run decision rather than something squeezed in right after death.
+// "Start Game" hands off to the existing weapon-pick screen.
+draw_account_progression_ui :: proc() {
+	previous_theme := ui.theme
+	ui.theme = HUD_THEME
+	defer ui.theme = previous_theme
+
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.begin_frame(game.window_width, game.window_height)
+
+	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+		if ui.begin("Account Progression", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+			ui.text("Account Lv. {}", game.player.level)
+			// no slash in the HUD font's glyph set (atlas.odin's
+			// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
+			ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
+			ui.text("Unspent: {} XP", game.player.unspent_xp)
+
+			if ui.column({gap = ui.theme.gap}) {
+				for stat in Account_Stat {
+					draw_account_stat_row(stat)
+				}
+			}
+
+			if ui.button("Start Game", {panel = true}) {
+				game.program_mode = .Run_Start
+			}
+		}
+	}
+
+	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+}
+
+// shown once per Run (ProgramMode.Run_Start) between Account_Progression and
+// Selecting/Playing/Editing: three columns, one per Weapon_Family (Decision
+// 01, Variant A), each listing that family's Weapon_Kinds as buttons.
+// Picking a weapon starts a fresh Run (start_new_run) and proceeds to the
+// existing map-select screen, not straight into Playing - mirrors the old
+// Class-select -> map-select order, just re-entered every Run instead of
+// once ever. game.player.run_started makes load_game (via Splash) skip
+// straight past this screen when resuming a Run already in progress (see
+// CONTEXT.md's Run entry and ADR-0008); the Run End screen's Continue clears
+// it again after death.
 draw_run_start_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -293,13 +361,12 @@ draw_map_selection_ui :: proc() {
 
 // shown once at death (game.run_ended, set by damage_player - see
 // CONTEXT.md's Account progression entry and ADR-0009), replacing the old
-// Game Over screen entirely rather than stacking alongside it. Two-column
-// layout (Decision 01, Variant A): left is the Run summary (Kills/Survived/
-// Gold earned/XP earned) plus the Account Level/XP-into-level bar and
-// unspent-XP balance; right is the Account_Stat spend list, mirroring the
-// Shop's Upgrade buy-row pattern (draw_shop_upgrade_row) but with no MAXED
-// state since Account_Stat has no cap (ticket 02). Continue is never
-// disabled on unspent XP - spending is optional and XP banks indefinitely.
+// Game Over screen entirely rather than stacking alongside it. Run summary
+// only (Kills/Survived/Gold earned/XP earned) - the Account Level/XP bar and
+// Account_Stat spend list that used to live here moved to the pre-Run
+// Account_Progression screen (see draw_account_progression_ui), since
+// spending is now a pre-Run decision rather than something squeezed in right
+// after death. Continue leads there instead of straight to weapon-pick.
 draw_run_end_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -310,31 +377,17 @@ draw_run_end_ui :: proc() {
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
 		if ui.begin("Run Ended", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			if ui.row({gap = ui.theme.gap}) {
-				if ui.column({gap = ui.theme.gap}) {
-					ui.text("Kills: {}", total_kills(game.player.kills))
-					ui.text("Survived: {}s", int(game.player.survival_seconds))
-					ui.text("Gold earned: {}", game.player.gold_earned)
-					ui.text("XP earned: {}", game.last_run_xp_earned)
-
-					ui.text("Account Lv. {}", game.player.level)
-					// no slash in the HUD font's glyph set (atlas.odin's
-					// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
-					ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
-					ui.text("Unspent: {} XP", game.player.unspent_xp)
-				}
-				if ui.column({gap = ui.theme.gap}) {
-					ui.text("Spend XP - Account Stats")
-					for stat in Account_Stat {
-						draw_account_stat_row(stat)
-					}
-				}
+			if ui.column({gap = ui.theme.gap}) {
+				ui.text("Kills: {}", total_kills(game.player.kills))
+				ui.text("Survived: {}s", int(game.player.survival_seconds))
+				ui.text("Gold earned: {}", game.player.gold_earned)
+				ui.text("XP earned: {}", game.last_run_xp_earned)
 			}
 
 			if ui.button("Continue", {panel = true}) {
 				game.run_ended = false
 				game.player.run_started = false
-				game.program_mode = .Run_Start
+				game.program_mode = .Account_Progression
 			}
 		}
 	}

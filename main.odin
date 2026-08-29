@@ -17,15 +17,25 @@ PIXEL_WINDOW_HEIGHT :: 180
 GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
-// Run_Start is first (the zero value) so a fresh save, or one with no Run in
+// how long Splash (ProgramMode.Splash) shows at minimum before a key/click
+// can skip it - purely a branding beat, not tied to any real loading (see
+// ProgramMode's doc comment)
+SPLASH_MIN_SECONDS :: 1.5
+
+// Splash is first (the zero value) so a fresh save, or one with no Run in
 // progress, always starts there, regardless of what program_mode a stale
 // save file might otherwise imply - see the json:"-" tag below, which
-// already prevents that on its own. Unlike Selecting (map choice, which
-// re-runs every launch regardless), load_game skips straight past Run_Start
-// once Player.run_started is true, since a Run already in progress
-// shouldn't be discarded by re-picking a starter weapon on every relaunch -
-// see CONTEXT.md's Run entry and ADR-0008.
+// already prevents that on its own. It's a cosmetic, button-less beat
+// (draw_splash_ui) that update_game's .Splash case advances out of on a
+// timer or the first key/click, landing on Account_Progression for a fresh
+// Run or skipping straight to Selecting (map choice) if Player.run_started
+// is already true - a Run already in progress shouldn't be discarded by
+// re-picking a starter weapon on every relaunch, see CONTEXT.md's Run entry
+// and ADR-0008. Unlike Selecting, which re-runs every launch regardless,
+// Account_Progression and Run_Start are both skipped in that resumed case.
 ProgramMode :: enum {
+	Splash,
+	Account_Progression,
 	Run_Start,
 	Selecting,
 	Playing,
@@ -33,10 +43,14 @@ ProgramMode :: enum {
 }
 
 game: struct {
-	// never persisted: every launch starts at .Run_Start (or .Selecting,
-	// once player.run_started - see load_game) regardless of whatever mode
-	// was active when the game was last saved
+	// never persisted: every launch starts at .Splash regardless of whatever
+	// mode was active when the game was last saved - see load_game and
+	// update_game's .Splash case for where it goes from there
 	program_mode: ProgramMode `json:"-"`,
+	// accumulated only while program_mode == .Splash (see update_game) -
+	// never persisted, since Splash only ever runs once per process launch
+	// and `game` starts zero-initialized either way
+	splash_elapsed_seconds: f32 `json:"-"`,
 	mouse:         MouseState,
 	window_width:  f32,
 	window_height: f32,
@@ -147,17 +161,20 @@ load_game :: proc() {
 	recompute_player_stats()
 
 	// never trust a stale persisted value even though program_mode's
-	// json:"-" tag already prevents it from round-tripping. Skip straight
-	// past Run_Start on a save with a Run already in progress - showing it
-	// again would let a re-click in draw_run_start_ui blow away the
-	// just-loaded (possibly Shop-upgraded) weapon/Gold/Upgrade-stacks above.
-	game.program_mode = game.player.run_started ? .Selecting : .Run_Start
+	// json:"-" tag already prevents it from round-tripping. Always start at
+	// Splash - update_game's .Splash case is what actually branches on
+	// Player.run_started once Splash finishes, skipping straight past
+	// Account_Progression/Run_Start on a save with a Run already in
+	// progress, since re-showing weapon-pick would let a re-click in
+	// draw_run_start_ui blow away the just-loaded (possibly Shop-upgraded)
+	// weapon/Gold/Upgrade-stacks above.
+	game.program_mode = .Splash
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
 
 	initialize_default_game_state :: proc() {
 		game = {
-			program_mode = .Run_Start,
+			program_mode = .Splash,
 			window_width = 1920 / 2,
 			window_height = 1080 / 2,
 			window_title = "Game",
@@ -240,6 +257,10 @@ update_game :: proc() {
 
 	if is_key_pressed(.F1) {
 		switch game.program_mode {
+		case .Splash:
+		// no-op: F1 does nothing on the splash screen
+		case .Account_Progression:
+		// no-op: F1 does nothing before a Run has been started
 		case .Run_Start:
 		// no-op: F1 does nothing before a starter weapon has been chosen
 		case .Selecting:
@@ -294,6 +315,15 @@ update_game :: proc() {
 	}
 
 	switch game.program_mode {
+	case .Splash:
+		game.splash_elapsed_seconds += rl.GetFrameTime()
+		if game.splash_elapsed_seconds >= SPLASH_MIN_SECONDS ||
+		   is_mouse_button_pressed(.LEFT) ||
+		   is_any_key_pressed() {
+			game.program_mode = game.player.run_started ? .Selecting : .Account_Progression
+		}
+	case .Account_Progression:
+	// no-op: draw_account_progression_ui's buttons handle their own clicks
 	case .Run_Start:
 	// no-op: draw_run_start_ui's buttons handle their own clicks
 	case .Selecting:
@@ -670,6 +700,12 @@ draw_game :: proc() {
 	begin_using_camera(game.ui_camera)
 	{
 		switch game.program_mode {
+		case .Splash:
+		// no-op: draw_splash_ui (below, alongside the other modals) draws
+		// its own full-screen content
+		case .Account_Progression:
+		// no-op: draw_account_progression_ui (below, alongside the other
+		// modals) draws its own full-screen content
 		case .Run_Start:
 		// no-op: draw_run_start_ui (below, alongside the other modals)
 		// draws its own full-screen content
@@ -686,6 +722,14 @@ draw_game :: proc() {
 
 	if game.program_mode == .Editing {
 		draw_editor()
+	}
+
+	if game.program_mode == .Splash {
+		draw_splash_ui()
+	}
+
+	if game.program_mode == .Account_Progression {
+		draw_account_progression_ui()
 	}
 
 	if game.program_mode == .Run_Start {
