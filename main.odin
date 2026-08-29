@@ -69,6 +69,7 @@ game: struct {
 	poison_clouds:       [dynamic]Poison_Cloud `json:"-"`,
 	pickups:             [dynamic]Pickup `json:"-"`,
 	particles:           [dynamic]Particle `json:"-"`,
+	damage_numbers:      [dynamic]Damage_Number `json:"-"`,
 	screen_shake_trauma: f32 `json:"-"`,
 
 	// true while the Run End modal is open (death - see damage_player);
@@ -208,6 +209,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_poison_clouds()
 	reset_pickups()
 	reset_particles()
+	reset_damage_numbers()
 	reset_screen_shake()
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
@@ -381,6 +383,7 @@ update_game :: proc() {
 		update_poison_clouds(rl.GetFrameTime())
 		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
+		update_damage_numbers(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
@@ -542,6 +545,7 @@ damage_player :: proc(amount: f32) {
 	}
 
 	spawn_damage_burst(Vec2{game.player.x, game.player.y})
+	spawn_damage_number(Vec2{game.player.x, game.player.y}, amount, rl.RED)
 	trigger_screen_shake(amount / game.player.max_health)
 
 	game.player.health -= amount
@@ -651,6 +655,7 @@ draw_game :: proc() {
 		draw_poison_clouds(game.poison_clouds[:])
 		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
+		draw_damage_numbers(game.damage_numbers[:])
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()

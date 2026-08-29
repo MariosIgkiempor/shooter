@@ -161,6 +161,7 @@ apply_hit_to_enemy :: proc(index: int, damage: f32, hit_position: Vec2) {
 
 	enemy.health -= game.debug.god_mode ? enemy.health : damage
 	spawn_hit_spark(hit_position)
+	spawn_damage_number(hit_position, damage, rl.WHITE)
 
 	if enemy.health <= 0 {
 		game.player.kills[enemy.kind] += 1
