@@ -161,17 +161,25 @@ spawn_resource_bar_particle :: proc(p: ^Resource_Bar_Particle, bounds_width, bar
 // row 0 sits immediately above the sprite (the Health indicator); each
 // further row stacks upward, i.e. further from the sprite - matching ticket
 // 01's "Health indicator closer to the sprite, secondary indicator further
-// out" layout
-resource_indicator_row_rects :: proc(feet, doc_size: Vec2, row: int) -> (icon_pos: Vec2, bar: Rect) {
+// out" layout. Every row reserves the same total width (icon + gap + bar) so
+// stacked rows stay left-aligned regardless of has_icon; a row without an
+// icon (the Health indicator - no icon, per the user) gives that freed space
+// to the bar instead of leaving a blank gutter, so it reads as a
+// deliberately wider bar, not a shifted one
+resource_indicator_row_rects :: proc(feet, doc_size: Vec2, row: int, has_icon: bool) -> (icon_pos: Vec2, bar: Rect) {
 	row_width := f32(RESOURCE_BAR_ICON_SIZE) + RESOURCE_BAR_ELEMENT_GAP + RESOURCE_BAR_WIDTH
 	x := feet.x - row_width / 2
 
 	row_top := feet.y - doc_size.y - RESOURCE_BAR_GAP_ABOVE_SPRITE - RESOURCE_BAR_ROW_HEIGHT
 	row_top -= f32(row) * (RESOURCE_BAR_ROW_HEIGHT + RESOURCE_BAR_ROW_SPACING)
 
-	icon_pos = Vec2{x, row_top + (RESOURCE_BAR_ROW_HEIGHT - RESOURCE_BAR_ICON_SIZE) / 2}
-	bar_x := x + RESOURCE_BAR_ICON_SIZE + RESOURCE_BAR_ELEMENT_GAP
-	bar = Rect{bar_x, row_top + (RESOURCE_BAR_ROW_HEIGHT - RESOURCE_BAR_HEIGHT) / 2, RESOURCE_BAR_WIDTH, RESOURCE_BAR_HEIGHT}
+	if has_icon {
+		icon_pos = Vec2{x, row_top + (RESOURCE_BAR_ROW_HEIGHT - RESOURCE_BAR_ICON_SIZE) / 2}
+		bar_x := x + RESOURCE_BAR_ICON_SIZE + RESOURCE_BAR_ELEMENT_GAP
+		bar = Rect{bar_x, row_top + (RESOURCE_BAR_ROW_HEIGHT - RESOURCE_BAR_HEIGHT) / 2, RESOURCE_BAR_WIDTH, RESOURCE_BAR_HEIGHT}
+	} else {
+		bar = Rect{x, row_top + (RESOURCE_BAR_ROW_HEIGHT - RESOURCE_BAR_HEIGHT) / 2, row_width, RESOURCE_BAR_HEIGHT}
+	}
 	return
 }
 
@@ -248,11 +256,11 @@ update_player_resource_indicators :: proc(dt: f32) {
 	feet := Vec2{game.player.x, game.player.y}
 
 	health_frac := clamp(game.player.health / game.player.max_health, 0, 1)
-	_, health_bar := resource_indicator_row_rects(feet, doc, 0)
+	_, health_bar := resource_indicator_row_rects(feet, doc, 0, false)
 	update_resource_bar_particles(player_health_bar_particles[:], health_bar, health_frac, false, dt)
 
 	if secondary, ok := player_secondary_resource(game.player.weapon); ok {
-		_, secondary_bar := resource_indicator_row_rects(feet, doc, 1)
+		_, secondary_bar := resource_indicator_row_rects(feet, doc, 1, true)
 		update_resource_bar_particles(player_secondary_bar_particles[:], secondary_bar, secondary.frac, secondary.chaotic, dt)
 	}
 }
@@ -263,12 +271,11 @@ draw_player_resource_indicators :: proc(player: Player) {
 
 	health_frac := clamp(player.health / player.max_health, 0, 1)
 	health_color := rl.ColorLerp(RESOURCE_CRITICAL_COLOR, RESOURCE_HEALTHY_COLOR, health_frac)
-	health_icon_pos, health_bar := resource_indicator_row_rects(feet, doc, 0)
-	draw_resource_indicator_icon(health_icon_pos, .Pickup_Heart)
+	_, health_bar := resource_indicator_row_rects(feet, doc, 0, false)
 	draw_resource_bar(health_bar, health_frac, health_color, player_health_bar_particles[:])
 
 	if secondary, ok := player_secondary_resource(player.weapon); ok {
-		secondary_icon_pos, secondary_bar := resource_indicator_row_rects(feet, doc, 1)
+		secondary_icon_pos, secondary_bar := resource_indicator_row_rects(feet, doc, 1, true)
 
 		if secondary.icon == .None {
 			draw_resource_indicator_placeholder_icon(secondary_icon_pos, secondary.color)
@@ -283,7 +290,7 @@ update_enemy_resource_indicators :: proc(dt: f32) {
 	for &enemy in game.enemies {
 		doc := animation_atlas_texture(enemy.animation).document_size
 		health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
-		_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0)
+		_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)
 		update_resource_bar_particles(enemy.health_bar_particles[:], bar, health_frac, false, dt)
 	}
 }
@@ -296,8 +303,7 @@ draw_enemy_resource_indicator :: proc(enemy: ^Enemy) {
 	doc := animation_atlas_texture(enemy.animation).document_size
 	health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
 	color := rl.ColorLerp(ENEMY_HEALTH_DARK_COLOR, ENEMY_HEALTH_BRIGHT_COLOR, health_frac)
-	icon_pos, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0)
+	_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)
 
-	draw_resource_indicator_icon(icon_pos, .Pickup_Heart)
 	draw_resource_bar(bar, health_frac, color, enemy.health_bar_particles[:])
 }
