@@ -393,6 +393,24 @@ refill_weapon_reserve :: proc(weapon: ^Weapon) {
 	}
 }
 
+// 0 the instant a weapon fires, ramping back to 1 as cooldown_timer counts
+// down to Ready (see CONTEXT.md's Weapon readiness entry) - drives the
+// player's Cooldown indicator (Melee_Weapon/Magic secondary Resource
+// indicator, resource_indicator.odin, ADR-0011). Recomputes cooldown_duration
+// from the *current* action_rate every frame, same tradeoff as
+// weapon_windup_progress above: an action_rate upgrade picked up mid-cooldown
+// would skew this frame's fraction against the untouched cooldown_timer it
+// started from; purely a cosmetic wobble on a display-only value, not a
+// Resolve-correctness issue, since cooldown_timer itself never depends on
+// this.
+weapon_ready_fraction :: proc(weapon: Weapon) -> f32 {
+	if weapon.action_rate <= 0 {
+		return 1
+	}
+	cooldown_duration := 1.0 / weapon.action_rate
+	return clamp(1 - weapon.cooldown_timer / cooldown_duration, 0, 1)
+}
+
 // Trigger-time entry point (a press for Semi_Automatic, each re-fire tick
 // while held for Automatic - see CONTEXT.md's Trigger entry). Gates on the
 // shared cooldown. Semi_Automatic weapons only start the cycle here

@@ -414,9 +414,11 @@ update_game :: proc() {
 		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
 		update_damage_numbers(rl.GetFrameTime())
+		update_player_resource_indicators(rl.GetFrameTime())
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
+		update_enemy_resource_indicators(rl.GetFrameTime())
 	}
 }
 
@@ -658,12 +660,22 @@ draw_game :: proc() {
 	begin_using_camera(game.camera)
 	{
 		draw_tilemap(&game.current_map.tilemap)
-		for enemy in game.enemies {
+		for &enemy in game.enemies {
 			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
 			if game.debug.visualizers[.Pathfinding] {
 				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
 			}
-			draw_health_bar(enemy)
+			// gated to .Playing, matching the old draw_hud's gating - the world
+			// camera block itself draws unconditionally (so Editing/menu
+			// screens still show the map/actors), but a Resource indicator
+			// reads live Player/Enemy stat fields that are only meaningful
+			// once a Run is in progress (e.g. player.health stays 0 from
+			// death until start_new_run, which would otherwise show an
+			// empty Health indicator floating over the player on every
+			// Account_Progression/Run_Start/Selecting screen)
+			if game.program_mode == .Playing {
+				draw_enemy_resource_indicator(&enemy)
+			}
 		}
 		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
 		draw_weapon(game.player)
@@ -686,6 +698,9 @@ draw_game :: proc() {
 		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
 		draw_damage_numbers(game.damage_numbers[:])
+		if game.program_mode == .Playing {
+			draw_player_resource_indicators(game.player)
+		}
 
 		if game.program_mode == .Editing {
 			draw_editor_world_overlay()
@@ -713,7 +728,9 @@ draw_game :: proc() {
 		// no-op: draw_map_selection_ui (below, alongside the other modals)
 		// draws its own full-screen content
 		case .Playing:
-			draw_hud(game.player)
+		// no-op: Resource indicators (resource_indicator.odin, ADR-0011)
+		// draw in world-space (game.camera, above), not here - the old
+		// bottom-of-screen HUD this camera used to host is retired
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
