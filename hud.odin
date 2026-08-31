@@ -7,25 +7,22 @@ import rl "vendor:raylib"
 import layout "vendor/ui"
 import ui "vendor/ui/ui"
 
-// the nine ui_9square_* tiles, in the row-major order draw_nine_slice expects
-UI_PANEL_TEXTURES :: [9]Texture_Name {
-	.Ui_9square_Top_Left,
-	.Ui_9square_Top_Middle,
-	.Ui_9square_Top_Right,
-	.Ui_9square_Middle_Left,
-	.Ui_9square_Middle_Middle,
-	.Ui_9square_Middle_Right,
-	.Ui_9square_Bottom_Left,
-	.Ui_9square_Bottom_Middle,
-	.Ui_9square_Bottom_Right,
+// which nine-slice source a panel-flagged render command draws, keyed by the
+// ui library's opaque `panel_variant` int (see BUTTON_PANEL_VARIANT /
+// BUTTON_PANEL_VARIANT_PRESSED in vendor/ui/ui/ui.odin) - 0 is every
+// non-button panel (just the window/container background today). Each
+// texture is its own single square-grid source (see draw_nine_slice),
+// sliced into its 3x3 grid automatically - no per-tile source art needed.
+Menu_Panel_Variant :: enum {
+	Container,
+	Button_Normal,
+	Button_Pressed,
 }
 
-draw_ui_panel :: proc(dest: Rect, tint: Color = rl.WHITE, corner_scale: f32 = 1) {
-	pieces: [9]Atlas_Texture
-	for name, i in UI_PANEL_TEXTURES {
-		pieces[i] = atlas_textures[name]
-	}
-	draw_nine_slice(pieces, dest, tint, corner_scale)
+menu_panel_variant_textures: [Menu_Panel_Variant]Texture_Name = {
+	.Container      = .Ui_9square_Panel,
+	.Button_Normal  = .Ui_9square_Button,
+	.Button_Pressed = .Ui_9square_Button_Pressed,
 }
 
 // -- in-game HUD: level/health/ammo as slim centered bars ------------------
@@ -162,11 +159,24 @@ draw_health_bar :: proc(enemy: Enemy) {
 // larger than native to stay proportionate against a full window
 MENU_PANEL_SCALE :: 2
 
-// the native nine-slice tiles are 16x16 (see UI_PANEL_TEXTURES); scaled up
-// by MENU_PANEL_SCALE, that's how far the title bar/content must be inset
-// from the window's edge so the outer panel's border stays visible all the
-// way around instead of being drawn over edge-to-edge
+// the native nine-slice corners are Ui_9square_Panel's own size / 3 (sliced
+// into even thirds - see draw_nine_slice); scaled up by MENU_PANEL_SCALE,
+// that's roughly how far the title bar/content must be inset from the
+// window's edge so the outer panel's border stays visible all the way
+// around instead of being drawn over edge-to-edge
 MENU_PANEL_MARGIN :: 16 * MENU_PANEL_SCALE
+
+// how far a pressed button sinks down: both its drawn background (see
+// draw_ui_render_commands) and, via HUD_THEME.button_press_offset below, the
+// label text laid out inside it (see layout.Node.press_offset_y) move by
+// this exact same amount, so the label stays put relative to the button
+// instead of drifting - one constant so the two can't fall out of sync
+BUTTON_PRESS_SINK :: 3
+
+// how much a pressed button's drawn background additionally shrinks - taken
+// evenly off the top and bottom, so it doesn't shift the box's vertical
+// center and needs no matching adjustment on the label (unlike SINK above)
+BUTTON_PRESS_SHRINK :: 4
 
 // the ui library's `theme` is a single shared global, and its default values
 // are tuned for the editor's flat-rect windows (a saturated blue accent).
@@ -175,18 +185,19 @@ MENU_PANEL_MARGIN :: 16 * MENU_PANEL_SCALE
 // so the HUD gets its own theme: a desaturated dark blue-gray family that
 // matches the panel art, varying only in lightness across states.
 HUD_THEME :: ui.Theme {
-	window_background = {58, 63, 74, 255},
-	title_bar         = {46, 50, 60, 255},
-	title_text        = {240, 240, 240, 255},
-	text              = {225, 225, 225, 255},
-	button            = {74, 80, 94, 255},
-	button_hot        = {96, 104, 122, 255},
-	button_active     = {110, 118, 138, 255},
-	button_text       = {240, 240, 240, 255},
-	font_size         = 18,
-	title_font_size   = 18,
-	padding           = 10,
-	gap               = 8,
+	window_background   = {58, 63, 74, 255},
+	title_bar           = {46, 50, 60, 255},
+	title_text          = {240, 240, 240, 255},
+	text                = {225, 225, 225, 255},
+	button              = {74, 80, 94, 255},
+	button_hot          = {96, 104, 122, 255},
+	button_active       = {110, 118, 138, 255},
+	button_text         = {240, 240, 240, 255},
+	font_size           = 22,
+	title_font_size     = 22,
+	padding             = 10,
+	gap                 = 8,
+	button_press_offset = BUTTON_PRESS_SINK,
 }
 
 // shared by every modal/full-screen panel below: walks the ui library's
@@ -203,7 +214,35 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f3
 			tint := rl.Color(cmd.color)
 
 			if cmd.panel {
-				draw_ui_panel(dest, tint, panel_scale)
+				variant := Menu_Panel_Variant(cmd.panel_variant)
+				texture := atlas_textures[menu_panel_variant_textures[variant]]
+				// the button textures are real drawn art (normal/pressed), not a
+				// flat shape meant to be recolored - the theme's button/button_hot/
+				// button_active tints only ever made sense against the single
+				// generic panel texture, so they're ignored here to keep the art's
+				// own colors intact; the container keeps its theme tint as before
+				panel_tint := variant == .Container ? tint : rl.WHITE
+
+				if variant == .Button_Pressed {
+					// purely a draw-time visual effect on the drawn rect, not the
+					// layout node itself (which would risk reflowing sibling buttons
+					// just because one got pressed). Two separate moves, deliberately
+					// not collapsed into one: SINK translates the whole box down by
+					// the exact amount the label (a separate layout node, moved via
+					// HUD_THEME.button_press_offset - see layout.Node.press_offset_y)
+					// also moves, so the two stay aligned; SHRINK then takes evenly
+					// off the top and bottom of that already-moved box, which doesn't
+					// need a matching label adjustment since a symmetric shrink never
+					// moves the center SINK already aligned it to. Collapsing these
+					// into a single bottom-anchored shrink (translate the top only,
+					// leave the bottom fixed) is what caused the earlier bug: that
+					// moves the box's center by SINK/2, not SINK, so the label (moved
+					// by the full SINK) drifted out of alignment with it.
+					dest.y += BUTTON_PRESS_SINK + BUTTON_PRESS_SHRINK / 2
+					dest.height -= BUTTON_PRESS_SHRINK
+				}
+
+				draw_nine_slice(texture, dest, panel_tint, panel_scale)
 			} else {
 				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), tint)
 			}
