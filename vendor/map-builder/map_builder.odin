@@ -97,7 +97,6 @@ Spawner :: struct {
 	position:               Vec2,
 	interval:                f32,
 	timer:                   f32,
-	animation:               int,
 	movement_template_save:  Movement_Style_Save,
 	attack_template_save:    Attack_Style_Save,
 }
@@ -247,10 +246,9 @@ write_spawners_literal :: proc(f: ^os.File, spawners: [dynamic]Spawner) {
 	for spawner in spawners {
 		fmt.fprintf(
 			f,
-			"\t\tSpawner{{position = {{%v, %v}}, interval = %v, timer = %v, animation = Animation_Name(%v), movement_template = ",
+			"\t\tSpawner{{position = {{%v, %v}}, interval = %v, timer = %v, movement_template = ",
 			spawner.position.x, spawner.position.y,
 			spawner.interval, spawner.timer,
-			spawner.animation,
 		)
 		write_movement_style_literal(f, spawner.movement_template_save)
 		fmt.fprint(f, ", attack_template = ")
