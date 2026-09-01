@@ -41,14 +41,7 @@ RESOURCE_RELOADING_COLOR :: Color{230, 150, 40, 255}
 RESOURCE_EMPTY_COLOR :: Color{210, 60, 60, 255}
 RESOURCE_COOLDOWN_COLOR :: Color{150, 170, 230, 255}
 
-// enemies lerp within a red-only range (ticket 03) rather than the player's
-// green-to-red RESOURCE_HEALTHY_COLOR/RESOURCE_CRITICAL_COLOR lerp, so color
-// alone reliably signals friend vs. foe now that both share the same shape
-ENEMY_HEALTH_BRIGHT_COLOR :: Color{220, 40, 40, 255}
-ENEMY_HEALTH_DARK_COLOR :: Color{90, 20, 20, 255}
-
 PLAYER_BAR_MAX_PARTICLES :: 20 // sustained particle count at frac = 1
-ENEMY_BAR_MAX_PARTICLES :: 6 // smaller fixed budget (ticket 03), applied uniformly regardless of live enemy count
 
 RESOURCE_PARTICLE_MIN_LIFETIME :: 0.4
 RESOURCE_PARTICLE_MAX_LIFETIME :: 0.9
@@ -289,24 +282,3 @@ draw_player_resource_indicators :: proc(player: Player) {
 	}
 }
 
-update_enemy_resource_indicators :: proc(dt: f32) {
-	for &enemy in game.enemies {
-		doc := ACTOR_SIZE
-		health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
-		_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)
-		update_resource_bar_particles(enemy.health_bar_particles[:], bar, health_frac, false, dt)
-	}
-}
-
-// takes a pointer, not a value, purely so health_bar_particles[:] below can
-// be sliced without copying the whole (now particle-array-bearing) Enemy
-// struct - the caller already has an addressable enemy from its own
-// `for &enemy in game.enemies` loop
-draw_enemy_resource_indicator :: proc(enemy: ^Enemy) {
-	doc := ACTOR_SIZE
-	health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
-	color := rl.ColorLerp(ENEMY_HEALTH_DARK_COLOR, ENEMY_HEALTH_BRIGHT_COLOR, health_frac)
-	_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)
-
-	draw_resource_bar(bar, health_frac, color, enemy.health_bar_particles[:])
-}

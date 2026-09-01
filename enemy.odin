@@ -28,11 +28,6 @@ Enemy :: struct {
 	path:       Path,
 	health:     f32,
 	kind:       Enemy_Kind,
-	// backing store for this enemy's Health indicator (resource_indicator.odin,
-	// ADR-0011) - a fixed-size array, not a dynamic one, since the budget is a
-	// small constant (ENEMY_BAR_MAX_PARTICLES) and Enemy is already entirely
-	// transient (game.enemies is json:"-")
-	health_bar_particles: [ENEMY_BAR_MAX_PARTICLES]Resource_Bar_Particle,
 }
 
 // an enemy's per-frame steering archetype - orthogonal to Attack_Style; nil

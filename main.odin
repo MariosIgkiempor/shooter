@@ -418,7 +418,6 @@ update_game :: proc() {
 
 		update_spawners(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
-		update_enemy_resource_indicators(rl.GetFrameTime())
 	}
 }
 
@@ -653,33 +652,44 @@ TILEMAP_WALL_BEVEL_COLOR :: rl.Color{74, 64, 52, 255}
 // stays exclusive to actual threats (Grounded enemies, enemy bullets)
 SPAWNER_MARKER_COLOR :: rl.Color{110, 130, 150, 255}
 
-// shape vocabulary for actor bodies (art-revamp ticket 01): Player/Grounded
-// draw as a rectangle, Floater as a circle, Swarmer as a triangle. Colors are
-// a first-pass palette, not separately locked by any ticket.
-Actor_Shape_Kind :: enum {
-	Player,
-	Grounded,
-	Floater,
-	Swarmer,
+// Player renders as a rectangle (ACTOR_SIZE); every enemy renders as a
+// square (see draw_enemy) - colors are a first-pass palette, not separately
+// locked by any ticket.
+ACTOR_PLAYER_COLOR :: rl.SKYBLUE
+ENEMY_GROUNDED_COLOR :: rl.RED
+ENEMY_FLOATER_COLOR :: rl.VIOLET
+ENEMY_SWARMER_COLOR :: rl.ORANGE
+
+// enemy square size grows with max_health, capped at ENEMY_SIZE_MAX so a
+// high-health enemy never grows unreasonably huge. Tuned so today's uniform
+// ENEMY_MAX_HEALTH (50) lands at the old fixed ACTOR_SIZE (24) - enemy
+// variety with different max_health per kind will differentiate sizes once
+// it exists.
+ENEMY_SIZE_MIN :: 10.0
+ENEMY_SIZE_MAX :: 48.0
+ENEMY_SIZE_PER_MAX_HEALTH :: 0.28
+
+enemy_body_size :: proc(max_health: f32) -> f32 {
+	return clamp(ENEMY_SIZE_MIN + max_health * ENEMY_SIZE_PER_MAX_HEALTH, ENEMY_SIZE_MIN, ENEMY_SIZE_MAX)
 }
 
-ACTOR_PLAYER_COLOR :: rl.SKYBLUE
-ACTOR_GROUNDED_COLOR :: rl.RED
-ACTOR_FLOATER_COLOR :: rl.VIOLET
-ACTOR_SWARMER_COLOR :: rl.ORANGE
+// opacity fades toward ENEMY_MIN_OPACITY as health drops, so a badly-hurt
+// enemy visibly reads as weakened at a glance, not just via a health bar
+ENEMY_MIN_OPACITY :: 0.25
 
-// Inert (no Movement_Style, never actually spawned today) falls back to the
-// rect body since no shape was specified for it
-actor_shape_kind :: proc(movement: Movement_Style) -> Actor_Shape_Kind {
-	switch _ in movement {
-	case Grounded:
-		return .Grounded
-	case Floater:
-		return .Floater
-	case Swarmer:
-		return .Swarmer
+enemy_body_color :: proc(kind: Movement_Style_Kind, health_frac: f32) -> Color {
+	base: Color
+	switch kind {
+	case .Grounded, .Inert:
+		base = ENEMY_GROUNDED_COLOR
+	case .Floater:
+		base = ENEMY_FLOATER_COLOR
+	case .Swarmer:
+		base = ENEMY_SWARMER_COLOR
 	}
-	return .Grounded
+
+	alpha := ENEMY_MIN_OPACITY + (1 - ENEMY_MIN_OPACITY) * clamp(health_frac, 0, 1)
+	return rl.Fade(base, alpha)
 }
 
 ACTOR_SQUASH_RATE :: 12.0 // exp_approach rate, 1/s
@@ -723,23 +733,12 @@ draw_game :: proc() {
 	{
 		draw_tilemap(&game.current_map.tilemap)
 		for &enemy in game.enemies {
-			draw_actor(enemy.rect, actor_shape_kind(enemy.movement), enemy.squash)
+			draw_enemy(enemy)
 			if game.debug.visualizers[.Pathfinding] {
 				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
 			}
-			// gated to .Playing, matching the old draw_hud's gating - the world
-			// camera block itself draws unconditionally (so Editing/menu
-			// screens still show the map/actors), but a Resource indicator
-			// reads live Player/Enemy stat fields that are only meaningful
-			// once a Run is in progress (e.g. player.health stays 0 from
-			// death until start_new_run, which would otherwise show an
-			// empty Health indicator floating over the player on every
-			// Account_Progression/Run_Start/Selecting screen)
-			if game.program_mode == .Playing {
-				draw_enemy_resource_indicator(&enemy)
-			}
 		}
-		draw_actor(game.player.rect, .Player, game.player.squash)
+		draw_actor(game.player.rect, game.player.squash)
 		draw_weapon(game.player)
 		if game.debug.visualizers[.Colliders] {
 			draw_debug_colliders()
@@ -838,43 +837,28 @@ draw_game :: proc() {
 
 	end_drawing()
 
-	// shape+transform rendering (art-revamp ticket 01): body shape comes from
-	// shape_kind (Player/Grounded = rect, Floater = circle, Swarmer =
-	// triangle), continuously squashed in place by `scale` while moving - no
-	// rotation/tilt, see update_actor_squash
-	draw_actor :: proc(rect: Rect, shape_kind: Actor_Shape_Kind, scale: Vec2) {
-		color: Color
-		switch shape_kind {
-		case .Player:
-			color = ACTOR_PLAYER_COLOR
-		case .Grounded:
-			color = ACTOR_GROUNDED_COLOR
-		case .Floater:
-			color = ACTOR_FLOATER_COLOR
-		case .Swarmer:
-			color = ACTOR_SWARMER_COLOR
-		}
+	// player body: a rectangle (ACTOR_SIZE), continuously squashed in place
+	// by `scale` while moving - no rotation/tilt, see update_actor_squash
+	// (art-revamp ticket 01). Enemies have their own draw_enemy below.
+	draw_actor :: proc(rect: Rect, scale: Vec2) {
+		dest := Rect{rect.x, rect.y, ACTOR_SIZE.x * scale.x, ACTOR_SIZE.y * scale.y}
+		origin := Vec2{dest.width / 2, dest.height}
+		draw_rectangle(dest, ACTOR_PLAYER_COLOR, origin, 0)
+	}
 
-		center := Vec2{rect.x, rect.y - ACTOR_SIZE.y / 2}
-		// scale.x and scale.y move symmetrically around 1 (ACTOR_MOVING_SCALE
-		// averages to exactly 1), so (scale.x+scale.y)/2 would always be 1 and
-		// the squash would be invisible on a single-radius shape - scale.x
-		// alone (the axis that grows while moving) still gives Floater/Swarmer
-		// a visible pulse
-		radius_scale := scale.x
+	// every enemy is a square: sized by its max health (enemy_body_size),
+	// continuously squashed in place while moving like the player, and faded
+	// toward ENEMY_MIN_OPACITY as its remaining health drops - replaces the
+	// old per-movement-style shape (rect/circle/triangle) and the separate
+	// enemy Health bar, which the fade now stands in for
+	draw_enemy :: proc(enemy: Enemy) {
+		size := enemy_body_size(ENEMY_MAX_HEALTH)
+		health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
+		color := enemy_body_color(movement_style_kind(enemy.movement), health_frac)
 
-		switch shape_kind {
-		case .Floater:
-			// a plain circle can't visually show rotation, but variant A
-			// (the locked transform) never rotates, so that's moot here
-			rl.DrawCircleV(center, (ACTOR_SIZE.x / 2) * radius_scale, color)
-		case .Swarmer:
-			rl.DrawPoly(center, 3, (ACTOR_SIZE.x / 2) * radius_scale, 0, color)
-		case .Player, .Grounded:
-			dest := Rect{rect.x, rect.y, ACTOR_SIZE.x * scale.x, ACTOR_SIZE.y * scale.y}
-			origin := Vec2{dest.width / 2, dest.height}
-			draw_rectangle(dest, color, origin, 0)
-		}
+		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
+		origin := Vec2{dest.width / 2, dest.height}
+		draw_rectangle(dest, color, origin, 0)
 	}
 
 	// flat fill for both floor and wall, walls get a darker inset bevel
