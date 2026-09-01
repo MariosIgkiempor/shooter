@@ -93,19 +93,50 @@ Attack_Style_Save :: struct {
 	ranged: Maybe(Ranged_Save) `json:"ranged,omitempty"`,
 }
 
-Spawner :: struct {
-	position:               Vec2,
-	interval:                f32,
-	timer:                   f32,
-	movement_template_save:  Movement_Style_Save,
-	attack_template_save:    Attack_Style_Save,
+Spawn_Composition_Entry :: struct {
+	movement_template_save: Movement_Style_Save,
+	attack_template_save:   Attack_Style_Save,
+	count:                  int,
+}
+
+Time_Elapsed :: struct {
+	seconds: f32,
+}
+
+Kills_Reached :: struct {
+	count: int,
+}
+
+Spawn_Condition_Save :: struct {
+	kind:          int,
+	time_elapsed:  Maybe(Time_Elapsed) `json:"time_elapsed,omitempty"`,
+	kills_reached: Maybe(Kills_Reached) `json:"kills_reached,omitempty"`,
+}
+
+One_Shot :: struct {}
+
+Repeating :: struct {
+	interval: f32,
+	duration: f32,
+}
+
+Spawn_Mode_Save :: struct {
+	kind:      int,
+	one_shot:  Maybe(One_Shot) `json:"one_shot,omitempty"`,
+	repeating: Maybe(Repeating) `json:"repeating,omitempty"`,
+}
+
+Spawn_Trigger :: struct {
+	condition_save: Spawn_Condition_Save,
+	mode_save:      Spawn_Mode_Save,
+	composition:    [dynamic]Spawn_Composition_Entry,
 }
 
 Map :: struct {
-	name:         string,
-	player_start: Vec2,
-	tilemap:      Tilemap,
-	spawners:     [dynamic]Spawner,
+	name:           string,
+	player_start:   Vec2,
+	tilemap:        Tilemap,
+	spawn_triggers: [dynamic]Spawn_Trigger,
 }
 
 Map_Source :: struct {
@@ -216,8 +247,8 @@ main :: proc() {
 write_map_literal :: proc(f: ^os.File, m: Map) {
 	fmt.fprintf(f, "Map{{name = %q, player_start = {{%v, %v}}, tilemap = ", m.name, m.player_start.x, m.player_start.y)
 	write_tilemap_literal(f, m.tilemap)
-	fmt.fprint(f, ", spawners = ")
-	write_spawners_literal(f, m.spawners)
+	fmt.fprint(f, ", spawn_triggers = ")
+	write_spawn_triggers_literal(f, m.spawn_triggers)
 	fmt.fprint(f, "}")
 }
 
@@ -241,21 +272,52 @@ write_tilemap_literal :: proc(f: ^os.File, t: Tilemap) {
 	fmt.fprint(f, "\t}}")
 }
 
-write_spawners_literal :: proc(f: ^os.File, spawners: [dynamic]Spawner) {
+write_spawn_triggers_literal :: proc(f: ^os.File, triggers: [dynamic]Spawn_Trigger) {
 	fmt.fprint(f, "{\n")
-	for spawner in spawners {
-		fmt.fprintf(
-			f,
-			"\t\tSpawner{{position = {{%v, %v}}, interval = %v, timer = %v, movement_template = ",
-			spawner.position.x, spawner.position.y,
-			spawner.interval, spawner.timer,
-		)
-		write_movement_style_literal(f, spawner.movement_template_save)
-		fmt.fprint(f, ", attack_template = ")
-		write_attack_style_literal(f, spawner.attack_template_save)
-		fmt.fprint(f, "},\n")
+	for trigger in triggers {
+		fmt.fprint(f, "\t\tSpawn_Trigger{condition = ")
+		write_spawn_condition_literal(f, trigger.condition_save)
+		fmt.fprint(f, ", mode = ")
+		write_spawn_mode_literal(f, trigger.mode_save)
+		fmt.fprint(f, ", composition = {")
+		for entry, i in trigger.composition {
+			if i > 0 {
+				fmt.fprint(f, ", ")
+			}
+			fmt.fprintf(f, "Spawn_Composition_Entry{{count = %v, movement_template = ", entry.count)
+			write_movement_style_literal(f, entry.movement_template_save)
+			fmt.fprint(f, ", attack_template = ")
+			write_attack_style_literal(f, entry.attack_template_save)
+			fmt.fprint(f, "}")
+		}
+		fmt.fprint(f, "}},\n")
 	}
 	fmt.fprint(f, "\t}")
+}
+
+write_spawn_condition_literal :: proc(f: ^os.File, s: Spawn_Condition_Save) {
+	switch s.kind {
+	case 0:
+		v := s.time_elapsed.? or_else Time_Elapsed{}
+		fmt.fprintf(f, "Time_Elapsed{{seconds = %v}}", v.seconds)
+	case 1:
+		v := s.kills_reached.? or_else Kills_Reached{}
+		fmt.fprintf(f, "Kills_Reached{{count = %v}}", v.count)
+	case:
+		fmt.fprint(f, "nil")
+	}
+}
+
+write_spawn_mode_literal :: proc(f: ^os.File, s: Spawn_Mode_Save) {
+	switch s.kind {
+	case 0:
+		fmt.fprint(f, "One_Shot{}")
+	case 1:
+		v := s.repeating.? or_else Repeating{}
+		fmt.fprintf(f, "Repeating{{interval = %v, duration = %v}}", v.interval, v.duration)
+	case:
+		fmt.fprint(f, "nil")
+	}
 }
 
 write_movement_style_literal :: proc(f: ^os.File, s: Movement_Style_Save) {

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Editor Spawn Trigger authoring — 3 variants</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1d2029;
+    --panel2: #232733;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8a8fa3;
+    --accent: #5ea1ff;
+    --ok: #4fd67a;
+    --warn: #ffb454;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px 16px 90px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; text-align: center; }
+  .question {
+    max-width: 780px;
+    margin: 0 auto 20px;
+    color: var(--dim);
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+  }
+  .stage {
+    max-width: 900px;
+    margin: 0 auto;
+    min-height: 520px;
+  }
+  .variant { display: none; }
+  .variant.active { display: block; }
+  .variant-title {
+    text-align: center;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  select, input[type=number] { font-family: inherit; }
+
+  /* ---------- shared control styles ---------- */
+  .pill-btn {
+    background: #262b3a; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 12px;
+  }
+  .pill-btn:hover { background: #303648; }
+  .pill-btn.accent { background: var(--accent); color: #0c0e13; border-color: var(--accent); font-weight: 600; }
+  .field-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+  .field-row label { width: 78px; color: var(--dim); flex-shrink: 0; }
+  .field-row select, .field-row input[type=number] {
+    background: #14161c; color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 6px; font-size: 12px;
+  }
+  .field-row input[type=number] { width: 64px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; }
+  .badge.time { background: #2a3a52; color: #8fc0ff; }
+  .badge.kills { background: #3a2a52; color: #d0a0ff; }
+  .badge.oneshot { background: #2a4a35; color: #7fe0a0; }
+  .badge.repeating { background: #4a3a2a; color: #f0c080; }
+  .comp-entry {
+    display: flex; align-items: center; gap: 6px; font-size: 12px;
+    background: #181a22; border: 1px solid var(--border); border-radius: 5px;
+    padding: 4px 6px; margin: 3px 0;
+  }
+  .comp-entry select { flex: 1; }
+  .comp-entry input[type=number] { width: 48px; }
+  .remove-x {
+    background: none; border: none; color: var(--bad); font-size: 13px; padding: 0 4px;
+  }
+
+  /* ---------- Variant A: list + inline expand ---------- */
+  #variantA .trigger-list { display: flex; flex-direction: column; gap: 8px; }
+  #variantA .trigger-row {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  }
+  #variantA .trigger-summary {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer;
+  }
+  #variantA .trigger-summary .idx { color: var(--dim); font-size: 12px; width: 18px; }
+  #variantA .trigger-summary .desc { flex: 1; font-size: 13px; }
+  #variantA .trigger-detail {
+    display: none; padding: 4px 14px 14px 42px; border-top: 1px solid var(--border);
+  }
+  #variantA .trigger-row.expanded .trigger-detail { display: block; }
+  #variantA .comp-list { margin: 6px 0 6px 0; }
+  #variantA .add-trigger-btn { margin-top: 10px; width: 100%; padding: 10px; }
+
+  /* ---------- Variant B: tile grid + side detail ---------- */
+  #variantB { gap: 18px; align-items: flex-start; }
+  #variantB.active { display: flex; }
+  #variantB .tile-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: 1;
+  }
+  #variantB .tile {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; cursor: pointer; font-size: 12px; min-height: 80px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  #variantB .tile.selected { outline: 2px solid var(--accent); }
+  #variantB .tile .tile-title { font-size: 13px; margin-bottom: 6px; }
+  #variantB .tile.add-tile {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; color: var(--dim); border-style: dashed;
+  }
+  #variantB .detail-panel {
+    width: 300px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; flex-shrink: 0; min-height: 380px;
+  }
+  #variantB .detail-panel h3 { margin: 0 0 10px; font-size: 13px; color: var(--accent); }
+  #variantB .detail-panel .empty { color: var(--dim); font-size: 12px; text-align: center; margin-top: 40px; }
+
+  /* ---------- Variant C: property-button cycling ---------- */
+  #variantC .cycler-header {
+    display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 16px;
+  }
+  #variantC .cycler-header .idx-label { font-size: 13px; color: var(--dim); min-width: 140px; text-align: center; }
+  #variantC .prop-panel {
+    max-width: 460px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  #variantC .prop-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  #variantC .prop-row:last-of-type { border-bottom: none; }
+  #variantC .prop-row .prop-label { width: 90px; color: var(--dim); font-size: 12px; }
+  #variantC .cycle-btn {
+    flex: 1; text-align: left; background: #181a22; border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; padding: 6px 10px; font-size: 12px;
+  }
+  #variantC .stepper { display: flex; align-items: center; gap: 4px; }
+  #variantC .stepper button { width: 22px; height: 22px; border-radius: 4px; border: 1px solid var(--border); background: #181a22; color: var(--text); }
+  #variantC .stepper span { min-width: 36px; text-align: center; font-size: 12px; }
+  #variantC .comp-cycler { margin-top: 4px; }
+  #variantC .footer-actions { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+
+  /* ---------- floating switcher ---------- */
+  .switcher {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: #0c0e13; border: 1px solid var(--border); border-radius: 999px;
+    padding: 8px 6px; display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+  }
+  .switcher button.arrow {
+    background: none; border: none; color: var(--text); font-size: 16px; padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .switcher button.arrow:hover { background: #262b3a; }
+  .switcher .label { font-size: 13px; min-width: 220px; text-align: center; }
+  .switcher .label b { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>Editor: authoring a map's Spawn Trigger timeline</h1>
+<p class="question">
+  <b>Question:</b> now that a <code>Spawner</code> has no position to click-and-place,
+  what does the in-editor UX for building a map's list of Spawn Triggers look like?
+  Three structurally different layouts below, all editing the <i>same</i> underlying
+  mock trigger data — switch between them with the bar at the bottom and see which
+  authoring flow feels best for adding/editing several triggers with mixed
+  conditions, modes, and enemy compositions.
+</p>
+
+<div class="stage">
+
+  <!-- ================= VARIANT A ================= -->
+  <div class="variant active" id="variantA">
+    <div class="variant-title">A — List with inline expand</div>
+    <div class="trigger-list" id="a-list"></div>
+    <button class="pill-btn accent add-trigger-btn" onclick="addTrigger()">+ Add Spawn Trigger</button>
+  </div>
+
+  <!-- ================= VARIANT B ================= -->
+  <div class="variant" id="variantB">
+    <div style="flex:1">
+      <div class="variant-title">B — Tile grid + side detail panel</div>
+      <div class="tile-grid" id="b-grid"></div>
+    </div>
+    <div class="detail-panel" id="b-detail"></div>
+  </div>
+
+  <!-- ================= VARIANT C ================= -->
+  <div class="variant" id="variantC">
+    <div class="variant-title">C — Property-button cycling (extends today's Spawners-mode feel)</div>
+    <div class="cycler-header">
+      <button class="pill-btn" onclick="cCyclePrev()">◀</button>
+      <span class="idx-label" id="c-idx-label"></span>
+      <button class="pill-btn" onclick="cCycleNext()">▶</button>
+    </div>
+    <div class="prop-panel" id="c-panel"></div>
+    <div class="footer-actions">
+      <button class="pill-btn accent" onclick="cAddTrigger()">+ New Trigger</button>
+      <button class="pill-btn" style="color:var(--bad)" onclick="cDeleteCurrent()">Delete This Trigger</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="switcher">
+  <button class="arrow" onclick="cycleVariant(-1)">←</button>
+  <div class="label" id="switcher-label"></div>
+  <button class="arrow" onclick="cycleVariant(1)">→</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Shared mock data — all three variants read/write this same array so
+// switching variants mid-edit shows the same content in a different layout.
+// ---------------------------------------------------------------------------
+const MOVEMENT_STYLES = ["Grounded", "Floater", "Swarmer"];
+const ATTACK_STYLES = ["Melee", "Ranged", "None"];
+
+let nextId = 4;
+let triggers = [
+  {
+    id: 1, conditionType: "time", conditionValue: 30,
+    mode: "oneshot", interval: 5, duration: 0,
+    composition: [{ movement: "Grounded", attack: "Melee", count: 3 }],
+  },
+  {
+    id: 2, conditionType: "kills", conditionValue: 20,
+    mode: "repeating", interval: 8, duration: 0,
+    composition: [
+      { movement: "Floater", attack: "Ranged", count: 2 },
+      { movement: "Grounded", attack: "Melee", count: 1 },
+    ],
+  },
+  {
+    id: 3, conditionType: "time", conditionValue: 180,
+    mode: "repeating", interval: 4, duration: 45,
+    composition: [{ movement: "Swarmer", attack: "None", count: 5 }],
+  },
+];
+
+function summary(t) {
+  const cond = t.conditionType === "time" ? `Time ≥ ${t.conditionValue}s` : `Kills ≥ ${t.conditionValue}`;
+  const mode = t.mode === "oneshot" ? "One-shot" : `Repeating every ${t.interval}s${t.duration > 0 ? ` for ${t.duration}s` : " (indefinite)"}`;
+  const comp = t.composition.map(c => `${c.count}× ${c.movement}/${c.attack}`).join(", ");
+  return { cond, mode, comp };
+}
+
+function addTrigger() {
+  triggers.push({ id: nextId++, conditionType: "time", conditionValue: 60, mode: "oneshot", interval: 5, duration: 0, composition: [{ movement: "Grounded", attack: "Melee", count: 1 }] });
+  renderAll();
+}
+function removeTrigger(id) {
+  triggers = triggers.filter(t => t.id !== id);
+  if (bSelectedId === id) bSelectedId = null;
+  if (cIndex >= triggers.length) cIndex = Math.max(0, triggers.length - 1);
+  renderAll();
+}
+function addComposition(t) {
+  t.composition.push({ movement: "Grounded", attack: "Melee", count: 1 });
+  renderAll();
+}
+function removeComposition(t, idx) {
+  t.composition.splice(idx, 1);
+  if (t.composition.length === 0) t.composition.push({ movement: "Grounded", attack: "Melee", count: 1 });
+  renderAll();
+}
+
+// ---------------------------------------------------------------------------
+// Variant A — list with inline expand
+// ---------------------------------------------------------------------------
+let aExpanded = new Set([1]);
+
+function renderVariantA() {
+  const list = document.getElementById("a-list");
+  list.innerHTML = "";
+  triggers.forEach((t, i) => {
+    const s = summary(t);
+    const row = document.createElement("div");
+    row.className = "trigger-row" + (aExpanded.has(t.id) ? " expanded" : "");
+    row.innerHTML = `
+      <div class="trigger-summary">
+        <span class="idx">${i + 1}</span>
+        <span class="badge ${t.conditionType}">${s.cond}</span>
+        <span class="badge ${t.mode === 'oneshot' ? 'oneshot' : 'repeating'}">${t.mode === 'oneshot' ? 'One-shot' : 'Repeating'}</span>
+        <span class="desc">${s.comp}</span>
+        <button class="remove-x" title="Remove trigger">✕</button>
+      </div>
+      <div class="trigger-detail"></div>
+    `;
+    row.querySelector(".trigger-summary").addEventListener("click", (e) => {
+      if (e.target.classList.contains("remove-x")) { removeTrigger(t.id); return; }
+      if (aExpanded.has(t.id)) aExpanded.delete(t.id); else aExpanded.add(t.id);
+      renderVariantA();
+    });
+    const detail = row.querySelector(".trigger-detail");
+    detail.appendChild(buildDetailForm(t));
+    list.appendChild(row);
+  });
+}
+
+function buildDetailForm(t) {
+  const wrap = document.createElement("div");
+
+  const condRow = document.createElement("div");
+  condRow.className = "field-row";
+  condRow.innerHTML = `<label>Condition</label>`;
+  const condSel = document.createElement("select");
+  condSel.innerHTML = `<option value="time">Time elapsed ≥</option><option value="kills">Kills reached ≥</option>`;
+  condSel.value = t.conditionType;
+  condSel.onchange = () => { t.conditionType = condSel.value; renderAll(); };
+  const condVal = document.createElement("input");
+  condVal.type = "number"; condVal.value = t.conditionValue;
+  condVal.onchange = () => { t.conditionValue = Number(condVal.value); renderAll(); };
+  condRow.append(condSel, condVal, t.conditionType === "time" ? "sec" : "kills");
+  wrap.appendChild(condRow);
+
+  const modeRow = document.createElement("div");
+  modeRow.className = "field-row";
+  modeRow.innerHTML = `<label>Mode</label>`;
+  const modeSel = document.createElement("select");
+  modeSel.innerHTML = `<option value="oneshot">One-shot</option><option value="repeating">Repeating</option>`;
+  modeSel.value = t.mode;
+  modeSel.onchange = () => { t.mode = modeSel.value; renderAll(); };
+  modeRow.appendChild(modeSel);
+  wrap.appendChild(modeRow);
+
+  if (t.mode === "repeating") {
+    const intRow = document.createElement("div");
+    intRow.className = "field-row";
+    intRow.innerHTML = `<label>Interval</label>`;
+    const intVal = document.createElement("input");
+    intVal.type = "number"; intVal.value = t.interval;
+    intVal.onchange = () => { t.interval = Number(intVal.value); renderAll(); };
+    intRow.append(intVal, "sec");
+    wrap.appendChild(intRow);
+
+    const durRow = document.createElement("div");
+    durRow.className = "field-row";
+    durRow.innerHTML = `<label>Duration</label>`;
+    const durVal = document.createElement("input");
+    durVal.type = "number"; durVal.value = t.duration;
+    durVal.onchange = () => { t.duration = Number(durVal.value); renderAll(); };
+    durRow.append(durVal, "sec (0 = indefinite)");
+    wrap.appendChild(durRow);
+  }
+
+  const compLabel = document.createElement("div");
+  compLabel.className = "field-row";
+  compLabel.innerHTML = `<label>Composition</label>`;
+  wrap.appendChild(compLabel);
+
+  const compList = document.createElement("div");
+  compList.className = "comp-list";
+  t.composition.forEach((c, idx) => compList.appendChild(buildCompRow(t, c, idx)));
+  wrap.appendChild(compList);
+
+  const addCompBtn = document.createElement("button");
+  addCompBtn.className = "pill-btn";
+  addCompBtn.textContent = "+ entry";
+  addCompBtn.onclick = () => addComposition(t);
+  wrap.appendChild(addCompBtn);
+
+  return wrap;
+}
+
+function buildCompRow(t, c, idx) {
+  const row = document.createElement("div");
+  row.className = "comp-entry";
+  const movSel = document.createElement("select");
+  MOVEMENT_STYLES.forEach(m => movSel.innerHTML += `<option ${m === c.movement ? "selected" : ""}>${m}</option>`);
+  movSel.onchange = () => { c.movement = movSel.value; renderAll(); };
+  const atkSel = document.createElement("select");
+  ATTACK_STYLES.forEach(a => atkSel.innerHTML += `<option ${a === c.attack ? "selected" : ""}>${a}</option>`);
+  atkSel.onchange = () => { c.attack = atkSel.value; renderAll(); };
+  const countInp = document.createElement("input");
+  countInp.type = "number"; countInp.value = c.count; countInp.min = 1;
+  countInp.onchange = () => { c.count = Number(countInp.value); renderAll(); };
+  const rm = document.createElement("button");
+  rm.className = "remove-x"; rm.textContent = "✕";
+  rm.onclick = () => removeComposition(t, idx);
+  row.append("×", countInp, movSel, atkSel, rm);
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// Variant B — tile grid + side detail panel
+// ---------------------------------------------------------------------------
+let bSelectedId = triggers[0].id;
+
+function renderVariantB() {
+  const grid = document.getElementById("b-grid");
+  grid.innerHTML = "";
+  triggers.forEach((t, i) => {
+    const s = summary(t);
+    const tile = document.createElement("div");
+    tile.className = "tile" + (t.id === bSelectedId ? " selected" : "");
+    tile.innerHTML = `<div class="tile-title">Trigger ${i + 1}</div><div><span class="badge ${t.conditionType}">${s.cond}</span></div><div style="color:var(--dim)">${s.comp}</div>`;
+    tile.onclick = () => { bSelectedId = t.id; renderVariantB(); };
+    grid.appendChild(tile);
+  });
+  const addTile = document.createElement("div");
+  addTile.className = "tile add-tile";
+  addTile.textContent = "+";
+  addTile.onclick = () => { addTrigger(); bSelectedId = triggers[triggers.length - 1].id; };
+  grid.appendChild(addTile);
+
+  const detail = document.getElementById("b-detail");
+  detail.innerHTML = "";
+  const t = triggers.find(t => t.id === bSelectedId);
+  if (!t) {
+    detail.innerHTML = `<div class="empty">Select a tile to edit its Spawn Trigger</div>`;
+    return;
+  }
+  const h = document.createElement("h3");
+  h.textContent = `Editing Trigger ${triggers.indexOf(t) + 1}`;
+  detail.appendChild(h);
+  detail.appendChild(buildDetailForm(t));
+  const rm = document.createElement("button");
+  rm.className = "pill-btn"; rm.style.color = "var(--bad)"; rm.style.marginTop = "10px";
+  rm.textContent = "Remove trigger";
+  rm.onclick = () => removeTrigger(t.id);
+  detail.appendChild(rm);
+}
+
+// ---------------------------------------------------------------------------
+// Variant C — property-button cycling
+// ---------------------------------------------------------------------------
+let cIndex = 0;
+
+function cCyclePrev() { cIndex = (cIndex - 1 + triggers.length) % triggers.length; renderVariantC(); }
+function cCycleNext() { cIndex = (cIndex + 1) % triggers.length; renderVariantC(); }
+function cAddTrigger() { addTrigger(); cIndex = triggers.length - 1; renderVariantC(); }
+function cDeleteCurrent() { if (triggers.length) removeTrigger(triggers[cIndex].id); }
+
+function cycleEnum(arr, current) {
+  const i = arr.indexOf(current);
+  return arr[(i + 1) % arr.length];
+}
+
+function renderVariantC() {
+  const label = document.getElementById("c-idx-label");
+  const panel = document.getElementById("c-panel");
+  if (triggers.length === 0) {
+    label.textContent = "No triggers";
+    panel.innerHTML = `<div style="text-align:center;color:var(--dim)">Press "+ New Trigger" below</div>`;
+    return;
+  }
+  cIndex = Math.min(cIndex, triggers.length - 1);
+  const t = triggers[cIndex];
+  label.textContent = `Trigger ${cIndex + 1} of ${triggers.length}`;
+
+  panel.innerHTML = "";
+
+  function propRow(labelText, buttonText, onClick) {
+    const row = document.createElement("div");
+    row.className = "prop-row";
+    row.innerHTML = `<span class="prop-label">${labelText}</span>`;
+    const btn = document.createElement("button");
+    btn.className = "cycle-btn";
+    btn.textContent = buttonText + "  ▸";
+    btn.onclick = onClick;
+    row.appendChild(btn);
+    panel.appendChild(row);
+  }
+  function stepperRow(labelText, value, onDec, onInc) {
+    const row = document.createElement("div");
+    row.className = "prop-row";
+    row.innerHTML = `<span class="prop-label">${labelText}</span>`;
+    const stepper = document.createElement("div");
+    stepper.className = "stepper";
+    const dec = document.createElement("button"); dec.textContent = "−"; dec.onclick = onDec;
+    const span = document.createElement("span"); span.textContent = value;
+    const inc = document.createElement("button"); inc.textContent = "+"; inc.onclick = onInc;
+    stepper.append(dec, span, inc);
+    row.appendChild(stepper);
+    panel.appendChild(row);
+  }
+
+  propRow("Condition", t.conditionType === "time" ? `Time Elapsed ${t.conditionValue}s` : `Kills Reached ${t.conditionValue}`, () => {
+    t.conditionType = t.conditionType === "time" ? "kills" : "time"; renderAll();
+  });
+  stepperRow(t.conditionType === "time" ? "Seconds" : "Kills", t.conditionValue,
+    () => { t.conditionValue = Math.max(0, t.conditionValue - (t.conditionType === "time" ? 10 : 1)); renderAll(); },
+    () => { t.conditionValue += (t.conditionType === "time" ? 10 : 1); renderAll(); });
+
+  propRow("Mode", t.mode === "oneshot" ? "One-Shot" : "Repeating", () => {
+    t.mode = t.mode === "oneshot" ? "repeating" : "oneshot"; renderAll();
+  });
+  if (t.mode === "repeating") {
+    stepperRow("Interval", t.interval + "s", () => { t.interval = Math.max(1, t.interval - 1); renderAll(); }, () => { t.interval += 1; renderAll(); });
+    stepperRow("Duration", t.duration === 0 ? "∞" : t.duration + "s", () => { t.duration = Math.max(0, t.duration - 5); renderAll(); }, () => { t.duration += 5; renderAll(); });
+  }
+
+  const compHeader = document.createElement("div");
+  compHeader.className = "prop-row";
+  compHeader.innerHTML = `<span class="prop-label">Composition</span><button class="pill-btn" style="margin-left:auto">+ entry</button>`;
+  compHeader.querySelector("button").onclick = () => { addComposition(t); };
+  panel.appendChild(compHeader);
+
+  t.composition.forEach((c, idx) => {
+    const row = document.createElement("div");
+    row.className = "prop-row comp-cycler";
+    row.innerHTML = `<span class="prop-label">Entry ${idx + 1}</span>`;
+    const movBtn = document.createElement("button");
+    movBtn.className = "cycle-btn"; movBtn.style.flex = "0 0 30%";
+    movBtn.textContent = c.movement + " ▸";
+    movBtn.onclick = () => { c.movement = cycleEnum(MOVEMENT_STYLES, c.movement); renderAll(); };
+    const atkBtn = document.createElement("button");
+    atkBtn.className = "cycle-btn"; atkBtn.style.flex = "0 0 30%";
+    atkBtn.textContent = c.attack + " ▸";
+    atkBtn.onclick = () => { c.attack = cycleEnum(ATTACK_STYLES, c.attack); renderAll(); };
+    const stepper = document.createElement("div");
+    stepper.className = "stepper";
+    const dec = document.createElement("button"); dec.textContent = "−";
+    dec.onclick = () => { c.count = Math.max(1, c.count - 1); renderAll(); };
+    const span = document.createElement("span"); span.textContent = "×" + c.count;
+    const inc = document.createElement("button"); inc.textContent = "+";
+    inc.onclick = () => { c.count += 1; renderAll(); };
+    stepper.append(dec, span, inc);
+    const rm = document.createElement("button");
+    rm.className = "remove-x"; rm.textContent = "✕";
+    rm.onclick = () => removeComposition(t, idx);
+    row.append(movBtn, atkBtn, stepper, rm);
+    panel.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// switcher
+// ---------------------------------------------------------------------------
+const variants = [
+  { key: "variantA", name: "A (List, inline expand)" },
+  { key: "variantB", name: "B (Tile grid + side panel)" },
+  { key: "variantC", name: "C (Property-button cycling)" },
+];
+let activeVariant = 0;
+
+function renderAll() {
+  renderVariantA();
+  renderVariantB();
+  renderVariantC();
+}
+
+function showVariant() {
+  variants.forEach((v, i) => document.getElementById(v.key).classList.toggle("active", i === activeVariant));
+  document.getElementById("switcher-label").innerHTML = `<b>${variants[activeVariant].key[7]}</b> — ${variants[activeVariant].name.split("(")[1].replace(")", "")}`;
+}
+
+function cycleVariant(dir) {
+  activeVariant = (activeVariant + dir + variants.length) % variants.length;
+  showVariant();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  if (e.key === "ArrowLeft") cycleVariant(-1);
+  if (e.key === "ArrowRight") cycleVariant(1);
+});
+
+renderAll();
+showVariant();
+</script>
+</body>
+</html>

@@ -5,16 +5,16 @@ import "core:os"
 import "core:reflect"
 import "core:slice"
 
-// A named, reusable level definition - tile layout, spawner definitions, and
-// a player start position. The same struct shape serves both the on-disk
-// file (via load_map/save_map) and the live runtime copy a session plays on
-// (game.current_map while Playing, game.editing_map while Editing) - see
-// CONTEXT.md's Map entry.
+// A named, reusable level definition - tile layout, a Spawn Trigger
+// timeline, and a player start position. The same struct shape serves both
+// the on-disk file (via load_map/save_map) and the live runtime copy a
+// session plays on (game.current_map while Playing, game.editing_map while
+// Editing) - see CONTEXT.md's Map entry.
 Map :: struct {
-	name:         string,
-	player_start: Vec2,
-	tilemap:      Tilemap,
-	spawners:     [dynamic]Spawner,
+	name:           string,
+	player_start:   Vec2,
+	tilemap:        Tilemap,
+	spawn_triggers: [dynamic]Spawn_Trigger,
 }
 
 load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
@@ -32,9 +32,13 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 		return {}, false
 	}
 
-	for &spawner in map_data.spawners {
-		spawner.movement_template = movement_style_from_save(spawner.movement_template_save)
-		spawner.attack_template = attack_style_from_save(spawner.attack_template_save)
+	for &trigger in map_data.spawn_triggers {
+		trigger.condition = spawn_condition_from_save(trigger.condition_save)
+		trigger.mode = spawn_mode_from_save(trigger.mode_save)
+		for &entry in trigger.composition {
+			entry.movement_template = movement_style_from_save(entry.movement_template_save)
+			entry.attack_template = attack_style_from_save(entry.attack_template_save)
+		}
 	}
 
 	log_info("Loaded map from `{}`", path)
@@ -44,9 +48,13 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 save_map :: proc(path: string, map_data: Map) -> bool {
 	log_info("Saving map to `{}`", path)
 
-	for &spawner in map_data.spawners {
-		spawner.movement_template_save = movement_style_to_save(spawner.movement_template)
-		spawner.attack_template_save = attack_style_to_save(spawner.attack_template)
+	for &trigger in map_data.spawn_triggers {
+		trigger.condition_save = spawn_condition_to_save(trigger.condition)
+		trigger.mode_save = spawn_mode_to_save(trigger.mode)
+		for &entry in trigger.composition {
+			entry.movement_template_save = movement_style_to_save(entry.movement_template)
+			entry.attack_template_save = attack_style_to_save(entry.attack_template)
+		}
 	}
 
 	json_data, json_error := json.marshal(map_data, allocator = context.temp_allocator)
@@ -66,26 +74,37 @@ save_map :: proc(path: string, map_data: Map) -> bool {
 }
 
 // deep-copies a Map's dynamic-array fields. A plain value copy (`a := b`)
-// only copies the [dynamic]Tile/[dynamic]Spawner slice headers, aliasing the
-// same backing memory - fine for load_map's result (json.unmarshal always
-// allocates fresh backing arrays), but anything copying out of a long-lived
-// shared Map value (the baked `maps` table, or game.current_map while
-// entering Editing) must go through this instead, or in-run tile/spawner
-// mutation would corrupt the shared source.
+// only copies the [dynamic]Tile/[dynamic]Spawn_Trigger slice headers,
+// aliasing the same backing memory - fine for load_map's result
+// (json.unmarshal always allocates fresh backing arrays), but anything
+// copying out of a long-lived shared Map value (the baked `maps` table, or
+// game.current_map while entering Editing) must go through this instead, or
+// in-run tile/trigger mutation would corrupt the shared source.
+// Spawn_Trigger.composition is itself a slice field, so cloning the outer
+// array alone would leave every clone's composition aliasing the same
+// backing array - each trigger needs its own nested clone too.
 clone_map :: proc(template: Map) -> Map {
 	result := template
 	result.tilemap.tiles = slice.clone_to_dynamic(template.tilemap.tiles[:])
-	result.spawners = slice.clone_to_dynamic(template.spawners[:])
+	result.spawn_triggers = slice.clone_to_dynamic(template.spawn_triggers[:])
+	for &trigger in result.spawn_triggers {
+		trigger.composition = slice.clone(trigger.composition)
+	}
 	return result
 }
 
 // frees a Map's own dynamic-array backing memory (as opposed to whatever it
 // was cloned from). Call before overwriting a live Map value (e.g.
 // game.editing_map, reassigned every time Editing is entered or the map
-// switcher picks a new map) so the previous map's tiles/spawners don't leak.
+// switcher picks a new map) so the previous map's tiles/triggers don't leak
+// - each trigger's composition is freed before the outer array, mirroring
+// clone_map's nested clone above.
 delete_map :: proc(map_data: Map) {
 	delete(map_data.tilemap.tiles)
-	delete(map_data.spawners)
+	for trigger in map_data.spawn_triggers {
+		delete(trigger.composition)
+	}
+	delete(map_data.spawn_triggers)
 }
 
 // resolves resume-vs-reset player positioning against game_save.json's

@@ -420,3 +420,29 @@ draw_shop_upgrade_row :: proc(kind: Upgrade_Kind) {
 		}
 	}
 }
+
+// -- live Run-scoped meta-stats ---------------------------------------------
+
+HUD_COUNTER_FONT_SIZE :: 10
+HUD_COUNTER_MARGIN :: 10 // mirrors the top-left "Editing" text's margin
+
+// top-right "Kills: N   Time: MM:SS" readout, drawn every frame while
+// Playing (main.odin's game.ui_camera block). Reads the existing Run-scoped
+// Player fields directly - see CONTEXT.md's Run entry and the enemy-spawn-
+// revamp map's ticket 01 - the same total_kills/survival_seconds the Run
+// End screen and Spawn Trigger Kills_Reached/Time_Elapsed conditions use.
+// No slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT), so
+// spaces separate the two stats instead of a "/"-joined format.
+draw_hud_counters :: proc() {
+	kills := total_kills(game.player.kills)
+	total_seconds := int(game.player.survival_seconds)
+	minutes := total_seconds / 60
+	seconds := total_seconds % 60
+	text := fmt.tprintf("Kills: {}   Time: {:02d}:{:02d}", kills, minutes, seconds)
+
+	size := rl.MeasureTextEx(font, strings.clone_to_cstring(text, context.temp_allocator), HUD_COUNTER_FONT_SIZE, 0)
+	virtual_width := game.window_width / game.ui_camera.zoom
+	pos := Vec2{virtual_width - size.x - HUD_COUNTER_MARGIN, HUD_COUNTER_MARGIN}
+
+	draw_text(text, pos, HUD_COUNTER_FONT_SIZE, 0, rl.WHITE)
+}

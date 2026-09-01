@@ -9,7 +9,6 @@ import rl "vendor:raylib"
 
 MAX_ENEMIES :: 24
 ENEMY_SIZE: i32 = 12
-DEFAULT_SPAWNER_INTERVAL :: 3
 ENEMY_MAX_HEALTH :: 50
 
 // which per-kind XP payout (enemy_xp_presets, account_progression.odin) an
@@ -85,19 +84,144 @@ Ranged :: struct {
 	fire_timer:       f32, // runtime countdown, not editor-set
 }
 
-Spawner :: struct {
-	position: Vec2,
-	interval: f32,
-	timer:    f32,
+// one entry in a Map's spawn timeline, replacing the old fixed-position
+// Spawner - no position is ever authored, enemies always spawn off-screen
+// relative to the camera (pick_offscreen_spawn_point). See CONTEXT.md's
+// Spawn Trigger entry and the enemy-spawn-revamp map's ticket 03.
+//
+// condition/mode are tagged json:"-" for the same reason Weapon.variant and
+// Spawn_Composition_Entry's templates are: core:encoding/json's union-decode
+// guessing doesn't work reliably here either - confirmed directly (a
+// Kills_Reached/Repeating trigger round-tripped through json.marshal/
+// json.unmarshal on the bare unions came back as Time_Elapsed(0)/One_Shot,
+// silently wrong). condition_save/mode_save are the plain persisted mirror,
+// same *_Save + explicit `kind` discriminant pattern as
+// Movement_Style_Save/Attack_Style_Save below.
+Spawn_Trigger :: struct {
+	condition:      Spawn_Condition `json:"-"`,
+	condition_save: Spawn_Condition_Save,
+	mode:           Spawn_Mode `json:"-"`,
+	mode_save:      Spawn_Mode_Save,
+	composition:    []Spawn_Composition_Entry,
 
-	// copied by value into each spawned enemy; tagged json:"-" for the same
-	// reason Weapon.variant is (weapon.odin) - see Movement_Style_Save /
-	// Attack_Style_Save below and the per-spawner conversion loop in
-	// main.odin's save_game/load_game
+	// runtime-only - tagged json:"-" unlike Spawner.timer's own precedent,
+	// since `fired` is a permanent latch rather than a harmless countdown:
+	// pressing F1 mid-Playing clones the live map verbatim (clone_map) into
+	// game.editing_map, and saving from there would otherwise bake whatever
+	// fired/timer/elapsed happened to be at that moment into the map file,
+	// permanently disabling a One_Shot trigger (or desyncing a Repeating
+	// one's clock) for every future load of it.
+	fired:   bool `json:"-"`, // One_Shot: already spawned. Repeating: already activated.
+	timer:   f32 `json:"-"`, // Repeating: counts down to the next interval spawn.
+	elapsed: f32 `json:"-"`, // Repeating: seconds since activation, checked against duration.
+}
+
+Spawn_Condition :: union {
+	Time_Elapsed,
+	Kills_Reached,
+}
+// checked against Player.survival_seconds (the same Run-scoped field the
+// live HUD counter and Run End screen both read - see CONTEXT.md's Run
+// entry)
+Time_Elapsed :: struct {
+	seconds: f32,
+}
+// checked against total_kills(Player.kills) - the Run's cumulative kill
+// total, not a separate per-map count
+Kills_Reached :: struct {
+	count: int,
+}
+
+Spawn_Condition_Kind :: enum {
+	Time_Elapsed,
+	Kills_Reached,
+}
+
+// plain (non-union) persisted shape of Spawn_Trigger.condition - see the
+// json:"-" comment on Spawn_Trigger.condition above
+Spawn_Condition_Save :: struct {
+	kind:          Spawn_Condition_Kind,
+	time_elapsed:  Maybe(Time_Elapsed) `json:"time_elapsed,omitempty"`,
+	kills_reached: Maybe(Kills_Reached) `json:"kills_reached,omitempty"`,
+}
+
+spawn_condition_to_save :: proc(condition: Spawn_Condition) -> Spawn_Condition_Save {
+	switch v in condition {
+	case Time_Elapsed:
+		return {kind = .Time_Elapsed, time_elapsed = v}
+	case Kills_Reached:
+		return {kind = .Kills_Reached, kills_reached = v}
+	}
+	return {} // unreachable: every Spawn_Trigger always has a condition
+}
+
+// explicit switch on the decoded `kind` - never lets json.unmarshal's
+// union-variant-guessing loop run, same rationale as movement_style_from_save
+spawn_condition_from_save :: proc(s: Spawn_Condition_Save) -> Spawn_Condition {
+	switch s.kind {
+	case .Time_Elapsed:
+		return s.time_elapsed.? or_else Time_Elapsed{}
+	case .Kills_Reached:
+		return s.kills_reached.? or_else Kills_Reached{}
+	}
+	return Time_Elapsed{} // unreachable: s.kind is always one of the above
+}
+
+Spawn_Mode :: union {
+	One_Shot,
+	Repeating,
+}
+One_Shot :: struct {}
+Repeating :: struct {
+	interval: f32,
+	duration: f32, // <= 0 means indefinite: runs until the Run ends
+}
+
+Spawn_Mode_Kind :: enum {
+	One_Shot,
+	Repeating,
+}
+
+// plain (non-union) persisted shape of Spawn_Trigger.mode - see the
+// json:"-" comment on Spawn_Trigger.mode above
+Spawn_Mode_Save :: struct {
+	kind:      Spawn_Mode_Kind,
+	one_shot:  Maybe(One_Shot) `json:"one_shot,omitempty"`,
+	repeating: Maybe(Repeating) `json:"repeating,omitempty"`,
+}
+
+spawn_mode_to_save :: proc(mode: Spawn_Mode) -> Spawn_Mode_Save {
+	switch v in mode {
+	case One_Shot:
+		return {kind = .One_Shot, one_shot = v}
+	case Repeating:
+		return {kind = .Repeating, repeating = v}
+	}
+	return {} // unreachable: every Spawn_Trigger always has a mode
+}
+
+// explicit switch on the decoded `kind` - never lets json.unmarshal's
+// union-variant-guessing loop run, same rationale as movement_style_from_save
+spawn_mode_from_save :: proc(s: Spawn_Mode_Save) -> Spawn_Mode {
+	switch s.kind {
+	case .One_Shot:
+		return s.one_shot.? or_else One_Shot{}
+	case .Repeating:
+		return s.repeating.? or_else Repeating{}
+	}
+	return One_Shot{} // unreachable: s.kind is always one of the above
+}
+
+// one (Movement Style, Attack Style, count) entry in a Spawn_Trigger's
+// composition - generalizes Spawner's single fixed template into a mix,
+// reusing Movement_Style/Attack_Style's existing *_Save mirror pattern
+// verbatim (see Movement_Style_Save/Attack_Style_Save below)
+Spawn_Composition_Entry :: struct {
 	movement_template:      Movement_Style `json:"-"`,
 	movement_template_save: Movement_Style_Save,
 	attack_template:        Attack_Style `json:"-"`,
 	attack_template_save:   Attack_Style_Save,
+	count:                  int,
 }
 
 // discriminant for Movement_Style_Save; also doubles as the grouping key for
@@ -122,8 +246,8 @@ movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 	return .Inert
 }
 
-// plain (non-union) persisted shape of Spawner.movement_template - see the
-// json:"-" comment on Spawner.movement_template above
+// plain (non-union) persisted shape of Spawn_Composition_Entry.movement_template
+// - see the json:"-" comment on Spawn_Composition_Entry.movement_template above
 Movement_Style_Save :: struct {
 	kind:     Movement_Style_Kind,
 	grounded: Maybe(Grounded) `json:"grounded,omitempty"`,
@@ -168,8 +292,8 @@ Attack_Style_Kind :: enum {
 	Inert,
 }
 
-// plain (non-union) persisted shape of Spawner.attack_template - see the
-// json:"-" comment on Spawner.attack_template above
+// plain (non-union) persisted shape of Spawn_Composition_Entry.attack_template
+// - see the json:"-" comment on Spawn_Composition_Entry.attack_template above
 Attack_Style_Save :: struct {
 	kind:   Attack_Style_Kind,
 	melee:  Maybe(Melee) `json:"melee,omitempty"`,
@@ -397,27 +521,94 @@ floater_direction :: proc(pos, target: Vec2, t, phase, freq, pull_strength: f32)
 }
 
 // enemies are transient (`json:"-"`), so they are empty after every load;
-// this must run after load_game so they start clean under whatever spawners
-// were loaded. Spawners themselves are level data and persist through
-// save/load, so they're left untouched here.
+// this must run after load_game so they start clean under whatever Spawn
+// Triggers were loaded. Spawn Triggers themselves are level data and persist
+// through save/load, so they're left untouched here.
 reset_enemies :: proc() {
 	clear(&game.enemies)
 }
 
-update_spawners :: proc(dt: f32) {
-	for &spawner in game.current_map.spawners {
-		spawner.timer -= dt
-		if spawner.timer > 0 || len(game.enemies) >= MAX_ENEMIES {
+// edge-triggered condition check, then Mode-driven firing - a trigger's
+// condition is checked once per frame only until `fired` flips true, and
+// never re-checked after (see CONTEXT.md's Spawn Trigger entry and the
+// enemy-spawn-revamp map's ticket 03). Multiple triggers (including several
+// concurrently-running Repeating ones) may be active at once - no mutual
+// exclusion, pressure just layers.
+update_spawn_triggers :: proc(dt: f32) {
+	for &trigger in game.current_map.spawn_triggers {
+		if !trigger.fired {
+			condition_met: bool
+			switch c in trigger.condition {
+			case Time_Elapsed:
+				condition_met = game.player.survival_seconds >= c.seconds
+			case Kills_Reached:
+				condition_met = total_kills(game.player.kills) >= c.count
+			}
+			if !condition_met {
+				continue
+			}
+
+			trigger.fired = true
+			fire_spawn_composition(trigger.composition)
+
+			// seed timer to a full interval and skip straight to next frame
+			// rather than falling through into the tick below: timer's
+			// zero-value would otherwise satisfy the <= 0 check on this same
+			// frame regardless of the seed (dt could be large enough on its
+			// own - e.g. a lag spike right as the trigger activates - to
+			// drive a freshly-seeded timer to <= 0 too), double-firing the
+			// activation composition immediately. Ticking starts clean next
+			// frame instead, so the next fire is a genuine interval away.
+			if repeating, is_repeating := trigger.mode.(Repeating); is_repeating {
+				trigger.timer = repeating.interval
+			}
 			continue
 		}
 
-		spawner.timer = spawner.interval
-		spawn_enemy(spawner)
+		repeating, is_repeating := trigger.mode.(Repeating)
+		if !is_repeating {
+			continue
+		}
+
+		trigger.elapsed += dt
+		if repeating.duration > 0 && trigger.elapsed > repeating.duration {
+			continue
+		}
+
+		trigger.timer -= dt
+		if trigger.timer <= 0 {
+			trigger.timer = repeating.interval
+			fire_spawn_composition(trigger.composition)
+		}
 	}
 }
 
-spawn_enemy :: proc(spawner: Spawner) {
-	movement := spawner.movement_template
+// spawns every entry's full count, off-screen relative to the current
+// camera - a spawn that can't fit under MAX_ENEMIES is silently skipped
+// per-enemy (not all-or-nothing), so a batch that partially fits still
+// spawns what it can (ticket 03: "One_Shot's batch may come up short")
+fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
+	visible_rect := camera_visible_world_rect(game.camera)
+	player_pos := Vec2{game.player.x, game.player.y}
+	// the tilemap doesn't change mid-batch, so this is computed once per
+	// fire rather than once per enemy inside pick_offscreen_spawn_point -
+	// a full-tile scan repeated per spawned enemy would otherwise redo the
+	// same work up to len(composition entries' counts) times per fire
+	map_bounds := tilemap_world_bounds(&game.current_map.tilemap)
+
+	for entry in composition {
+		for _ in 0 ..< entry.count {
+			if len(game.enemies) >= MAX_ENEMIES {
+				return
+			}
+			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.current_map.tilemap)
+			spawn_enemy_at(point, entry.movement_template, entry.attack_template)
+		}
+	}
+}
+
+spawn_enemy_at :: proc(position: Vec2, movement_template: Movement_Style, attack_template: Attack_Style) {
+	movement := movement_template
 	switch &m in movement {
 	case Floater:
 		m.wobble_phase = rand.float32_range(0, math.TAU)
@@ -425,15 +616,92 @@ spawn_enemy :: proc(spawner: Spawner) {
 	}
 
 	enemy := Enemy {
-		rect     = {spawner.position.x, spawner.position.y, 0, 0},
+		rect     = {position.x, position.y, 0, 0},
 		squash   = {1, 1},
 		movement = movement,
-		attack   = spawner.attack_template,
+		attack   = attack_template,
 		health   = ENEMY_MAX_HEALTH,
 		kind     = .Basic,
 	}
 
 	append(&game.enemies, enemy)
+}
+
+// -- off-screen spawn placement (enemy-spawn-revamp map, ticket 02) --------
+
+OFFSCREEN_SPAWN_MARGIN :: 30 // px beyond the visible rect's own half-diagonal
+OFFSCREEN_SPAWN_MAX_RETRIES :: 6
+
+// the tilemap's own world-space extent, spanning every authored tile - used
+// to clamp a chosen spawn point back onto the playable map. Computed by
+// scanning tiles rather than a stored width/height, since Tilemap only ever
+// grows sparse tile-by-tile (tilemap_place_tile) - the same "just scan every
+// tile" approach move_actor/build_inflated_collision_map already use rather
+// than maintaining a cached bound.
+tilemap_world_bounds :: proc(tilemap: ^Tilemap) -> World_Bounds {
+	if len(tilemap.tiles) == 0 {
+		return {}
+	}
+
+	bounds := World_Bounds{max(f32), min(f32), max(f32), min(f32)}
+	for tile in tilemap.tiles {
+		rect := tile_world_rect(tile.world_coords, tilemap.tile_size)
+		bounds.min_x = min(bounds.min_x, rect.x)
+		bounds.max_x = max(bounds.max_x, rect.x + rect.width)
+		bounds.min_y = min(bounds.min_y, rect.y)
+		bounds.max_y = max(bounds.max_y, rect.y + rect.height)
+	}
+	return bounds
+}
+
+// true if point falls inside a solid tile - mirrors move_actor's own
+// per-tile CheckCollisionRecs loop, just against a point instead of a moving
+// actor's box, since a spawn candidate has no size of its own to sweep
+tile_blocks_point :: proc(tilemap: ^Tilemap, point: Vec2) -> bool {
+	for tile in tilemap.tiles {
+		if !tile.collides {
+			continue
+		}
+		if rl.CheckCollisionPointRec(point, tile_world_rect(tile.world_coords, tilemap.tile_size)) {
+			return true
+		}
+	}
+	return false
+}
+
+// angle-around-player at (visible-rect half-diagonal + margin), retried up
+// to a small cap against still-visible/wall-blocked candidates, then
+// clamped into the map's bounds (map_bounds is a param, not recomputed here,
+// since a caller spawning several enemies in one batch already has it and
+// the tilemap doesn't change mid-batch). Validated live in the prototype (branch
+// prototype/offscreen-spawn-placement, commit 2bebf71) across camera-
+// panning, wall-collision-retry, and map-edge-clamp scenarios - see the
+// enemy-spawn-revamp map's ticket 02. On exhausted retries, spawns anyway at
+// the last (clamped) candidate rather than dropping the spawn: an enemy
+// occasionally appearing early or in a rare double-wall pocket is a smaller
+// problem than a trigger silently under-spawning.
+pick_offscreen_spawn_point :: proc(
+	player_pos: Vec2,
+	visible_rect: World_Bounds,
+	map_bounds: World_Bounds,
+	tilemap: ^Tilemap,
+) -> Vec2 {
+	half_w := (visible_rect.max_x - visible_rect.min_x) / 2
+	half_h := (visible_rect.max_y - visible_rect.min_y) / 2
+	dist := math.hypot(half_w, half_h) + OFFSCREEN_SPAWN_MARGIN
+
+	point: Vec2
+	for _ in 0 ..< OFFSCREEN_SPAWN_MAX_RETRIES {
+		angle := rand.float32_range(0, math.TAU)
+		point = player_pos + Vec2{math.cos(angle), math.sin(angle)} * dist
+		point.x = clamp(point.x, map_bounds.min_x, map_bounds.max_x)
+		point.y = clamp(point.y, map_bounds.min_y, map_bounds.max_y)
+
+		if !point_in_world_bounds(point, visible_rect) && !tile_blocks_point(tilemap, point) {
+			break
+		}
+	}
+	return point
 }
 
 update_enemies :: proc(dt: f32) {

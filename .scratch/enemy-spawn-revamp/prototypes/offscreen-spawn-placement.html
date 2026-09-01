@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Off-screen spawn placement — prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1d2029;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8a8fa3;
+    --accent: #5ea1ff;
+    --ok: #4fd67a;
+    --warn: #ffb454;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 60px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .question {
+    max-width: 760px;
+    color: var(--dim);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
+  .layout {
+    display: flex;
+    gap: 20px;
+    max-width: 1100px;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .canvas-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  canvas {
+    display: block;
+    background: #0c0e13;
+    border-radius: 6px;
+    cursor: crosshair;
+  }
+  .side {
+    width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .panel h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--dim);
+    margin: 0 0 10px;
+  }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .stat span:first-child { color: var(--dim); }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .bad { color: var(--bad); }
+  button {
+    background: #262b3a;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { background: #303648; }
+  button.primary { background: var(--accent); color: #0c0e13; border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { background: #7db4ff; }
+  button.active { outline: 2px solid var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .grid3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .grid3 .spacer { visibility: hidden; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tabs button { flex: 1; min-width: 90px; font-size: 12px; }
+  .scenario-desc {
+    font-size: 13px;
+    color: var(--dim);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .steps { display: flex; flex-direction: column; gap: 6px; }
+  .steps button { text-align: left; }
+  .steps button.done { opacity: 0.45; }
+  .log {
+    font-size: 12px;
+    color: var(--dim);
+    max-height: 110px;
+    overflow-y: auto;
+    line-height: 1.5;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 8px;
+  }
+  .legend { font-size: 12px; color: var(--dim); display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Off-screen spawn placement</h1>
+<p class="question">
+  <b>Question this demo explores:</b> when an enemy spawns, can we always place it
+  outside the camera's visible rect — even while the camera is actively panning to
+  follow the player — without landing it inside a wall or off the edge of the map?
+  Move the player around, spawn enemies, and watch whether the chosen point (yellow)
+  ever ends up inside the blue camera rect once it updates.
+</p>
+
+<div class="layout">
+  <div class="canvas-wrap">
+    <canvas id="world" width="640" height="480"></canvas>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h2>Current state</h2>
+      <div class="stat"><span>Player pos</span><b id="s-player">–</b></div>
+      <div class="stat"><span>Camera target</span><b id="s-camera">–</b></div>
+      <div class="stat"><span>Zoom</span><b id="s-zoom">1.2</b></div>
+      <div class="stat"><span>Algorithm</span><b id="s-algo">angle-around-player</b></div>
+      <div class="stat"><span>Last spawn point</span><b id="s-spawn">–</b></div>
+      <div class="stat"><span>Retries used</span><b id="s-retries">–</b></div>
+      <div class="stat"><span>Ever visible after?</span><b id="s-visible">–</b></div>
+      <div class="legend">
+        <div><span class="dot" style="background:#5ea1ff"></span>Camera visible rect</div>
+        <div><span class="dot" style="background:#4fd67a"></span>Player</div>
+        <div><span class="dot" style="background:#ffd35e"></span>Chosen spawn point</div>
+        <div><span class="dot" style="background:#ff6b6b"></span>Wall / obstacle</div>
+        <div><span class="dot" style="background:#8a8fa3"></span>Map bounds</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Free play</h2>
+      <div class="grid3">
+        <span class="spacer"></span><button data-move="up">▲ Up</button><span class="spacer"></span>
+        <button data-move="left">◀ Left</button><button data-action="spawn" class="primary">Spawn</button><button data-move="right">Right ▶</button>
+        <span class="spacer"></span><button data-move="down">▼ Down</button><span class="spacer"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button data-action="toggle-algo" id="btn-algo">Switch to edge-based</button>
+        <button data-action="place-wall">Place wall near player</button>
+        <button data-action="reset">Reset</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Guided walkthroughs</h2>
+      <div class="tabs" id="tabs"></div>
+      <div class="scenario-desc" id="scenario-desc"></div>
+      <div class="steps" id="scenario-steps"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// PURE LOGIC MODULE — portable to Odin. No DOM/canvas references below this
+// line until the "PAGE / RENDERING" section.
+// ---------------------------------------------------------------------------
+const SpawnLogic = (() => {
+  // Mirrors raylib Camera2D semantics: offset is screen-center, so the
+  // visible world rect is `target` +/- half the screen size / zoom.
+  function visibleWorldRect(cameraTarget, zoom, screenW, screenH) {
+    const halfW = (screenW / zoom) / 2;
+    const halfH = (screenH / zoom) / 2;
+    return {
+      minX: cameraTarget.x - halfW,
+      maxX: cameraTarget.x + halfW,
+      minY: cameraTarget.y - halfH,
+      maxY: cameraTarget.y + halfH,
+    };
+  }
+
+  function pointInRect(p, rect) {
+    return p.x >= rect.minX && p.x <= rect.maxX && p.y >= rect.minY && p.y <= rect.maxY;
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // Variant A: random angle around the player, pushed out to `margin`
+  // beyond the visible rect's own half-diagonal from the player.
+  function pickByAngle(playerPos, visibleRect, margin, rng) {
+    const halfW = (visibleRect.maxX - visibleRect.minX) / 2;
+    const halfH = (visibleRect.maxY - visibleRect.minY) / 2;
+    const dist = Math.hypot(halfW, halfH) + margin;
+    const angle = rng() * Math.PI * 2;
+    return {
+      x: playerPos.x + Math.cos(angle) * dist,
+      y: playerPos.y + Math.sin(angle) * dist,
+    };
+  }
+
+  // Variant B: random point along a randomly chosen screen edge, pushed
+  // outward by `margin`.
+  function pickByEdge(visibleRect, margin, rng) {
+    const edge = Math.floor(rng() * 4); // 0 top, 1 right, 2 bottom, 3 left
+    const x = visibleRect.minX + rng() * (visibleRect.maxX - visibleRect.minX);
+    const y = visibleRect.minY + rng() * (visibleRect.maxY - visibleRect.minY);
+    switch (edge) {
+      case 0: return { x, y: visibleRect.minY - margin };
+      case 1: return { x: visibleRect.maxX + margin, y };
+      case 2: return { x, y: visibleRect.maxY + margin };
+      default: return { x: visibleRect.minX - margin, y };
+    }
+  }
+
+  // Top-level: pick a spawn point, retrying against `isBlocked` (walls) and
+  // clamping into `mapBounds`. Returns { point, retries, algo }.
+  function pickSpawnPoint({ algo, playerPos, visibleRect, margin, mapBounds, isBlocked, rng, maxRetries = 6 }) {
+    const picker = algo === "edge" ? pickByEdge : pickByAngle;
+    let point, retries = 0;
+    do {
+      point = picker(algo === "edge" ? visibleRect : playerPos, visibleRect, margin, rng);
+      // pickByAngle takes playerPos as first arg; pickByEdge ignores it.
+      if (algo === "edge") point = pickByEdge(visibleRect, margin, rng);
+      else point = pickByAngle(playerPos, visibleRect, margin, rng);
+
+      point.x = clamp(point.x, mapBounds.minX, mapBounds.maxX);
+      point.y = clamp(point.y, mapBounds.minY, mapBounds.maxY);
+
+      if (!isBlocked(point) && !pointInRect(point, visibleRect)) break;
+      retries++;
+    } while (retries < maxRetries);
+
+    return { point, retries, algo, stillVisible: pointInRect(point, visibleRect) };
+  }
+
+  return { visibleWorldRect, pointInRect, pickSpawnPoint };
+})();
+
+// ---------------------------------------------------------------------------
+// PAGE / RENDERING — throwaway shell around the module above.
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById("world");
+const ctx = canvas.getContext("2d");
+const SCREEN_W = 640, SCREEN_H = 480;
+const ZOOM = 1.2;
+const MARGIN = 30;
+const WORLD_SCALE = 0.5; // world units drawn at half size so panning is visible on-canvas
+const MAP_BOUNDS = { minX: -1200, maxX: 1200, minY: -900, maxY: 900 };
+
+let state = {
+  player: { x: 0, y: 0 },
+  camera: { x: 0, y: 0 },
+  algo: "angle",
+  walls: [],
+  lastSpawn: null,
+  seed: 1234,
+};
+
+function rng() {
+  // simple deterministic LCG so scenarios replay identically
+  state.seed = (state.seed * 1103515245 + 12345) & 0x7fffffff;
+  return (state.seed % 10000) / 10000;
+}
+
+function worldToScreen(p) {
+  return {
+    x: SCREEN_W / 2 + (p.x - state.camera.x) * WORLD_SCALE,
+    y: SCREEN_H / 2 + (p.y - state.camera.y) * WORLD_SCALE,
+  };
+}
+
+function log(msg) {
+  const el = document.getElementById("log");
+  const line = document.createElement("div");
+  line.textContent = msg;
+  el.prepend(line);
+  while (el.children.length > 30) el.removeChild(el.lastChild);
+}
+
+function isBlocked(point) {
+  return state.walls.some(w => Math.hypot(w.x - point.x, w.y - point.y) < w.r);
+}
+
+function render() {
+  ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+
+  // map bounds
+  const tl = worldToScreen({ x: MAP_BOUNDS.minX, y: MAP_BOUNDS.minY });
+  const br = worldToScreen({ x: MAP_BOUNDS.maxX, y: MAP_BOUNDS.maxY });
+  ctx.strokeStyle = "#8a8fa3";
+  ctx.setLineDash([4, 4]);
+  ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  ctx.setLineDash([]);
+
+  // camera visible rect
+  const rect = SpawnLogic.visibleWorldRect(state.camera, ZOOM, SCREEN_W / WORLD_SCALE * 0.62, SCREEN_H / WORLD_SCALE * 0.62);
+  const rtl = worldToScreen({ x: rect.minX, y: rect.minY });
+  const rbr = worldToScreen({ x: rect.maxX, y: rect.maxY });
+  ctx.strokeStyle = "#5ea1ff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(rtl.x, rtl.y, rbr.x - rtl.x, rbr.y - rtl.y);
+  ctx.lineWidth = 1;
+
+  // walls
+  state.walls.forEach(w => {
+    const sp = worldToScreen(w);
+    ctx.fillStyle = "#ff6b6b55";
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, w.r * WORLD_SCALE, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // player
+  const pp = worldToScreen(state.player);
+  ctx.fillStyle = "#4fd67a";
+  ctx.beginPath();
+  ctx.arc(pp.x, pp.y, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // last spawn point
+  if (state.lastSpawn) {
+    const sp = worldToScreen(state.lastSpawn.point);
+    ctx.fillStyle = state.lastSpawn.stillVisible ? "#ff6b6b" : "#ffd35e";
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.moveTo(pp.x, pp.y);
+    ctx.lineTo(sp.x, sp.y);
+    ctx.stroke();
+  }
+
+  updateStatePanel(rect);
+}
+
+function updateStatePanel(rect) {
+  document.getElementById("s-player").textContent = `${state.player.x.toFixed(0)}, ${state.player.y.toFixed(0)}`;
+  document.getElementById("s-camera").textContent = `${state.camera.x.toFixed(0)}, ${state.camera.y.toFixed(0)}`;
+  document.getElementById("s-algo").textContent = state.algo === "edge" ? "random-edge-point" : "angle-around-player";
+  if (state.lastSpawn) {
+    document.getElementById("s-spawn").textContent = `${state.lastSpawn.point.x.toFixed(0)}, ${state.lastSpawn.point.y.toFixed(0)}`;
+    document.getElementById("s-retries").textContent = state.lastSpawn.retries;
+    const visEl = document.getElementById("s-visible");
+    visEl.textContent = state.lastSpawn.stillVisible ? "YES — bug!" : "no (off-screen)";
+    visEl.className = state.lastSpawn.stillVisible ? "bad" : "ok";
+  }
+}
+
+function moveCameraToward(target, amount) {
+  state.camera.x += (target.x - state.camera.x) * amount;
+  state.camera.y += (target.y - state.camera.y) * amount;
+}
+
+function movePlayer(dir) {
+  const step = 60;
+  if (dir === "up") state.player.y -= step;
+  if (dir === "down") state.player.y += step;
+  if (dir === "left") state.player.x -= step;
+  if (dir === "right") state.player.x += step;
+  state.player.x = SpawnLogic ? state.player.x : state.player.x;
+  // smooth-follow like update_camera_center_smooth_follow, but instant-ish
+  // for a few ticks so the demo doesn't need an animation loop
+  for (let i = 0; i < 6; i++) moveCameraToward(state.player, 0.35);
+  log(`Player moved ${dir} → (${state.player.x}, ${state.player.y})`);
+  render();
+}
+
+function doSpawn() {
+  const rect = SpawnLogic.visibleWorldRect(state.camera, ZOOM, SCREEN_W / WORLD_SCALE * 0.62, SCREEN_H / WORLD_SCALE * 0.62);
+  const result = SpawnLogic.pickSpawnPoint({
+    algo: state.algo,
+    playerPos: state.player,
+    visibleRect: rect,
+    margin: MARGIN,
+    mapBounds: MAP_BOUNDS,
+    isBlocked,
+    rng,
+  });
+  state.lastSpawn = result;
+  log(`Spawned via ${result.algo} at (${result.point.x.toFixed(0)}, ${result.point.y.toFixed(0)}) — ${result.retries} retries, stillVisible=${result.stillVisible}`);
+  render();
+}
+
+function placeWallNearPlayer() {
+  const angle = rng() * Math.PI * 2;
+  const dist = 260 + rng() * 80;
+  state.walls.push({ x: state.player.x + Math.cos(angle) * dist, y: state.player.y + Math.sin(angle) * dist, r: 140 });
+  log("Placed a wall/obstacle near the player's off-screen ring");
+  render();
+}
+
+function toggleAlgo() {
+  state.algo = state.algo === "angle" ? "edge" : "angle";
+  document.getElementById("btn-algo").textContent = state.algo === "angle" ? "Switch to edge-based" : "Switch to angle-based";
+  log(`Algorithm switched to ${state.algo}`);
+  render();
+}
+
+function resetState() {
+  state = { player: { x: 0, y: 0 }, camera: { x: 0, y: 0 }, algo: state.algo, walls: [], lastSpawn: null, seed: 1234 };
+  document.getElementById("log").innerHTML = "";
+  log("Reset");
+  render();
+}
+
+document.querySelectorAll("[data-move]").forEach(b => b.addEventListener("click", () => movePlayer(b.dataset.move)));
+document.querySelector("[data-action='spawn']").addEventListener("click", doSpawn);
+document.querySelector("[data-action='toggle-algo']").addEventListener("click", toggleAlgo);
+document.querySelector("[data-action='place-wall']").addEventListener("click", placeWallNearPlayer);
+document.querySelector("[data-action='reset']").addEventListener("click", resetState);
+
+// ---------------------------------------------------------------------------
+// GUIDED WALKTHROUGHS
+// ---------------------------------------------------------------------------
+const scenarios = [
+  {
+    name: "Happy path",
+    desc: "Player stands still, several enemies spawn. Watch: every spawn point should land outside the blue camera rect, with 0 retries.",
+    steps: [
+      { label: "Spawn enemy #1", run: doSpawn },
+      { label: "Spawn enemy #2", run: doSpawn },
+      { label: "Spawn enemy #3", run: doSpawn },
+    ],
+  },
+  {
+    name: "Camera panning race",
+    desc: "Spawn an enemy, then move the player repeatedly toward it. Watch whether the camera catches up to the spawn point before the enemy has a chance to move away — if the dot ever turns red, the margin is too small for the camera's follow speed.",
+    steps: [
+      { label: "Spawn enemy", run: doSpawn },
+      { label: "Move right ×1", run: () => movePlayer("right") },
+      { label: "Move right ×2", run: () => movePlayer("right") },
+      { label: "Move right ×3", run: () => movePlayer("right") },
+      { label: "Move right ×4", run: () => movePlayer("right") },
+    ],
+  },
+  {
+    name: "Wall collision retry",
+    desc: "Place a wall covering part of the off-screen ring, then spawn — the retry count should be > 0 as it skips the blocked point, and the final point should not be inside the wall.",
+    steps: [
+      { label: "Place wall near player", run: placeWallNearPlayer },
+      { label: "Place another wall", run: placeWallNearPlayer },
+      { label: "Spawn enemy (watch retries)", run: doSpawn },
+    ],
+  },
+  {
+    name: "Map edge",
+    desc: "Walk the player to the corner of the finite map, then spawn — the point should clamp inside map bounds rather than landing outside the dashed rectangle, even though that clamp could theoretically push it back inside the camera rect (worth watching for).",
+    steps: [
+      { label: "Move up ×6", run: () => { for (let i=0;i<6;i++) movePlayer("up"); } },
+      { label: "Move left ×6", run: () => { for (let i=0;i<6;i++) movePlayer("left"); } },
+      { label: "Move up ×6 more", run: () => { for (let i=0;i<6;i++) movePlayer("up"); } },
+      { label: "Move left ×6 more", run: () => { for (let i=0;i<6;i++) movePlayer("left"); } },
+      { label: "Spawn enemy near the corner", run: doSpawn },
+    ],
+  },
+];
+
+let activeTab = 0;
+let stepIndex = 0;
+
+function renderTabs() {
+  const tabsEl = document.getElementById("tabs");
+  tabsEl.innerHTML = "";
+  scenarios.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.textContent = s.name;
+    if (i === activeTab) b.classList.add("active");
+    b.addEventListener("click", () => { activeTab = i; stepIndex = 0; resetState(); renderScenario(); });
+    tabsEl.appendChild(b);
+  });
+}
+
+function renderScenario() {
+  const s = scenarios[activeTab];
+  document.getElementById("scenario-desc").textContent = s.desc;
+  const stepsEl = document.getElementById("scenario-steps");
+  stepsEl.innerHTML = "";
+  s.steps.forEach((step, i) => {
+    const b = document.createElement("button");
+    b.textContent = `${i + 1}. ${step.label}`;
+    if (i < stepIndex) b.classList.add("done");
+    b.disabled = i !== stepIndex;
+    b.addEventListener("click", () => {
+      step.run();
+      stepIndex++;
+      renderScenario();
+    });
+    stepsEl.appendChild(b);
+  });
+}
+
+renderTabs();
+renderScenario();
+render();
+</script>
+</body>
+</html>

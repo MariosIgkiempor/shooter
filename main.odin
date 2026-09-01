@@ -281,6 +281,7 @@ update_game :: proc() {
 			if name, ok := reflect.enum_from_name(Map_Name, game.active_map_pointer); ok {
 				game.editing_map_path = map_path_for_name(name)
 			}
+			clear(&editor.expanded_spawn_triggers)
 			game.program_mode = .Editing
 		case .Editing:
 			game.program_mode = .Playing
@@ -416,7 +417,7 @@ update_game :: proc() {
 		update_damage_numbers(rl.GetFrameTime())
 		update_player_resource_indicators(rl.GetFrameTime())
 
-		update_spawners(rl.GetFrameTime())
+		update_spawn_triggers(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
 	}
 }
@@ -648,10 +649,6 @@ TILEMAP_FLOOR_COLOR :: rl.Color{56, 48, 40, 255}
 TILEMAP_WALL_COLOR :: rl.Color{124, 110, 90, 255}
 TILEMAP_WALL_BEVEL_COLOR :: rl.Color{74, 64, 52, 255}
 
-// muted gray-blue (art-revamp ticket 05) - kept distinct from RED, which
-// stays exclusive to actual threats (Grounded enemies, enemy bullets)
-SPAWNER_MARKER_COLOR :: rl.Color{110, 130, 150, 255}
-
 // Player renders as a rectangle (ACTOR_SIZE); every enemy renders as a
 // square (see draw_enemy) - colors are a first-pass palette, not separately
 // locked by any ticket.
@@ -752,7 +749,6 @@ draw_game :: proc() {
 		if game.debug.visualizers[.Movement_Styles] {
 			draw_debug_movement_styles()
 		}
-		draw_spawners(game.current_map.spawners[:])
 		draw_bullets(game.bullets[:])
 		draw_enemy_bullets(game.enemy_bullets[:])
 		draw_poison_clouds(game.poison_clouds[:])
@@ -789,9 +785,13 @@ draw_game :: proc() {
 		// no-op: draw_map_selection_ui (below, alongside the other modals)
 		// draws its own full-screen content
 		case .Playing:
-		// no-op: Resource indicators (resource_indicator.odin, ADR-0011)
-		// draw in world-space (game.camera, above), not here - the old
-		// bottom-of-screen HUD this camera used to host is retired
+			// Run-scoped meta-stats (CONTEXT.md's Run entry), not an entity's
+			// own Resource indicator (ADR-0011) - screen-space text is right
+			// for this, unlike the world-space indicators drawn above. Reads
+			// the same Player fields the Run End screen already shows
+			// (hud.odin's draw_run_end_ui) and Spawn Trigger Kills_Reached
+			// conditions check - no separate counter state.
+			draw_hud_counters()
 		case .Editing:
 			draw_text("Editing", 10, 10, 0, rl.ORANGE)
 		}
@@ -895,16 +895,6 @@ draw_game :: proc() {
 			next := cell_center_to_world(cell, game.current_map.tilemap.tile_size)
 			rl.DrawLineV(point, next, rl.YELLOW)
 			point = next
-		}
-	}
-
-	// muted gray-blue (art-revamp ticket 05) - was Grounded-enemy-clashing
-	// RED; visible during real gameplay (drawn unconditionally here), not
-	// just the map editor, so it must never read as a distant enemy
-	draw_spawners :: proc(spawners: []Spawner) {
-		for spawner in spawners {
-			rl.DrawCircleLinesV(spawner.position, 8, SPAWNER_MARKER_COLOR)
-			rl.DrawCircleV(spawner.position, 2, SPAWNER_MARKER_COLOR)
 		}
 	}
 

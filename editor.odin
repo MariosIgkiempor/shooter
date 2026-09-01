@@ -3,6 +3,7 @@ package shooter
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "core:slice"
 import "core:strings"
 import rl "vendor:raylib"
 
@@ -14,11 +15,14 @@ import ui "vendor/ui/ui"
 // commands, so the atlas tiles inside the palette are overlaid afterwards
 // using the rects the layout resolved this frame (layout.element_rects).
 
-// what the editor is editing: tiles themselves, or their collision flags
+// what the editor is editing: tiles themselves, or their collision flags.
+// Spawn Trigger authoring has no dedicated mode - there's no map position to
+// click-place anymore, so its panel is always-visible instead (see
+// editor_window's Spawn Triggers section) - the enemy-spawn-revamp map's
+// ticket 04.
 EditorMode :: enum {
 	Tiles,
 	Collisions,
-	Spawners,
 }
 
 EditorTool :: enum {
@@ -40,8 +44,6 @@ editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
 	selected_tile: Vec2i,
-	// index into game.editing_map.spawners; -1 = none selected
-	selected_spawner: int,
 	// whether the pointer was over an editor window last frame; world
 	// painting is suppressed while true
 	ui_hovered:    bool,
@@ -59,6 +61,14 @@ editor: struct {
 	// whether the map-switcher's list-and-pick panel is open; purely a UI
 	// toggle, unrelated to game.editing_map itself
 	picking_map:   bool,
+	// which rows of the always-visible Spawn Trigger list (editor_window)
+	// are expanded, keyed by index into game.editing_map.spawn_triggers -
+	// purely a UI toggle, unrelated to the persisted Spawn_Trigger itself,
+	// same rationale as picking_map above. Multiple rows may be expanded at
+	// once (ticket 04's prototype used a Set, not a single accordion slot).
+	// Grown/shrunk in lockstep with spawn_triggers by spawn_trigger_row_add/
+	// spawn_trigger_row_remove so indices always line up.
+	expanded_spawn_triggers: [dynamic]bool,
 }
 
 initialize_editor :: proc() {
@@ -68,8 +78,6 @@ initialize_editor :: proc() {
 
 	// heap, not temp: the array outlives the per-frame free_all
 	editor.palette_cells = make([dynamic]Palette_Cell, 0, TILESET_COLS * TILESET_ROWS)
-
-	editor.selected_spawner = -1
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
@@ -165,11 +173,6 @@ update_editor :: proc() {
 		return
 	}
 
-	if editor.mode == .Spawners {
-		update_spawners_mode(hovered_coord)
-		return
-	}
-
 	if editor.tool == .Rectangle {
 		update_rectangle_tool(hovered_coord)
 		return
@@ -213,60 +216,6 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 			return
 		}
 	}
-}
-
-// left-drag places a Melee spawner on each cell passed over, right-drag
-// removes the spawner on the hovered cell. one spawner per cell, like tiles
-update_spawners_mode :: proc(hovered_coord: Vec2i) {
-	if editor.ui_hovered {
-		return
-	}
-
-	if is_mouse_button_down(.LEFT) {
-		spawner_place(hovered_coord)
-	} else if is_mouse_button_down(.RIGHT) {
-		spawner_remove(hovered_coord)
-	}
-}
-
-spawner_place :: proc(cell: Vec2i) {
-	for spawner, i in game.editing_map.spawners {
-		if world_to_cell_coord(spawner.position, game.editing_map.tilemap.tile_size) == cell {
-			editor.selected_spawner = i
-			return
-		}
-	}
-
-	append(
-		&game.editing_map.spawners,
-		Spawner {
-			position = cell_center_to_world(cell, game.editing_map.tilemap.tile_size),
-			interval = DEFAULT_SPAWNER_INTERVAL,
-			movement_template = Grounded{speed = 40},
-			attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
-		},
-	)
-
-	editor.selected_spawner = len(game.editing_map.spawners) - 1
-}
-
-spawner_remove :: proc(cell: Vec2i) {
-	for spawner, i in game.editing_map.spawners {
-		if world_to_cell_coord(spawner.position, game.editing_map.tilemap.tile_size) == cell {
-			last := len(game.editing_map.spawners) - 1
-			unordered_remove(&game.editing_map.spawners, i)
-
-			if editor.selected_spawner == i {
-				editor.selected_spawner = -1
-			} else if editor.selected_spawner == last {
-				editor.selected_spawner = i
-			}
-			return
-		}
-	}
-
-	// right-click on empty space with nothing to remove: deselect
-	editor.selected_spawner = -1
 }
 
 // left-drag fills a rectangle with the selected tile, right-drag erases one.
@@ -377,18 +326,6 @@ draw_editor_world_overlay :: proc() {
 		return
 	}
 
-	if editor.mode == .Spawners {
-		if !editor.ui_hovered {
-			rl.DrawCircleLinesV(cell_center_to_world(hovered_tile_coords(), tile_size), 8, rl.ORANGE)
-		}
-
-		if editor.selected_spawner >= 0 && editor.selected_spawner < len(game.editing_map.spawners) {
-			rl.DrawCircleLinesV(game.editing_map.spawners[editor.selected_spawner].position, 10, rl.YELLOW)
-		}
-
-		return
-	}
-
 	if editor.tool == .Rectangle && editor.dragging {
 		min_coord, max_coord := coord_rect(editor.drag_start, hovered_tile_coords())
 		rect := Rect {
@@ -484,7 +421,6 @@ editor_window :: proc() {
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
-			mode_button("Spawners", .Spawners)
 		}
 
 		switch editor.mode {
@@ -492,9 +428,12 @@ editor_window :: proc() {
 			tiles_mode_ui()
 		case .Collisions:
 			collisions_mode_ui()
-		case .Spawners:
-			spawners_mode_ui()
 		}
+
+		// always-visible, like the Map row above - there's no map position to
+		// click-place a Spawn Trigger at anymore, so authoring lives in its
+		// own panel rather than a dedicated Editor_Mode (ticket 04)
+		spawn_triggers_ui()
 
 		if ui.row({gap = ui.theme.gap}) {
 			if ui.button("Save") {
@@ -528,6 +467,9 @@ switch_editing_map :: proc(name: Map_Name) {
 	delete_map(game.editing_map)
 	game.editing_map = loaded
 	game.editing_map_path = path
+	// row-expand state is keyed by index into the *previous* map's
+	// spawn_triggers - stale once the map underneath it changes
+	clear(&editor.expanded_spawn_triggers)
 }
 
 tiles_mode_ui :: proc() {
@@ -563,85 +505,259 @@ collisions_mode_ui :: proc() {
 	ui.text("Colliders: {}", collider_count)
 }
 
-spawners_mode_ui :: proc() {
-	ui.text("Click to place a spawner, right-click to remove.")
-	ui.text("Spawners: {}", len(game.editing_map.spawners))
+// -- Spawn Trigger authoring (enemy-spawn-revamp map, ticket 04) -----------
+//
+// Always-visible list, one row per Spawn Trigger, mirroring the Map row's
+// own always-visible placement above - there's no map position to
+// click-place a trigger at anymore, so this isn't a dedicated EditorMode.
+// Clicking a row's summary toggles an inline detail panel beneath it
+// (multiple rows may be expanded at once, per the winning prototype).
 
-	if editor.selected_spawner < 0 || editor.selected_spawner >= len(game.editing_map.spawners) {
-		return
+DEFAULT_SPAWN_TRIGGER_INTERVAL :: 3
+DEFAULT_SPAWN_CONDITION_KILLS :: 10
+
+spawn_triggers_ui :: proc() {
+	ui.text("Spawn Triggers: {}", len(game.editing_map.spawn_triggers))
+
+	remove_index := -1
+	for &trigger, i in game.editing_map.spawn_triggers {
+		row_key := fmt.tprintf("trigger{}", i)
+
+		summary := fmt.tprintf(
+			"{}. {}   {}   {}",
+			i + 1,
+			spawn_condition_summary(trigger.condition),
+			spawn_mode_summary(trigger.mode),
+			spawn_composition_summary(trigger.composition),
+		)
+
+		if ui.row({gap = ui.theme.gap}) {
+			if ui.button(summary) {
+				toggle_spawn_trigger_row_expanded(i)
+			}
+			ui.spacer()
+			if ui.button(fmt.tprintf("Remove {}", i + 1)) {
+				remove_index = i
+			}
+		}
+
+		if spawn_trigger_row_expanded(i) {
+			draw_spawn_trigger_detail(&trigger, row_key, i + 1)
+		}
 	}
 
-	spawner := &game.editing_map.spawners[editor.selected_spawner]
+	if remove_index >= 0 {
+		spawn_trigger_row_remove(remove_index)
+	}
+
+	if ui.button("+ Add Spawn Trigger") {
+		spawn_trigger_row_add()
+	}
+}
+
+spawn_condition_summary :: proc(condition: Spawn_Condition) -> string {
+	switch c in condition {
+	case Time_Elapsed:
+		return fmt.tprintf("Time {:.0f}s", c.seconds)
+	case Kills_Reached:
+		return fmt.tprintf("Kills {}", c.count)
+	}
+	return "?"
+}
+
+spawn_mode_summary :: proc(mode: Spawn_Mode) -> string {
+	switch m in mode {
+	case One_Shot:
+		return "One-Shot"
+	case Repeating:
+		if m.duration > 0 {
+			return fmt.tprintf("Repeating {:.1f}s for {:.0f}s", m.interval, m.duration)
+		}
+		return fmt.tprintf("Repeating {:.1f}s", m.interval)
+	}
+	return "?"
+}
+
+spawn_composition_summary :: proc(composition: []Spawn_Composition_Entry) -> string {
+	if len(composition) == 0 {
+		return "empty"
+	}
+
+	sb := strings.builder_make(context.temp_allocator)
+	for entry, i in composition {
+		if i > 0 {
+			strings.write_string(&sb, ", ")
+		}
+		fmt.sbprintf(
+			&sb,
+			"{}x {}+{}",
+			entry.count,
+			movement_style_label(entry.movement_template),
+			attack_style_label(entry.attack_template),
+		)
+	}
+	return strings.to_string(sb)
+}
+
+movement_style_label :: proc(movement: Movement_Style) -> string {
+	switch _ in movement {
+	case Grounded:
+		return "Grounded"
+	case Floater:
+		return "Floater"
+	case Swarmer:
+		return "Swarmer"
+	}
+	return "None"
+}
+
+attack_style_label :: proc(attack: Attack_Style) -> string {
+	switch _ in attack {
+	case Melee:
+		return "Melee"
+	case Ranged:
+		return "Ranged"
+	}
+	return "None"
+}
+
+draw_spawn_trigger_detail :: proc(trigger: ^Spawn_Trigger, key: string, trigger_number: int) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Condition")
+		spawn_condition_type_button(key, "Time Elapsed", trigger, Time_Elapsed{seconds = 0})
+		spawn_condition_type_button(key, "Kills Reached", trigger, Kills_Reached{count = DEFAULT_SPAWN_CONDITION_KILLS})
+	}
+
+	switch &c in trigger.condition {
+	case Time_Elapsed:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Seconds")
+			ui.slider(fmt.tprintf("{}_condition_seconds", key), &c.seconds, 0, 300)
+			ui.text("{:.0f}", c.seconds)
+		}
+	case Kills_Reached:
+		count_f := f32(c.count)
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Count")
+			if ui.slider(fmt.tprintf("{}_condition_count", key), &count_f, 0, 100) {
+				c.count = int(count_f)
+			}
+			ui.text("{}", c.count)
+		}
+	}
 
 	if ui.row({gap = ui.theme.gap}) {
-		ui.text("Interval")
-		ui.slider("interval", &spawner.interval, 0.1, 10)
-		ui.text("{:.2f}", spawner.interval)
+		ui.text("Mode")
+		spawn_mode_type_button(key, "One-Shot", trigger, One_Shot{})
+		spawn_mode_type_button(key, "Repeating", trigger, Repeating{interval = DEFAULT_SPAWN_TRIGGER_INTERVAL, duration = 0})
 	}
 
+	switch &m in trigger.mode {
+	case One_Shot:
+	case Repeating:
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Interval")
+			ui.slider(fmt.tprintf("{}_mode_interval", key), &m.interval, 0.1, 10)
+			ui.text("{:.2f}", m.interval)
+		}
+		if ui.row({gap = ui.theme.gap}) {
+			ui.text("Duration (0 = forever)")
+			ui.slider(fmt.tprintf("{}_mode_duration", key), &m.duration, 0, 300)
+			ui.text("{:.0f}", m.duration)
+		}
+	}
+
+	ui.text("Composition")
+	remove_entry_index := -1
+	for &entry, i in trigger.composition {
+		draw_spawn_composition_entry_ui(&entry, fmt.tprintf("{}_entry{}", key, i))
+		if ui.button(fmt.tprintf("Remove Entry {} (Trigger {})", i + 1, trigger_number)) {
+			remove_entry_index = i
+		}
+	}
+	if remove_entry_index >= 0 {
+		spawn_composition_entry_remove(trigger, remove_entry_index) // no-op below one entry
+	}
+
+	if ui.button(fmt.tprintf("+ Add Entry (Trigger {})", trigger_number)) {
+		spawn_composition_entry_add(
+			trigger,
+			Spawn_Composition_Entry {
+				movement_template = Grounded{speed = 40},
+				attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+				count = 1,
+			},
+		)
+	}
+}
+
+draw_spawn_composition_entry_ui :: proc(entry: ^Spawn_Composition_Entry, key: string) {
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Movement")
-		movement_template_none_button("None", spawner)
-		movement_template_button("Grounded", spawner, Grounded{speed = 40})
+		movement_template_none_button(key, "None", entry)
+		movement_template_button(key, "Grounded", entry, Grounded{speed = 40})
 		movement_template_button(
+			key,
 			"Floater",
-			spawner,
+			entry,
 			Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35},
 		)
-		movement_template_button("Swarmer", spawner, Swarmer{speed = 50})
+		movement_template_button(key, "Swarmer", entry, Swarmer{speed = 50})
 	}
 
-	switch &m in spawner.movement_template {
+	switch &m in entry.movement_template {
 	case Grounded:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Speed")
-			ui.slider("grounded_speed", &m.speed, 0, 300)
+			ui.slider(fmt.tprintf("{}_grounded_speed", key), &m.speed, 0, 300)
 			ui.text("{:.0f}", m.speed)
 		}
 	case Floater:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Speed")
-			ui.slider("floater_speed", &m.speed, 0, 300)
+			ui.slider(fmt.tprintf("{}_floater_speed", key), &m.speed, 0, 300)
 			ui.text("{:.0f}", m.speed)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Wobble Amplitude")
-			ui.slider("floater_wobble_amplitude", &m.wobble_amplitude, 0, 80)
+			ui.slider(fmt.tprintf("{}_floater_wobble_amplitude", key), &m.wobble_amplitude, 0, 80)
 			ui.text("{:.0f}", m.wobble_amplitude)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Wobble Frequency")
-			ui.slider("floater_wobble_frequency", &m.wobble_frequency, 0.1, 5)
+			ui.slider(fmt.tprintf("{}_floater_wobble_frequency", key), &m.wobble_frequency, 0.1, 5)
 			ui.text("{:.1f}", m.wobble_frequency)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Pull Toward Player")
-			ui.slider("floater_pull_strength", &m.pull_strength, 0, 1)
+			ui.slider(fmt.tprintf("{}_floater_pull_strength", key), &m.pull_strength, 0, 1)
 			ui.text("{:.2f}", m.pull_strength)
 		}
 	case Swarmer:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Speed")
-			ui.slider("swarmer_speed", &m.speed, 0, 300)
+			ui.slider(fmt.tprintf("{}_swarmer_speed", key), &m.speed, 0, 300)
 			ui.text("{:.0f}", m.speed)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Surround Radius (from Attack Style)")
-			ui.text("{:.0f}", swarmer_surround_radius(spawner.attack_template))
+			ui.text("{:.0f}", swarmer_surround_radius(entry.attack_template))
 		}
 	}
 
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Attack")
-		attack_template_none_button("None", spawner)
+		attack_template_none_button(key, "None", entry)
 		attack_template_button(
+			key,
 			"Melee",
-			spawner,
+			entry,
 			Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 		)
 		attack_template_button(
+			key,
 			"Ranged",
-			spawner,
+			entry,
 			Ranged {
 				min_range = 60,
 				max_range = 120,
@@ -653,83 +769,201 @@ spawners_mode_ui :: proc() {
 		)
 	}
 
-	switch &a in spawner.attack_template {
+	switch &a in entry.attack_template {
 	case Melee:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Damage")
-			ui.slider("melee_attack_damage", &a.attack_damage, 0, 100)
+			ui.slider(fmt.tprintf("{}_melee_attack_damage", key), &a.attack_damage, 0, 100)
 			ui.text("{:.0f}", a.attack_damage)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Range")
-			ui.slider("melee_attack_range", &a.attack_range, 0, 50)
+			ui.slider(fmt.tprintf("{}_melee_attack_range", key), &a.attack_range, 0, 50)
 			ui.text("{:.0f}", a.attack_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Cooldown")
-			ui.slider("melee_attack_cooldown", &a.attack_cooldown, 0.1, 5)
+			ui.slider(fmt.tprintf("{}_melee_attack_cooldown", key), &a.attack_cooldown, 0.1, 5)
 			ui.text("{:.2f}", a.attack_cooldown)
 		}
 	case Ranged:
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Min Range")
-			ui.slider("ranged_min_range", &a.min_range, 0, 300)
+			ui.slider(fmt.tprintf("{}_ranged_min_range", key), &a.min_range, 0, 300)
 			ui.text("{:.0f}", a.min_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Max Range")
-			ui.slider("ranged_max_range", &a.max_range, 0, 300)
+			ui.slider(fmt.tprintf("{}_ranged_max_range", key), &a.max_range, 0, 300)
 			ui.text("{:.0f}", a.max_range)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Attack Damage")
-			ui.slider("ranged_attack_damage", &a.attack_damage, 0, 100)
+			ui.slider(fmt.tprintf("{}_ranged_attack_damage", key), &a.attack_damage, 0, 100)
 			ui.text("{:.0f}", a.attack_damage)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Projectile Speed")
-			ui.slider("ranged_projectile_speed", &a.projectile_speed, 0, 500)
+			ui.slider(fmt.tprintf("{}_ranged_projectile_speed", key), &a.projectile_speed, 0, 500)
 			ui.text("{:.0f}", a.projectile_speed)
 		}
 		if ui.row({gap = ui.theme.gap}) {
 			ui.text("Fire Rate")
-			ui.slider("ranged_fire_rate", &a.fire_rate, 0.1, 10)
+			ui.slider(fmt.tprintf("{}_ranged_fire_rate", key), &a.fire_rate, 0.1, 10)
 			ui.text("{:.1f}", a.fire_rate)
 		}
 	}
-}
 
-movement_template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
-	_, is_active := spawner.movement_template.(T)
-	if selectable_button(label, is_active) {
-		spawner.movement_template = value
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Count")
+		count_f := f32(entry.count)
+		if ui.slider(fmt.tprintf("{}_count", key), &count_f, 1, 20) {
+			entry.count = int(count_f)
+		}
+		ui.text("{}", entry.count)
 	}
 }
 
-movement_template_none_button :: proc(label: string, spawner: ^Spawner) {
-	if selectable_button(label, spawner.movement_template == nil) {
-		spawner.movement_template = nil
+spawn_condition_type_button :: proc(key_prefix: string, label: string, trigger: ^Spawn_Trigger, value: $T) {
+	_, is_active := trigger.condition.(T)
+	if selectable_button(fmt.tprintf("{}_condition_{}", key_prefix, label), label, is_active) {
+		trigger.condition = value
 	}
 }
 
-attack_template_button :: proc(label: string, spawner: ^Spawner, value: $T) {
-	_, is_active := spawner.attack_template.(T)
-	if selectable_button(label, is_active) {
-		spawner.attack_template = value
+spawn_mode_type_button :: proc(key_prefix: string, label: string, trigger: ^Spawn_Trigger, value: $T) {
+	_, is_active := trigger.mode.(T)
+	if selectable_button(fmt.tprintf("{}_mode_{}", key_prefix, label), label, is_active) {
+		trigger.mode = value
 	}
 }
 
-attack_template_none_button :: proc(label: string, spawner: ^Spawner) {
-	if selectable_button(label, spawner.attack_template == nil) {
-		spawner.attack_template = nil
+movement_template_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry, value: $T) {
+	_, is_active := entry.movement_template.(T)
+	if selectable_button(fmt.tprintf("{}_movement_{}", key_prefix, label), label, is_active) {
+		entry.movement_template = value
 	}
 }
 
-// like ui.button, but stays highlighted while selected
-selectable_button :: proc(label: string, selected: bool) -> (clicked: bool) {
+movement_template_none_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry) {
+	if selectable_button(fmt.tprintf("{}_movement_{}", key_prefix, label), label, entry.movement_template == nil) {
+		entry.movement_template = nil
+	}
+}
+
+attack_template_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry, value: $T) {
+	_, is_active := entry.attack_template.(T)
+	if selectable_button(fmt.tprintf("{}_attack_{}", key_prefix, label), label, is_active) {
+		entry.attack_template = value
+	}
+}
+
+attack_template_none_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry) {
+	if selectable_button(fmt.tprintf("{}_attack_{}", key_prefix, label), label, entry.attack_template == nil) {
+		entry.attack_template = nil
+	}
+}
+
+// game.editing_map.spawn_triggers is [dynamic], so add/remove use
+// append/ordered_remove directly - ordered (not unordered) so the visible
+// list doesn't reshuffle out of authored order on a mid-list removal.
+// expanded_spawn_triggers is kept in lockstep so row-expand state doesn't
+// drift onto the wrong trigger after a removal.
+spawn_trigger_row_add :: proc() {
+	append(
+		&game.editing_map.spawn_triggers,
+		Spawn_Trigger {
+			condition = Time_Elapsed{seconds = 0},
+			mode = One_Shot{},
+			// seeded with one real (heap-allocated, not a bare literal -
+			// see spawn_composition_entry_add's own doc comment) entry
+			// rather than left empty: an author who adds a trigger and
+			// forgets to also add a composition entry would otherwise
+			// save a trigger that silently spawns nothing, forever
+			composition = slice.clone(
+				[]Spawn_Composition_Entry {
+					{
+						movement_template = Grounded{speed = 40},
+						attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+						count = 1,
+					},
+				},
+			),
+		},
+	)
+	append(&editor.expanded_spawn_triggers, true)
+}
+
+spawn_trigger_row_remove :: proc(index: int) {
+	delete(game.editing_map.spawn_triggers[index].composition)
+	ordered_remove(&game.editing_map.spawn_triggers, index)
+	if index < len(editor.expanded_spawn_triggers) {
+		ordered_remove(&editor.expanded_spawn_triggers, index)
+	}
+}
+
+spawn_trigger_row_expanded :: proc(index: int) -> bool {
+	if index >= len(editor.expanded_spawn_triggers) {
+		return false
+	}
+	return editor.expanded_spawn_triggers[index]
+}
+
+toggle_spawn_trigger_row_expanded :: proc(index: int) {
+	for len(editor.expanded_spawn_triggers) <= index {
+		append(&editor.expanded_spawn_triggers, false)
+	}
+	editor.expanded_spawn_triggers[index] = !editor.expanded_spawn_triggers[index]
+}
+
+// Spawn_Trigger.composition is a plain slice (its own persisted shape,
+// ticket 03) rather than [dynamic], since it never grows at gameplay time -
+// only here, during editing, where a manual make+copy+delete reallocation is
+// an acceptable trade for keeping the persisted type a plain slice. Every
+// composition this editor ever assigns must be a genuine heap allocation
+// (make, or slice.clone of a literal) rather than a bare `{...}` slice
+// literal directly - a literal used as a struct-field value isn't a
+// context.allocator allocation (confirmed directly: deleting one trips the
+// tracking allocator's bad-free check), so it can never be delete()'d later
+// the way spawn_trigger_row_remove/this proc's own delete() calls do.
+spawn_composition_entry_add :: proc(trigger: ^Spawn_Trigger, entry: Spawn_Composition_Entry) {
+	new_composition := make([]Spawn_Composition_Entry, len(trigger.composition) + 1)
+	copy(new_composition, trigger.composition)
+	new_composition[len(trigger.composition)] = entry
+	delete(trigger.composition)
+	trigger.composition = new_composition
+}
+
+// a no-op below one entry: a Spawn Trigger with zero composition entries
+// would silently spawn nothing forever (see spawn_trigger_row_add), so
+// "keep at least one" is enforced here rather than left to the caller -
+// draw_spawn_trigger_detail also disables the remove button at that point,
+// but a future second caller (e.g. a keyboard shortcut) shouldn't need to
+// remember the same rule independently.
+spawn_composition_entry_remove :: proc(trigger: ^Spawn_Trigger, index: int) {
+	if len(trigger.composition) <= 1 {
+		return
+	}
+
+	new_composition := make([]Spawn_Composition_Entry, len(trigger.composition) - 1)
+	copy(new_composition[:index], trigger.composition[:index])
+	copy(new_composition[index:], trigger.composition[index + 1:])
+	delete(trigger.composition)
+	trigger.composition = new_composition
+}
+
+// like ui.button, but stays highlighted while selected. key/label are split
+// (unlike ui.button, where the label doubles as the key) because the Spawn
+// Trigger panel can show the same variant label (e.g. "Grounded") more than
+// once in a single frame - one per composition entry, across however many
+// trigger rows are expanded at once (ticket 04's multi-expand) - and
+// ui.slider/ui.button's own doc comments warn that a duplicate key
+// misattributes interaction state, so every call site here builds a key
+// that also folds in which trigger/entry it belongs to.
+selectable_button :: proc(key: string, label: string, selected: bool) -> (clicked: bool) {
 	base := selected ? ui.theme.button_active : ui.theme.button
 
-	if layout.node({key = label, padding = {6, 12, 6, 12}, background_color = base}) {
+	if layout.node({key = key, padding = {6, 12, 6, 12}, background_color = base}) {
 		hot, active: bool
 		hot, active, clicked = layout.get_node_mouse_state()
 
@@ -753,13 +987,13 @@ selectable_button :: proc(label: string, selected: bool) -> (clicked: bool) {
 }
 
 mode_button :: proc(label: string, mode: EditorMode) {
-	if selectable_button(label, editor.mode == mode) {
+	if selectable_button(label, label, editor.mode == mode) {
 		editor.mode = mode
 	}
 }
 
 tool_button :: proc(label: string, tool: EditorTool) {
-	if selectable_button(label, editor.tool == tool) {
+	if selectable_button(label, label, editor.tool == tool) {
 		editor.tool = tool
 	}
 }

@@ -48,6 +48,43 @@ end_using_camera :: proc() {
 	rl.EndMode2D()
 }
 
+// an axis-aligned world-space extent, expressed as min/max rather than
+// Rect's x/y/width/height - the natural shape for the visible-rect/clamping
+// math the enemy-spawn-revamp map's off-screen placement ticket needs
+World_Bounds :: struct {
+	min_x, max_x, min_y, max_y: f32,
+}
+
+point_in_world_bounds :: proc(point: Vec2, bounds: World_Bounds) -> bool {
+	return point.x >= bounds.min_x && point.x <= bounds.max_x && point.y >= bounds.min_y && point.y <= bounds.max_y
+}
+
+// the world-space rect currently visible through camera, derived from
+// target/zoom/screen size - raylib's Camera2D treats offset as screen-center
+// (see update_camera_center_smooth_follow), so this is a plain half-extent
+// box around target with no rotation handling needed (the game never
+// rotates the camera). See the enemy-spawn-revamp map's off-screen
+// placement ticket.
+camera_visible_world_rect :: proc(camera: Camera) -> World_Bounds {
+	// game.camera isn't json:"-" (it's meant to feel continuous across a
+	// save/load), so a fresh/corrupted save can hand this a zero zoom - and
+	// even on a brand-new Run, game.camera.zoom is still 0 on Playing's very
+	// first frame, since update_camera_center_smooth_follow (the only thing
+	// that ever sets it) runs in draw_game, one full frame after this can
+	// already be called from that frame's update_spawn_triggers. Falling
+	// back to GAMEPLAY_ZOOM avoids a divide-by-zero producing an Inf/NaN
+	// visible rect (and therefore Inf/NaN spawn positions) in either case.
+	zoom := camera.zoom > 0 ? camera.zoom : GAMEPLAY_ZOOM
+	half_w := (get_screen_width() / zoom) / 2
+	half_h := (get_screen_height() / zoom) / 2
+	return {
+		min_x = camera.target.x - half_w,
+		max_x = camera.target.x + half_w,
+		min_y = camera.target.y - half_h,
+		max_y = camera.target.y + half_h,
+	}
+}
+
 draw_rectangle :: proc(rect: Rect, color: Color, origin: Vec2 = {}, rotation: f32 = 0) {
 	rl.DrawRectanglePro(rect, origin, rotation, color)
 }
