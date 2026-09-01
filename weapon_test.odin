@@ -26,6 +26,11 @@ TEST_MOUSE :: Vec2{50, 0}
 test_semi_automatic_never_resolves_before_windup_completes :: proc(t: ^testing.T) {
 	clear(&game.bullets)
 	defer clear(&game.bullets)
+	// try_fire_gun also spawns a muzzle streak burst/flash (art-revamp
+	// ticket 02) - clean those up too so they don't bleed into whichever
+	// unrelated test runs next in the suite
+	clear(&game.particles)
+	defer clear(&game.particles)
 
 	weapon := weapon_create(.Pistol)
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
@@ -45,6 +50,11 @@ test_semi_automatic_never_resolves_before_windup_completes :: proc(t: ^testing.T
 test_automatic_resolves_immediately_with_no_windup :: proc(t: ^testing.T) {
 	clear(&game.bullets)
 	defer clear(&game.bullets)
+	// try_fire_gun also spawns a muzzle streak burst/flash (art-revamp
+	// ticket 02) - clean those up too so they don't bleed into whichever
+	// unrelated test runs next in the suite
+	clear(&game.particles)
+	defer clear(&game.particles)
 
 	weapon := weapon_create(.SMG)
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
@@ -58,6 +68,11 @@ test_automatic_resolves_immediately_with_no_windup :: proc(t: ^testing.T) {
 test_completed_windup_resolves_exactly_once :: proc(t: ^testing.T) {
 	clear(&game.bullets)
 	defer clear(&game.bullets)
+	// try_fire_gun also spawns a muzzle streak burst/flash (art-revamp
+	// ticket 02) - clean those up too so they don't bleed into whichever
+	// unrelated test runs next in the suite
+	clear(&game.particles)
+	defer clear(&game.particles)
 
 	weapon := weapon_create(.Pistol)
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
@@ -95,6 +110,11 @@ test_total_cycle_length_unaffected_by_windup :: proc(t: ^testing.T) {
 	defer clear(&game.bullets)
 	clear(&game.poison_clouds)
 	defer clear(&game.poison_clouds)
+	// Gun/Fireball resolves also spawn muzzle particles (art-revamp ticket
+	// 02) - clean those up too so they don't bleed into whichever unrelated
+	// test runs next in the suite
+	clear(&game.particles)
+	defer clear(&game.particles)
 
 	dt: f32 = 1.0 / 60.0
 
@@ -214,6 +234,11 @@ test_poison_cloud_target_locks_at_trigger_not_resolve :: proc(t: ^testing.T) {
 test_fireball_target_tracks_live_aim_through_windup :: proc(t: ^testing.T) {
 	clear(&game.bullets)
 	defer clear(&game.bullets)
+	// Fireball's Resolve also spawns a muzzle flash (art-revamp ticket 02) -
+	// clean that up too so it doesn't bleed into whichever unrelated test
+	// runs next in the suite
+	clear(&game.particles)
+	defer clear(&game.particles)
 
 	weapon := weapon_create(.Fire_Wand)
 	trigger_aim := Vec2{1, 0}

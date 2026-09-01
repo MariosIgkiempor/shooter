@@ -242,7 +242,6 @@ spawner_place :: proc(cell: Vec2i) {
 		Spawner {
 			position = cell_center_to_world(cell, game.editing_map.tilemap.tile_size),
 			interval = DEFAULT_SPAWNER_INTERVAL,
-			animation = .Player_Walk,
 			movement_template = Grounded{speed = 40},
 			attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 		},
@@ -362,7 +361,7 @@ draw_editor_world_overlay :: proc() {
 	tile_size := game.editing_map.tilemap.tile_size
 
 	// the player's collision box, so collider alignment can be eyeballed
-	draw_rectangle_lines(actor_collision_rect(game.player.rect, game.player.animation), rl.SKYBLUE, 1)
+	draw_rectangle_lines(actor_collision_rect(game.player.rect), rl.SKYBLUE, 1)
 
 	if editor.mode == .Collisions {
 		for tile in game.editing_map.tilemap.tiles {
@@ -581,14 +580,6 @@ spawners_mode_ui :: proc() {
 	}
 
 	if ui.row({gap = ui.theme.gap}) {
-		ui.text("Animation")
-		animation_button("None", spawner, .None)
-		animation_button("Walk", spawner, .Player_Walk)
-		animation_button("Floater", spawner, .Enemy_Floater_Placeholder)
-		animation_button("Swarmer", spawner, .Enemy_Swarmer_Placeholder)
-	}
-
-	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Movement")
 		movement_template_none_button("None", spawner)
 		movement_template_button("Grounded", spawner, Grounded{speed = 40})
@@ -705,14 +696,6 @@ spawners_mode_ui :: proc() {
 			ui.slider("ranged_fire_rate", &a.fire_rate, 0.1, 10)
 			ui.text("{:.1f}", a.fire_rate)
 		}
-	}
-}
-
-// like mode_button/tool_button, but bound to a spawner field rather than
-// editor state
-animation_button :: proc(label: string, spawner: ^Spawner, value: Animation_Name) {
-	if selectable_button(label, spawner.animation == value) {
-		spawner.animation = value
 	}
 }
 

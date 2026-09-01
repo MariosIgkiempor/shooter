@@ -1713,12 +1713,12 @@ maps: [Map_Name]Map = {
 		Tile{atlas_coords = {10, 11}, world_coords = {53, 46}, collides = true},
 		Tile{atlas_coords = {10, 11}, world_coords = {53, 47}, collides = true},
 	}}, spawners = {
-		Spawner{position = {120, 104}, interval = 3, timer = 0, animation = Animation_Name(1), movement_template = Grounded{speed = 40}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
-		Spawner{position = {760, 104}, interval = 3, timer = 0, animation = Animation_Name(1), movement_template = Grounded{speed = 40}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
-		Spawner{position = {120, 392}, interval = 3, timer = 0, animation = Animation_Name(2), movement_template = Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.34999999}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
-		Spawner{position = {760, 392}, interval = 3, timer = 0, animation = Animation_Name(2), movement_template = Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.34999999}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
-		Spawner{position = {120, 680}, interval = 3, timer = 0, animation = Animation_Name(3), movement_template = Swarmer{speed = 50}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
-		Spawner{position = {760, 680}, interval = 3, timer = 0, animation = Animation_Name(3), movement_template = Swarmer{speed = 50}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
+		Spawner{position = {120, 104}, interval = 3, timer = 0, movement_template = Grounded{speed = 40}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
+		Spawner{position = {760, 104}, interval = 3, timer = 0, movement_template = Grounded{speed = 40}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
+		Spawner{position = {120, 392}, interval = 3, timer = 0, movement_template = Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.34999999}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
+		Spawner{position = {760, 392}, interval = 3, timer = 0, movement_template = Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.34999999}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
+		Spawner{position = {120, 680}, interval = 3, timer = 0, movement_template = Swarmer{speed = 50}, attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}},
+		Spawner{position = {760, 680}, interval = 3, timer = 0, movement_template = Swarmer{speed = 50}, attack_template = Ranged{min_range = 60, max_range = 120, attack_damage = 8, projectile_speed = 200, fire_rate = 1, bullet_lifetime = 2}},
 	}},
 }
 

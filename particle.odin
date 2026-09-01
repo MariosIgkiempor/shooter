@@ -1,6 +1,7 @@
 package shooter
 
 import "core:math"
+import "core:math/linalg"
 import "core:math/rand"
 import rl "vendor:raylib"
 
@@ -48,6 +49,22 @@ FIRE_WAND_CHARGE_MAX_RADIUS :: 2.2
 FIRE_WAND_CHARGE_SPREAD :: 7.0 // px, shrinks toward the muzzle as Windup progress -> 1
 FIRE_WAND_CHARGE_INWARD_PULL :: 5.0 // 1/s, how fast a charge ember drifts toward the muzzle
 
+// muzzle-effect presets (art-revamp ticket 02): a fanned streak burst plus a
+// one-shot flash, fired once at Resolve - the enhanced particle layer
+// confirmed to supply the "punch" plain icon-transform lacked
+MUZZLE_STREAK_MIN_SPEED :: 250.0
+MUZZLE_STREAK_MAX_SPEED :: 400.0
+MUZZLE_STREAK_MIN_LIFETIME :: 0.06
+MUZZLE_STREAK_MAX_LIFETIME :: 0.12
+MUZZLE_STREAK_LENGTH :: 8.0
+MUZZLE_STREAK_WIDTH :: 2.0
+MUZZLE_FLASH_MAX_RADIUS :: 14.0
+MUZZLE_FLASH_LIFETIME :: 0.1
+
+// poison-gas puff preset (art-revamp ticket 06): a flat square that
+// shrinks+fades, replacing the old animated-sprite puff
+POISON_GAS_SQUARE_COLOR :: rl.Color{90, 200, 90, 200}
+
 // bullet-trail preset: tiny, stationary (no velocity of its own - just fades
 // in place via PARTICLE_DRAG-less lifetime decay), spawned once per bullet
 // per frame so gun pellets and Fireball read as leaving a trail rather than
@@ -68,13 +85,17 @@ FLAME_CONE_MAX_RADIUS :: 3.5
 FLAME_CONE_MIN_DRIFT_SPEED :: 10.0
 FLAME_CONE_MAX_DRIFT_SPEED :: 30.0
 
-// what a Particle looks like - a plain filled circle, or an animated atlas
-// sprite. Orthogonal to the rest of Particle's fields (position/velocity/
-// lifetime), same bare-union-on-the-struct-field idiom as Enemy's
-// Movement_Style/Attack_Style. See CONTEXT.md's Movement Style entry.
+// what a Particle looks like - a plain filled circle, an oriented streak
+// (art-revamp ticket 02), a one-shot radial-gradient flash (ticket 02), or a
+// flat square (ticket 06's poison-gas puffs). Orthogonal to the rest of
+// Particle's fields (position/velocity/lifetime), same bare-union-on-the-
+// struct-field idiom as Enemy's Movement_Style/Attack_Style. See CONTEXT.md's
+// Movement Style entry.
 Particle_Visual :: union {
 	Particle_Circle,
-	Particle_Sprite,
+	Particle_Streak,
+	Particle_Flash,
+	Particle_Square,
 }
 
 Particle_Circle :: struct {
@@ -82,9 +103,27 @@ Particle_Circle :: struct {
 	radius: f32,
 }
 
-Particle_Sprite :: struct {
-	animation: Animation,
-	size:      Vec2, // drawn world-space size, centered on position
+// oriented to the particle's own velocity each frame, so it always reads as
+// "moving this way" even as drag slows/curves it
+Particle_Streak :: struct {
+	color:  rl.Color,
+	length: f32,
+	width:  f32,
+}
+
+// one-shot bright glow, fast non-linear decay (radius grows while alpha
+// fades, both eased) - a new primitive today's particle system didn't have
+Particle_Flash :: struct {
+	color:      rl.Color,
+	max_radius: f32,
+}
+
+// flat square that shrinks+fades over time, same convention as
+// Particle_Circle - replaces the old animated-sprite poison-gas puff (ticket
+// 06)
+Particle_Square :: struct {
+	color: rl.Color,
+	size:  f32,
 }
 
 Particle :: struct {
@@ -131,22 +170,73 @@ spawn_particle_burst :: proc(
 	}
 }
 
-// spawns a single animated-sprite particle - used for effects that need more
-// than a flat-colored circle, e.g. the poison cloud's gas puffs
-spawn_particle_sprite :: proc(
-	position, velocity: Vec2,
-	anim: Animation_Name,
-	size: Vec2,
+// spawns a single square particle - used for the poison cloud's gas puffs
+// (ticket 06)
+spawn_particle_square :: proc(position, velocity: Vec2, color: rl.Color, size, lifetime: f32) {
+	append(
+		&game.particles,
+		Particle {
+			position = position,
+			velocity = velocity,
+			visual = Particle_Square{color = color, size = size},
+			lifetime = lifetime,
+			max_lifetime = lifetime,
+		},
+	)
+}
+
+// spawns a single oriented streak particle traveling in `direction` at
+// `speed` (art-revamp ticket 02) - used for weapon muzzle effects
+spawn_particle_streak :: proc(
+	position, direction: Vec2,
+	speed: f32,
+	color: rl.Color,
+	length, width: f32,
 	lifetime: f32,
 ) {
 	append(
 		&game.particles,
 		Particle {
 			position = position,
-			velocity = velocity,
-			visual = Particle_Sprite{animation = animation_create(anim), size = size},
+			velocity = linalg.normalize0(direction) * speed,
+			visual = Particle_Streak{color = color, length = length, width = width},
 			lifetime = lifetime,
 			max_lifetime = lifetime,
+		},
+	)
+}
+
+// fans `count` streak particles from `position` across `spread_degrees`
+// around `direction` - a weapon's muzzle effect (art-revamp ticket 02),
+// giving visual continuity with the streak-shaped bullet it launches
+spawn_streak_burst :: proc(
+	position, direction: Vec2,
+	count: int,
+	spread_degrees: f32,
+	color: rl.Color,
+) {
+	base_angle := math.atan2(direction.y, direction.x)
+
+	for i in 0 ..< count {
+		t := count > 1 ? f32(i) / f32(count - 1) - 0.5 : 0 // -0.5 .. 0.5
+		angle := base_angle + math.to_radians(spread_degrees) * t
+		dir := Vec2{math.cos(angle), math.sin(angle)}
+		speed := rand.float32_range(MUZZLE_STREAK_MIN_SPEED, MUZZLE_STREAK_MAX_SPEED)
+		lifetime := rand.float32_range(MUZZLE_STREAK_MIN_LIFETIME, MUZZLE_STREAK_MAX_LIFETIME)
+		spawn_particle_streak(position, dir, speed, color, MUZZLE_STREAK_LENGTH, MUZZLE_STREAK_WIDTH, lifetime)
+	}
+}
+
+// a one-shot bright flash at `position` - a weapon's muzzle/cast effect
+// (art-revamp ticket 02)
+spawn_muzzle_flash :: proc(position: Vec2, color: rl.Color) {
+	append(
+		&game.particles,
+		Particle {
+			position = position,
+			visual = Particle_Flash{color = color, max_radius = MUZZLE_FLASH_MAX_RADIUS},
+			lifetime = MUZZLE_FLASH_LIFETIME,
+			max_lifetime = MUZZLE_FLASH_LIFETIME,
 		},
 	)
 }
@@ -280,26 +370,29 @@ update_particles :: proc(dt: f32) {
 
 		particle.velocity *= 1 - min(PARTICLE_DRAG * dt, 1)
 		particle.position += particle.velocity * dt
-
-		switch &v in particle.visual {
-		case Particle_Circle:
-		case Particle_Sprite:
-			animation_update(&v.animation, dt)
-		}
 	}
 }
 
 draw_particles :: proc(particles: []Particle) {
 	for particle in particles {
 		t := particle.lifetime / particle.max_lifetime // 1 -> 0 over life
+		// non-linear (ease-out) fade throughout (art-revamp ticket 02),
+		// replacing the old linear t - drops off faster near the end instead
+		// of a flat linear ramp
+		fade := ease_out_cubic(t)
 
 		switch v in particle.visual {
 		case Particle_Circle:
-			rl.DrawCircleV(particle.position, v.radius * t, rl.Fade(v.color, t))
-		case Particle_Sprite:
-			tex := animation_atlas_texture(v.animation)
-			dest := Rect{particle.position.x, particle.position.y, v.size.x, v.size.y}
-			draw_atlas_tile(tex.rect, dest, v.size / 2, 0, rl.Fade(rl.WHITE, t))
+			rl.DrawCircleV(particle.position, v.radius * t, rl.Fade(v.color, fade))
+		case Particle_Streak:
+			draw_streak(particle.position, particle.velocity, v.length, v.width, rl.Fade(v.color, fade))
+		case Particle_Flash:
+			// grows while it fades - fast non-linear decay
+			radius := v.max_radius * (1 - t * t)
+			draw_flash(particle.position, radius, rl.Fade(v.color, fade))
+		case Particle_Square:
+			size := v.size * t
+			rl.DrawRectangleV(particle.position - Vec2{size, size} / 2, Vec2{size, size}, rl.Fade(v.color, fade))
 		}
 	}
 }

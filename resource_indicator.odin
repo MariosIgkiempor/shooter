@@ -244,7 +244,10 @@ player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resour
 			color = RESOURCE_EMPTY_COLOR
 		}
 
-		return Player_Secondary_Resource{frac = ammo_frac, chaotic = v.reload_timer > 0, color = color, icon = .Pickup_Ammo}, true
+		// .None: Ammo has no dedicated icon art post-art-revamp (ticket 06) -
+		// falls back to draw_resource_indicator_placeholder_icon, same as
+		// Melee_Weapon/Magic's Cooldown below
+		return Player_Secondary_Resource{frac = ammo_frac, chaotic = v.reload_timer > 0, color = color, icon = .None}, true
 	case Melee_Weapon, Magic:
 		return Player_Secondary_Resource{frac = weapon_ready_fraction(weapon), color = RESOURCE_COOLDOWN_COLOR, icon = .None}, true
 	}
@@ -252,7 +255,7 @@ player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resour
 }
 
 update_player_resource_indicators :: proc(dt: f32) {
-	doc := animation_atlas_texture(game.player.animation).document_size
+	doc := ACTOR_SIZE
 	feet := Vec2{game.player.x, game.player.y}
 
 	health_frac := clamp(game.player.health / game.player.max_health, 0, 1)
@@ -266,7 +269,7 @@ update_player_resource_indicators :: proc(dt: f32) {
 }
 
 draw_player_resource_indicators :: proc(player: Player) {
-	doc := animation_atlas_texture(player.animation).document_size
+	doc := ACTOR_SIZE
 	feet := Vec2{player.x, player.y}
 
 	health_frac := clamp(player.health / player.max_health, 0, 1)
@@ -288,7 +291,7 @@ draw_player_resource_indicators :: proc(player: Player) {
 
 update_enemy_resource_indicators :: proc(dt: f32) {
 	for &enemy in game.enemies {
-		doc := animation_atlas_texture(enemy.animation).document_size
+		doc := ACTOR_SIZE
 		health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
 		_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)
 		update_resource_bar_particles(enemy.health_bar_particles[:], bar, health_frac, false, dt)
@@ -300,7 +303,7 @@ update_enemy_resource_indicators :: proc(dt: f32) {
 // struct - the caller already has an addressable enemy from its own
 // `for &enemy in game.enemies` loop
 draw_enemy_resource_indicator :: proc(enemy: ^Enemy) {
-	doc := animation_atlas_texture(enemy.animation).document_size
+	doc := ACTOR_SIZE
 	health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
 	color := rl.ColorLerp(ENEMY_HEALTH_DARK_COLOR, ENEMY_HEALTH_BRIGHT_COLOR, health_frac)
 	_, bar := resource_indicator_row_rects(Vec2{enemy.x, enemy.y}, doc, 0, false)

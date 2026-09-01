@@ -8,6 +8,14 @@ BULLET_RADIUS :: 2.0
 BULLET_TRAIL_COLOR :: rl.Color{255, 241, 150, 200} // gun pellets
 FIREBALL_TRAIL_COLOR :: rl.Color{255, 140, 30, 220} // Fire_Wand's explosion_radius > 0 bullets
 
+// bullet shape dimensions (art-revamp ticket 03): plain bullets are a thin
+// streak, Fireball bullets get a thicker "comet" so "this one explodes" reads
+// at a glance rather than only on close color inspection
+BULLET_STREAK_LENGTH :: 10.0
+BULLET_STREAK_WIDTH :: BULLET_RADIUS * 2
+BULLET_COMET_LENGTH :: 14.0
+BULLET_COMET_WIDTH :: BULLET_RADIUS * 3.2
+
 Bullet :: struct {
 	position:         Vec2,
 	velocity:         Vec2, // direction * speed, computed once at spawn
@@ -104,7 +112,7 @@ update_bullets :: proc(dt: f32) {
 		hit := false
 
 		#reverse for enemy, j in game.enemies {
-			enemy_box := actor_collision_rect(enemy.rect, enemy.animation)
+			enemy_box := actor_collision_rect(enemy.rect)
 			if !rl.CheckCollisionCircleRec(bullet.position, BULLET_RADIUS, enemy_box) {
 				continue
 			}
@@ -204,7 +212,7 @@ update_enemy_bullets :: proc(dt: f32) {
 			continue
 		}
 
-		player_box := actor_collision_rect(game.player.rect, game.player.animation)
+		player_box := actor_collision_rect(game.player.rect)
 		if rl.CheckCollisionCircleRec(bullet.position, BULLET_RADIUS, player_box) {
 			damage_player(bullet.damage)
 			unordered_remove(&game.enemy_bullets, i)

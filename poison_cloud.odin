@@ -5,9 +5,9 @@ import "core:math/rand"
 import rl "vendor:raylib"
 
 // ambient gas-puff particles, spawned continuously while the cloud lives -
-// POC for the particle system rendering animated sprites instead of flat
-// circles. Kept slow and short-lived so a puff never drifts past the
-// cloud's own radius before it fades.
+// flat squares that shrink+fade (art-revamp ticket 06). Kept slow and
+// short-lived so a puff never drifts past the cloud's own radius before it
+// fades.
 POISON_GAS_SPAWN_INTERVAL :: 0.1
 POISON_GAS_SPRITE_SIZE :: 14.0
 POISON_GAS_MIN_LIFETIME :: 0.5
@@ -63,11 +63,11 @@ spawn_poison_gas_puff :: proc(cloud: Poison_Cloud) {
 	drift_speed := rand.float32_range(0, POISON_GAS_MAX_DRIFT_SPEED)
 	drift := Vec2{math.cos(drift_angle), math.sin(drift_angle)} * drift_speed
 
-	spawn_particle_sprite(
+	spawn_particle_square(
 		cloud.position + offset,
 		drift,
-		.Particle_Poison_Gas,
-		{POISON_GAS_SPRITE_SIZE, POISON_GAS_SPRITE_SIZE},
+		POISON_GAS_SQUARE_COLOR,
+		POISON_GAS_SPRITE_SIZE,
 		rand.float32_range(POISON_GAS_MIN_LIFETIME, POISON_GAS_MAX_LIFETIME),
 	)
 }
@@ -90,11 +90,11 @@ spawn_poison_windup_puff :: proc(target: Vec2, cloud_radius, progress: f32) {
 	drift_speed := rand.float32_range(0, POISON_GAS_MAX_DRIFT_SPEED)
 	drift := Vec2{math.cos(drift_angle), math.sin(drift_angle)} * drift_speed
 
-	spawn_particle_sprite(
+	spawn_particle_square(
 		target + offset,
 		drift,
-		.Particle_Poison_Gas,
-		{POISON_GAS_SPRITE_SIZE, POISON_GAS_SPRITE_SIZE},
+		POISON_GAS_SQUARE_COLOR,
+		POISON_GAS_SPRITE_SIZE,
 		rand.float32_range(POISON_GAS_MIN_LIFETIME, POISON_GAS_MAX_LIFETIME),
 	)
 }
@@ -122,7 +122,7 @@ update_poison_clouds :: proc(dt: f32) {
 		// repeating tick to everyone currently inside, not a single hit on
 		// entry - lingering in the cloud stacks up damage (ticket 11)
 		#reverse for enemy, j in game.enemies {
-			enemy_box := actor_collision_rect(enemy.rect, enemy.animation)
+			enemy_box := actor_collision_rect(enemy.rect)
 			if !rl.CheckCollisionCircleRec(cloud.position, cloud.radius, enemy_box) {
 				continue
 			}

@@ -180,7 +180,7 @@ load_game :: proc() {
 			window_title = "Game",
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
-				animation = animation_create(.Player_Walk),
+				squash = {1, 1},
 				level = 1,
 				move_speed = PLAYER_BASE_MOVE_SPEED,
 				max_health = PLAYER_BASE_MAX_HEALTH,
@@ -231,6 +231,10 @@ initialize_program :: proc() -> runtime.Context {
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
 	game.player.health = game.player.max_health
+	// json:"-" (see Player.squash) - a fresh/loaded game would otherwise
+	// start at the zero-value {0,0} and draw the player invisibly for one
+	// frame until movement first eases it toward {1,1}
+	game.player.squash = {1, 1}
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -356,14 +360,10 @@ update_game :: proc() {
 			input.y += 1
 		}
 
-		if input.x != 0 || input.y != 0 {
-			// Only update animation if there is input.
-			animation_update(&game.player.animation, rl.GetFrameTime())
-			game.player.flip_x = input.x < 0
-		}
+		update_actor_squash(&game.player.squash, input.x != 0 || input.y != 0, rl.GetFrameTime())
 
 		input = linalg.normalize0(input)
-		move_actor(&game.player.rect, game.player.animation, &game.current_map.tilemap, input * rl.GetFrameTime() * game.player.move_speed)
+		move_actor(&game.player.rect, &game.current_map.tilemap, input * rl.GetFrameTime() * game.player.move_speed)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
 		// silently fail the pending Resolve (gun_can_fire would see
@@ -425,16 +425,19 @@ update_game :: proc() {
 // sprites are drawn with a bottom-center origin, so rect.x/y is the anchor at
 // the actor's feet; the collision box is the drawn sprite's bounds around that
 // anchor, not a top-left rect hanging below it
-actor_collision_rect :: proc(rect: Rect, animation: Animation) -> Rect {
-	doc := animation_atlas_texture(animation).document_size
+// fixed logical footprint for both Player and Enemy - matches the old sprite
+// document_size (24x24) so hitboxes are unchanged from before the art revamp,
+// now independent of the (removed) Animation/atlas system
+ACTOR_SIZE :: Vec2{24, 24}
 
-	return {rect.x - doc.x / 2, rect.y - doc.y, doc.x, doc.y}
+actor_collision_rect :: proc(rect: Rect) -> Rect {
+	return {rect.x - ACTOR_SIZE.x / 2, rect.y - ACTOR_SIZE.y, ACTOR_SIZE.x, ACTOR_SIZE.y}
 }
 
 // moves an actor (player or enemy), resolving against colliding tiles one axis
 // at a time so it slides along walls instead of stopping dead on diagonal input
-move_actor :: proc(rect: ^Rect, animation: Animation, tilemap: ^Tilemap, delta: Vec2) {
-	box := actor_collision_rect(rect^, animation)
+move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) {
+	box := actor_collision_rect(rect^)
 
 	box.x += delta.x
 
@@ -481,8 +484,7 @@ move_actor :: proc(rect: ^Rect, animation: Animation, tilemap: ^Tilemap, delta: 
 
 Player :: struct {
 	using rect: Rect,
-	animation:  Animation,
-	flip_x:     bool,
+	squash:     Vec2 `json:"-"`, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
 	weapon:     Weapon,
 	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
 	// this is the plain, persisted view of it, converted explicitly at the
@@ -641,6 +643,66 @@ Tilemap :: struct {
 	tiles:     [dynamic]Tile,
 }
 
+// warm sand/stone palette (art-revamp ticket 04), distinct from the cool
+// actor/weapon palette
+TILEMAP_FLOOR_COLOR :: rl.Color{56, 48, 40, 255}
+TILEMAP_WALL_COLOR :: rl.Color{124, 110, 90, 255}
+TILEMAP_WALL_BEVEL_COLOR :: rl.Color{74, 64, 52, 255}
+
+// muted gray-blue (art-revamp ticket 05) - kept distinct from RED, which
+// stays exclusive to actual threats (Grounded enemies, enemy bullets)
+SPAWNER_MARKER_COLOR :: rl.Color{110, 130, 150, 255}
+
+// shape vocabulary for actor bodies (art-revamp ticket 01): Player/Grounded
+// draw as a rectangle, Floater as a circle, Swarmer as a triangle. Colors are
+// a first-pass palette, not separately locked by any ticket.
+Actor_Shape_Kind :: enum {
+	Player,
+	Grounded,
+	Floater,
+	Swarmer,
+}
+
+ACTOR_PLAYER_COLOR :: rl.SKYBLUE
+ACTOR_GROUNDED_COLOR :: rl.RED
+ACTOR_FLOATER_COLOR :: rl.VIOLET
+ACTOR_SWARMER_COLOR :: rl.ORANGE
+
+// Inert (no Movement_Style, never actually spawned today) falls back to the
+// rect body since no shape was specified for it
+actor_shape_kind :: proc(movement: Movement_Style) -> Actor_Shape_Kind {
+	switch _ in movement {
+	case Grounded:
+		return .Grounded
+	case Floater:
+		return .Floater
+	case Swarmer:
+		return .Swarmer
+	}
+	return .Grounded
+}
+
+ACTOR_SQUASH_RATE :: 12.0 // exp_approach rate, 1/s
+ACTOR_MOVING_SCALE :: Vec2{1.15, 0.85} // scale_x/scale_y target while moving; eases back to {1,1} at rest
+
+// continuous isotropic squash while moving (ticket 01's confirmed Variant A)
+// - no rotation/tilt. Called once per frame per actor from the update phase
+// (update_game_state for Player, update_enemies for Enemy); draw_actor only
+// ever reads the already-eased result.
+update_actor_squash :: proc(scale: ^Vec2, moving: bool, dt: f32) {
+	target := moving ? ACTOR_MOVING_SCALE : Vec2{1, 1}
+	scale.x = exp_approach(scale.x, target.x, ACTOR_SQUASH_RATE, dt)
+	scale.y = exp_approach(scale.y, target.y, ACTOR_SQUASH_RATE, dt)
+}
+
+// t: 0 -> 1, decelerating toward 1 - the codebase's other general-purpose
+// easing idiom alongside exp_approach (editor.odin), used by Sword's swing
+// and (art-revamp ticket 02) particle fades
+ease_out_cubic :: proc(t: f32) -> f32 {
+	u := 1 - clamp(t, 0, 1)
+	return 1 - u * u * u
+}
+
 draw_game :: proc() {
 	begin_drawing()
 	clear_background(rl.DARKGRAY)
@@ -661,7 +723,7 @@ draw_game :: proc() {
 	{
 		draw_tilemap(&game.current_map.tilemap)
 		for &enemy in game.enemies {
-			draw_actor(enemy.rect, enemy.animation, enemy.flip_x)
+			draw_actor(enemy.rect, actor_shape_kind(enemy.movement), enemy.squash)
 			if game.debug.visualizers[.Pathfinding] {
 				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
 			}
@@ -677,7 +739,7 @@ draw_game :: proc() {
 				draw_enemy_resource_indicator(&enemy)
 			}
 		}
-		draw_actor(game.player.rect, game.player.animation, game.player.flip_x)
+		draw_actor(game.player.rect, .Player, game.player.squash)
 		draw_weapon(game.player)
 		if game.debug.visualizers[.Colliders] {
 			draw_debug_colliders()
@@ -776,38 +838,70 @@ draw_game :: proc() {
 
 	end_drawing()
 
-	draw_actor :: proc(rect: Rect, animation: Animation, flip_x: bool) {
-		anim_texture := animation_atlas_texture(animation)
-		atlas_rect := anim_texture.rect
-		offset := Vec2{anim_texture.offset_left, anim_texture.offset_top}
-
-		if flip_x {
-			atlas_rect.width = -atlas_rect.width
-			offset.x = anim_texture.offset_right
+	// shape+transform rendering (art-revamp ticket 01): body shape comes from
+	// shape_kind (Player/Grounded = rect, Floater = circle, Swarmer =
+	// triangle), continuously squashed in place by `scale` while moving - no
+	// rotation/tilt, see update_actor_squash
+	draw_actor :: proc(rect: Rect, shape_kind: Actor_Shape_Kind, scale: Vec2) {
+		color: Color
+		switch shape_kind {
+		case .Player:
+			color = ACTOR_PLAYER_COLOR
+		case .Grounded:
+			color = ACTOR_GROUNDED_COLOR
+		case .Floater:
+			color = ACTOR_FLOATER_COLOR
+		case .Swarmer:
+			color = ACTOR_SWARMER_COLOR
 		}
 
-		dest := Rect {
-			rect.x + offset.x,
-			rect.y + offset.y,
-			anim_texture.rect.width,
-			anim_texture.rect.height,
+		center := Vec2{rect.x, rect.y - ACTOR_SIZE.y / 2}
+		// scale.x and scale.y move symmetrically around 1 (ACTOR_MOVING_SCALE
+		// averages to exactly 1), so (scale.x+scale.y)/2 would always be 1 and
+		// the squash would be invisible on a single-radius shape - scale.x
+		// alone (the axis that grows while moving) still gives Floater/Swarmer
+		// a visible pulse
+		radius_scale := scale.x
+
+		switch shape_kind {
+		case .Floater:
+			// a plain circle can't visually show rotation, but variant A
+			// (the locked transform) never rotates, so that's moot here
+			rl.DrawCircleV(center, (ACTOR_SIZE.x / 2) * radius_scale, color)
+		case .Swarmer:
+			rl.DrawPoly(center, 3, (ACTOR_SIZE.x / 2) * radius_scale, 0, color)
+		case .Player, .Grounded:
+			dest := Rect{rect.x, rect.y, ACTOR_SIZE.x * scale.x, ACTOR_SIZE.y * scale.y}
+			origin := Vec2{dest.width / 2, dest.height}
+			draw_rectangle(dest, color, origin, 0)
 		}
-
-		origin := Vec2{anim_texture.document_size.x / 2, anim_texture.document_size.y}
-
-		draw_atlas_tile(atlas_rect, dest, origin)
 	}
 
+	// flat fill for both floor and wall, walls get a darker inset bevel
+	// border for thickness (art-revamp ticket 04) - Tile.collides is the only
+	// signal used, atlas_coords/Map/persistence are untouched
 	draw_tilemap :: proc(tilemap: ^Tilemap) {
 		for tile in tilemap.tiles {
-			atlas_rect := tileset_normal[tile.atlas_coords.x][tile.atlas_coords.y]
 			world_rect := Rect {
 				f32(tile.world_coords.x) * tilemap.tile_size.x,
 				f32(tile.world_coords.y) * tilemap.tile_size.y,
 				tilemap.tile_size.x,
 				tilemap.tile_size.y,
 			}
-			draw_atlas_tile(atlas_rect, world_rect, 0)
+
+			color := TILEMAP_WALL_COLOR if tile.collides else TILEMAP_FLOOR_COLOR
+			draw_rectangle(world_rect, color)
+
+			if tile.collides {
+				bevel: f32 = 3
+				inset := Rect {
+					world_rect.x + bevel,
+					world_rect.y + bevel,
+					world_rect.width - bevel * 2,
+					world_rect.height - bevel * 2,
+				}
+				draw_rectangle_lines(inset, TILEMAP_WALL_BEVEL_COLOR, 2)
+			}
 		}
 	}
 
@@ -820,61 +914,71 @@ draw_game :: proc() {
 		}
 	}
 
+	// muted gray-blue (art-revamp ticket 05) - was Grounded-enemy-clashing
+	// RED; visible during real gameplay (drawn unconditionally here), not
+	// just the map editor, so it must never read as a distant enemy
 	draw_spawners :: proc(spawners: []Spawner) {
 		for spawner in spawners {
-			rl.DrawCircleLinesV(spawner.position, 8, rl.RED)
-			rl.DrawCircleV(spawner.position, 2, rl.RED)
+			rl.DrawCircleLinesV(spawner.position, 8, SPAWNER_MARKER_COLOR)
+			rl.DrawCircleV(spawner.position, 2, SPAWNER_MARKER_COLOR)
 		}
 	}
 
+	// bullets reuse the streak shape (art-revamp ticket 03); tint unchanged
+	// (player = gold/yellow, enemy = red)
 	draw_bullets :: proc(bullets: []Bullet) {
-		tex := atlas_textures[Texture_Name.Bullet]
-		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}
-
 		for bullet in bullets {
-			// sprite's nose faces up (-y) by default, hence the +90 to align
-			// it with the velocity direction (0 degrees = +x, clockwise)
-			angle := math.to_degrees(math.atan2(bullet.velocity.y, bullet.velocity.x)) + 90
-			dest := Rect{bullet.position.x, bullet.position.y, tex.rect.width, tex.rect.height}
-			draw_atlas_tile(tex.rect, dest, origin, angle, rl.YELLOW)
+			if bullet.explosion_radius > 0 {
+				draw_comet(bullet.position, bullet.velocity, BULLET_COMET_LENGTH, BULLET_COMET_WIDTH, rl.YELLOW)
+			} else {
+				draw_streak(bullet.position, bullet.velocity, BULLET_STREAK_LENGTH, BULLET_STREAK_WIDTH, rl.YELLOW)
+			}
 		}
 	}
 
 	draw_enemy_bullets :: proc(bullets: []Enemy_Bullet) {
-		tex := atlas_textures[Texture_Name.Bullet]
-		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}
-
 		for bullet in bullets {
-			angle := math.to_degrees(math.atan2(bullet.velocity.y, bullet.velocity.x)) + 90
-			dest := Rect{bullet.position.x, bullet.position.y, tex.rect.width, tex.rect.height}
-			draw_atlas_tile(tex.rect, dest, origin, angle, rl.RED)
+			draw_streak(bullet.position, bullet.velocity, BULLET_STREAK_LENGTH, BULLET_STREAK_WIDTH, rl.RED)
 		}
 	}
 
 	WEAPON_WINDUP_PULLBACK :: 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
 	WEAPON_RECOIL_KICK :: 8.0 // px kicked back along -aim_dir during Gun's Automatic Follow-through (SMG)
-	FLAME_STAFF_PULSE_SCALE :: 0.35 // extra sprite scale at the start of a Follow-through pulse, decaying to 0
+	FLAME_STAFF_PULSE_SCALE :: 0.35 // extra scale at the start of a Follow-through pulse, decaying to 0
 	SWORD_SWING_OUT_TIME :: 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
 	SWORD_SWING_RETURN_TIME :: 0.11 // seconds, ease-out extreme -> neutral
+	SWORD_ECHO_COUNT :: 3 // motion-trail echoes sampled through the swing (ticket 02)
+	SWORD_ECHO_STEP :: 0.025 // seconds between each sampled echo
 
-	ease_out_cubic :: proc(t: f32) -> f32 {
-		u := 1 - clamp(t, 0, 1)
-		return 1 - u * u * u
+	// angle offset (added to the pre-swing base angle) at `time_since_resolve`
+	// seconds into Sword's Resolve swing-through - a two-phase eased curve (a
+	// spring was prototyped and rejected as feeling wrong). Factored out so
+	// both the live blade and its motion-trail echoes sample the same curve.
+	sword_swing_offset :: proc(arc_degrees, time_since_resolve: f32) -> f32 {
+		draw_back := -(arc_degrees / 2)
+		extreme := arc_degrees / 2
+
+		if time_since_resolve < SWORD_SWING_OUT_TIME {
+			t := ease_out_cubic(time_since_resolve / SWORD_SWING_OUT_TIME)
+			return draw_back + (extreme - draw_back) * t
+		}
+
+		t := ease_out_cubic((time_since_resolve - SWORD_SWING_OUT_TIME) / SWORD_SWING_RETURN_TIME)
+		return extreme - extreme * t
 	}
 
-	// draws weapon_texture_names[player.weapon.kind]'s icon pivoting at
-	// roughly chest height, rotated to face the player's current aim
-	// direction. Windup/Follow-through motion below is transform-only
-	// animation on that per-kind sprite (validated for timing by ticket
-	// 04/05/06's prototypes); the "punch" beyond transform comes from Magic's
-	// windup/cast particles (update_magic_cast_particles, weapon.odin), spawned
-	// during update rather than drawn here.
+	// draws the player's weapon as a shape by family (art-revamp ticket 02):
+	// Gun = rod, Melee = wedge, Magic = rod+orb; pivoting at roughly chest
+	// height, rotated to face the player's current aim direction.
+	// Windup/Follow-through motion below is transform-only animation on that
+	// shape; the "punch" beyond transform comes from the enhanced particle
+	// effects spawned during update (spawn_muzzle_flash/spawn_streak_burst,
+	// weapon.odin) and Sword's motion-trail echoes drawn below, not from the
+	// shape itself.
 	draw_weapon :: proc(player: Player) {
-		tex := atlas_textures[weapon_texture_names[player.weapon.kind]]
 		weapon := player.weapon
 
-		doc := animation_atlas_texture(player.animation).document_size
-		pivot := Vec2{player.x, player.y - doc.y / 2}
+		pivot := Vec2{player.x, player.y - ACTOR_SIZE.y / 2}
 		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
 		pulse_scale: f32 = 1
 
@@ -891,11 +995,14 @@ draw_game :: proc() {
 			}
 		}
 
-		// Sword's Resolve swing-through (ticket 05): a two-phase eased curve
-		// (a spring was prototyped and rejected as feeling wrong), derived
-		// purely from time-since-Resolve rather than a new persisted timer -
-		// recovered from cooldown_timer, since Windup-gated weapons otherwise
-		// go straight from Resolve to Ready with no separate Follow-through
+		// Sword's Resolve swing-through, plus its motion-trail echoes
+		// (ticket 02): several fading copies of the same wedge sampled at
+		// slightly earlier points on the same swing curve, not a new
+		// particle primitive - collected here, drawn after the main blade
+		// below.
+		echo_angles: [SWORD_ECHO_COUNT]f32
+		echo_count := 0
+
 		if v, is_melee := weapon.variant.(Melee_Weapon); is_melee && weapon.windup_fraction > 0 {
 			windup_duration := weapon.windup_fraction / weapon.action_rate
 			cycle := 1.0 / weapon.action_rate
@@ -903,15 +1010,18 @@ draw_game :: proc() {
 			swing_total := f32(SWORD_SWING_OUT_TIME + SWORD_SWING_RETURN_TIME)
 
 			if time_since_resolve >= 0 && time_since_resolve < swing_total {
-				draw_back := -(v.arc_degrees / 2)
-				extreme := v.arc_degrees / 2
+				base_angle := angle
+				angle += sword_swing_offset(v.arc_degrees, time_since_resolve)
 
-				if time_since_resolve < SWORD_SWING_OUT_TIME {
-					t := ease_out_cubic(time_since_resolve / SWORD_SWING_OUT_TIME)
-					angle += draw_back + (extreme - draw_back) * t
-				} else {
-					t := ease_out_cubic((time_since_resolve - SWORD_SWING_OUT_TIME) / SWORD_SWING_RETURN_TIME)
-					angle += extreme - extreme * t
+				if weapon.kind == .Sword {
+					for i in 1 ..= SWORD_ECHO_COUNT {
+						t := time_since_resolve - f32(i) * SWORD_ECHO_STEP
+						if t < 0 || t >= swing_total {
+							continue
+						}
+						echo_angles[echo_count] = base_angle + sword_swing_offset(v.arc_degrees, t)
+						echo_count += 1
+					}
 				}
 			}
 		}
@@ -932,56 +1042,32 @@ draw_game :: proc() {
 			}
 		}
 
-		// sprite's muzzle faces +x (right) by default; mirror vertically when
-		// the drawn angle (post windup/swing offset, not the raw aim_dir)
-		// points left, so the weapon stays right-side up instead of
-		// upside-down mid-swing
-		atlas_rect := tex.rect
-		offset_top := tex.offset_top
-		if math.cos(math.to_radians(angle)) < 0 {
-			atlas_rect.height = -atlas_rect.height
-			offset_top = tex.offset_bottom
-		}
-
-		// scale so the grip-to-tip reach matches the player's size (Gun/Magic),
-		// or matches Melee_Weapon's own range (Sword/Dagger) so the blade's
-		// drawn tip lands exactly where its hit-arc actually reaches, instead
-		// of an icon-sized blade implying a shorter reach than it has. Reach
-		// at scale=1 is rect.width + offset_left (grip-to-visible-tip in the
-		// same dest-local coords `origin` below is expressed in, assuming the
-		// blade tip is the atlas's last opaque pixel with ~0 offset_right).
-		scale: f32
 		switch v in weapon.variant {
+		case Gun:
+			draw_rod(pivot, angle, WEAPON_GUN_ROD_LENGTH * pulse_scale, WEAPON_GUN_ROD_WIDTH * pulse_scale, WEAPON_GUN_COLOR)
+
 		case Melee_Weapon:
-			reach := tex.rect.width + tex.offset_left
-			scale = reach > 0 ? v.range / reach : doc.y / tex.document_size.y
-		case Gun, Magic:
-			scale = doc.y / tex.document_size.y
+			for i in 0 ..< echo_count {
+				fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
+				draw_wedge(pivot, echo_angles[i], v.range * pulse_scale, WEAPON_MELEE_WEDGE_WIDTH * pulse_scale, rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5))
+			}
+			draw_wedge(pivot, angle, v.range * pulse_scale, WEAPON_MELEE_WEDGE_WIDTH * pulse_scale, WEAPON_MELEE_COLOR)
+
+		case Magic:
+			length := WEAPON_MAGIC_ROD_LENGTH * pulse_scale
+			draw_rod(pivot, angle, length, WEAPON_MAGIC_ROD_WIDTH * pulse_scale, WEAPON_MAGIC_ROD_COLOR)
+			tip := rotate_point({length, 0}, pivot, angle)
+			rl.DrawCircleV(tip, WEAPON_MAGIC_ORB_RADIUS * pulse_scale, WEAPON_MAGIC_ORB_COLOR)
 		}
-		scale *= pulse_scale
-
-		width := tex.rect.width * scale
-		height := tex.rect.height * scale
-
-		dest := Rect{pivot.x, pivot.y, width, height}
-
-		// origin (the grip, rotation pivot) sits at the document's left edge,
-		// vertically centered - expressed relative to the trimmed rect's
-		// top-left since the atlas is tightly trimmed and the grip may fall
-		// in space that got cropped away (see draw_actor's similar use of
-		// offset_left/top to correct for the same trimming)
-		origin := Vec2{-tex.offset_left * scale, (tex.document_size.y / 2 - offset_top) * scale}
-
-		draw_atlas_tile(atlas_rect, dest, origin, angle)
 	}
 
 	// F8 debug panel visualizer: outlines the player's and every enemy's actual collision
 	// rect (actor_collision_rect - the same box move_actor/melee/bullets hit
 	// test against), not just their sprite bounds
 	draw_debug_colliders :: proc() {
-		rl.DrawRectangleLinesEx(actor_collision_rect(game.player.rect, game.player.animation), 1, rl.LIME)
+		rl.DrawRectangleLinesEx(actor_collision_rect(game.player.rect), 1, rl.LIME)
 		for enemy in game.enemies {
-			rl.DrawRectangleLinesEx(actor_collision_rect(enemy.rect, enemy.animation), 1, rl.RED)
+			rl.DrawRectangleLinesEx(actor_collision_rect(enemy.rect), 1, rl.RED)
 		}
 	}
 

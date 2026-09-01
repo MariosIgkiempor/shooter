@@ -1,5 +1,7 @@
 package shooter
 
+import "core:math"
+import "core:math/linalg"
 import "core:slice"
 import "core:strings"
 import rl "vendor:raylib"
@@ -56,6 +58,62 @@ draw_rectangle_lines :: proc(rect: Rect, color: Color, thickness: f32 = 1) {
 
 draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2, rotation: f32 = 0, tint: Color = rl.WHITE) {
 	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, rotation, tint)
+}
+
+// rotates a point expressed in `pivot`-local space by angle_deg and returns
+// its world position - shared by every shape (art-revamp) that needs to
+// place geometry relative to a rotated pivot (weapon wedges, comets, orbs)
+rotate_point :: proc(local, pivot: Vec2, angle_deg: f32) -> Vec2 {
+	rad := math.to_radians(angle_deg)
+	c := math.cos(rad)
+	s := math.sin(rad)
+	return pivot + Vec2{local.x * c - local.y * s, local.x * s + local.y * c}
+}
+
+// a thin oriented streak, centered on `position` and elongated along
+// `direction` - the shared shape for bullets and streak particles (art-revamp
+// tickets 02/03), giving visual continuity between a weapon's muzzle effect
+// and the bullet it launches
+draw_streak :: proc(position, direction: Vec2, length, width: f32, color: Color) {
+	dir := linalg.normalize0(direction)
+	angle := math.to_degrees(math.atan2(dir.y, dir.x))
+	dest := Rect{position.x, position.y, length, width}
+	origin := Vec2{length / 2, width / 2}
+	draw_rectangle(dest, color, origin, angle)
+}
+
+// a thicker, rounder streak with a small tapered head (art-revamp ticket 03's
+// "comet") - reads as "this one explodes" at a glance, distinct from a plain
+// bullet streak beyond just color
+draw_comet :: proc(position, direction: Vec2, length, width: f32, color: Color) {
+	dir := linalg.normalize0(direction)
+	draw_streak(position, dir, length, width, color)
+	rl.DrawCircleV(position + dir * (length * 0.25), width * 0.7, color)
+}
+
+// a rod extending from `pivot` (the grip) along angle_deg for `length`,
+// `width` wide (art-revamp ticket 02's Gun/Magic shapes)
+draw_rod :: proc(pivot: Vec2, angle_deg: f32, length, width: f32, color: Color) {
+	dest := Rect{pivot.x, pivot.y, length, width}
+	origin := Vec2{0, width / 2}
+	draw_rectangle(dest, color, origin, angle_deg)
+}
+
+// a wedge/blade silhouette (art-revamp ticket 02's Melee shape): a triangle
+// with its base at `pivot` (the grip) and its tip `length` away along the
+// angle, `width` wide at the base
+draw_wedge :: proc(pivot: Vec2, angle_deg: f32, length, width: f32, color: Color) {
+	tip := rotate_point({length, 0}, pivot, angle_deg)
+	base_a := rotate_point({0, -width / 2}, pivot, angle_deg)
+	base_b := rotate_point({0, width / 2}, pivot, angle_deg)
+	rl.DrawTriangle(base_a, tip, base_b, color)
+}
+
+// a one-shot radial-gradient glow, fully opaque at the center fading to
+// transparent at `radius` (art-revamp ticket 02's "flash") - callers fade
+// `color`'s own alpha over the effect's lifetime for the non-linear decay
+draw_flash :: proc(position: Vec2, radius: f32, color: Color) {
+	rl.DrawCircleGradient(i32(position.x), i32(position.y), radius, color, rl.Fade(color, 0))
 }
 
 // draws a 9-slice panel from a single square-grid source texture: corners
@@ -194,53 +252,3 @@ load_atlased_font :: proc() -> rl.Font {
 	}
 }
 
-Animation :: struct {
-	atlas_anim:    Animation_Name,
-	current_frame: Texture_Name,
-	timer:         f32,
-}
-
-animation_create :: proc(anim: Animation_Name) -> Animation {
-	a := atlas_animations[anim]
-
-	return {
-		current_frame = a.first_frame,
-		atlas_anim = anim,
-		timer = atlas_textures[a.first_frame].duration,
-	}
-}
-
-animation_update :: proc(a: ^Animation, dt: f32) -> bool {
-	a.timer -= dt
-	looped := false
-
-	if a.timer <= 0 {
-		a.current_frame = Texture_Name(int(a.current_frame) + 1)
-		anim := atlas_animations[a.atlas_anim]
-
-		if a.current_frame > anim.last_frame {
-			a.current_frame = anim.first_frame
-			looped = true
-		}
-
-		a.timer = atlas_textures[a.current_frame].duration
-	}
-
-	return looped
-}
-
-animation_length :: proc(anim: Animation_Name) -> f32 {
-	l: f32
-	aa := atlas_animations[anim]
-
-	for i in aa.first_frame ..= aa.last_frame {
-		t := atlas_textures[i]
-		l += t.duration
-	}
-
-	return l
-}
-
-animation_atlas_texture :: proc(anim: Animation) -> Atlas_Texture {
-	return atlas_textures[anim.current_frame]
-}

@@ -22,8 +22,7 @@ Enemy_Kind :: enum {
 
 Enemy :: struct {
 	using rect: Rect, // bottom-center "feet" anchor, same convention as Player
-	animation:  Animation,
-	flip_x:     bool,
+	squash:     Vec2, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	path:       Path,
@@ -92,10 +91,9 @@ Ranged :: struct {
 }
 
 Spawner :: struct {
-	position:  Vec2,
-	interval:  f32,
-	timer:     f32,
-	animation: Animation_Name,
+	position: Vec2,
+	interval: f32,
+	timer:    f32,
 
 	// copied by value into each spawned enemy; tagged json:"-" for the same
 	// reason Weapon.variant is (weapon.odin) - see Movement_Style_Save /
@@ -432,12 +430,12 @@ spawn_enemy :: proc(spawner: Spawner) {
 	}
 
 	enemy := Enemy {
-		rect      = {spawner.position.x, spawner.position.y, 0, 0},
-		animation = animation_create(spawner.animation),
-		movement  = movement,
-		attack    = spawner.attack_template,
-		health    = ENEMY_MAX_HEALTH,
-		kind      = .Basic,
+		rect     = {spawner.position.x, spawner.position.y, 0, 0},
+		squash   = {1, 1},
+		movement = movement,
+		attack   = spawner.attack_template,
+		health   = ENEMY_MAX_HEALTH,
+		kind     = .Basic,
 	}
 
 	append(&game.enemies, enemy)
@@ -510,10 +508,7 @@ update_enemies :: proc(dt: f32) {
 		// nil: no attack
 		}
 
-		if delta.x != 0 || delta.y != 0 {
-			animation_update(&enemy.animation, dt)
-			enemy.flip_x = delta.x < 0
-		}
+		update_actor_squash(&enemy.squash, delta.x != 0 || delta.y != 0, dt)
 
 		// Floater ignores tilemap collision entirely (see the Floater
 		// movement design ticket), so it skips move_actor's collision
@@ -522,7 +517,7 @@ update_enemies :: proc(dt: f32) {
 			enemy.x += delta.x
 			enemy.y += delta.y
 		} else {
-			move_actor(&enemy.rect, enemy.animation, &game.current_map.tilemap, delta)
+			move_actor(&enemy.rect, &game.current_map.tilemap, delta)
 		}
 	}
 }

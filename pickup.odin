@@ -11,7 +11,20 @@ PICKUP_HOMING_ACCEL :: 800.0 // px/s^2 once inside magnet radius
 PICKUP_MAX_SPEED :: 260.0
 PICKUP_HEAL_AMOUNT :: 50.0 // health pickup heal amount
 PICKUP_GOLD_AMOUNT :: 10 // gold granted per Gold pickup, spent in the Shop
-PICKUP_GOLD_RADIUS :: 5.0 // world-space draw radius (no dedicated art yet - see draw_pickups)
+PICKUP_GOLD_RADIUS :: 5.0 // world-space draw radius
+
+// shape/color per kind (art-revamp ticket 03, colors amended by ticket 05):
+// Gold is a plain circle (the fixed anchor the other two are chosen not to
+// collide with); Health = a plus/cross, warm red/pink; Ammo = stacked short
+// bars, light gray/silver (echoing the weapon-metal tone)
+PICKUP_HEALTH_COLOR :: rl.Color{225, 90, 110, 255}
+PICKUP_AMMO_COLOR :: rl.Color{200, 200, 205, 255}
+PICKUP_CROSS_SIZE :: 10.0 // overall span of Health's plus/cross
+PICKUP_CROSS_THICKNESS :: 3.0
+PICKUP_AMMO_BAR_COUNT :: 3
+PICKUP_AMMO_BAR_WIDTH :: 2.5
+PICKUP_AMMO_BAR_HEIGHT :: 8.0
+PICKUP_AMMO_BAR_GAP :: 1.5
 
 // Gold reuses all existing pickup machinery (roll odds, homing, collection) -
 // it's a third uniform option in maybe_spawn_pickup's rand.choice_enum roll,
@@ -20,14 +33,6 @@ Pickup_Kind :: enum {
 	Health,
 	Ammo,
 	Gold,
-}
-
-// Gold has no atlas art yet (.None, never actually looked up - draw_pickups
-// special-cases it to a plain circle instead)
-pickup_texture_names: [Pickup_Kind]Texture_Name = {
-	.Health = .Pickup_Heart,
-	.Ammo   = .Pickup_Ammo,
-	.Gold   = .None,
 }
 
 Pickup :: struct {
@@ -97,14 +102,45 @@ collect_pickup :: proc(pickup: Pickup) {
 
 draw_pickups :: proc(pickups: []Pickup) {
 	for pickup in pickups {
-		if pickup.kind == .Gold {
+		switch pickup.kind {
+		case .Gold:
 			rl.DrawCircleV(pickup.position, PICKUP_GOLD_RADIUS, rl.GOLD)
-			continue
+		case .Health:
+			draw_health_pickup_cross(pickup.position)
+		case .Ammo:
+			draw_ammo_pickup_bars(pickup.position)
 		}
+	}
+}
 
-		tex := atlas_textures[pickup_texture_names[pickup.kind]]
-		dest := Rect{pickup.position.x, pickup.position.y, tex.rect.width, tex.rect.height}
-		origin := Vec2{tex.rect.width / 2, tex.rect.height / 2}
-		draw_atlas_tile(tex.rect, dest, origin)
+// a plus/cross built from two overlapping rects - a standard, unambiguous
+// health glyph (art-revamp ticket 03)
+draw_health_pickup_cross :: proc(position: Vec2) {
+	half: f32 = PICKUP_CROSS_SIZE / 2
+	rl.DrawRectangleV(
+		position - Vec2{half, PICKUP_CROSS_THICKNESS / 2},
+		Vec2{PICKUP_CROSS_SIZE, PICKUP_CROSS_THICKNESS},
+		PICKUP_HEALTH_COLOR,
+	)
+	rl.DrawRectangleV(
+		position - Vec2{PICKUP_CROSS_THICKNESS / 2, half},
+		Vec2{PICKUP_CROSS_THICKNESS, PICKUP_CROSS_SIZE},
+		PICKUP_HEALTH_COLOR,
+	)
+}
+
+// a small cluster of parallel bars ("stacked cartridges") - distinct from
+// the cross, Gold's circle, and a single bullet streak (art-revamp ticket 03)
+draw_ammo_pickup_bars :: proc(position: Vec2) {
+	total_width := f32(PICKUP_AMMO_BAR_COUNT) * PICKUP_AMMO_BAR_WIDTH + f32(PICKUP_AMMO_BAR_COUNT - 1) * PICKUP_AMMO_BAR_GAP
+	left := position.x - total_width / 2
+
+	for i in 0 ..< PICKUP_AMMO_BAR_COUNT {
+		x := left + f32(i) * (PICKUP_AMMO_BAR_WIDTH + PICKUP_AMMO_BAR_GAP)
+		rl.DrawRectangleV(
+			Vec2{x, position.y - PICKUP_AMMO_BAR_HEIGHT / 2},
+			Vec2{PICKUP_AMMO_BAR_WIDTH, PICKUP_AMMO_BAR_HEIGHT},
+			PICKUP_AMMO_COLOR,
+		)
 	}
 }

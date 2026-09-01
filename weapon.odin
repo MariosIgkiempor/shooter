@@ -2,6 +2,7 @@ package shooter
 
 import "core:math"
 import "core:math/linalg"
+import rl "vendor:raylib"
 
 Weapon_Kind :: enum {
 	Pistol,
@@ -289,16 +290,24 @@ weapon_presets: [Weapon_Kind]Weapon = {
 	},
 }
 
-weapon_texture_names: [Weapon_Kind]Texture_Name = {
-	.Pistol  = .Weapon_Pistol,
-	.SMG     = .Weapon_Smg,
-	.Shotgun = .Weapon_Shotgun,
-	.Dagger  = .Weapon_Dagger,
-	.Sword   = .Weapon_Sword,
-	.Fire_Wand    = .Weapon_Fire_Wand,
-	.Flame_Staff  = .Weapon_Flame_Staff,
-	.Poison_Staff = .Weapon_Poison_Staff,
-}
+// weapon shape dimensions/colors by family (art-revamp ticket 02): distinct
+// silhouette per family, not per-kind - Gun = thin rod, Melee = wedge/blade,
+// Magic = rod with a circular orb tip. Colors lean metal-toned for the
+// physical weapons (echoed by ticket 05's Ammo pickup color) and warm/glowy
+// for Magic's orb.
+WEAPON_GUN_ROD_LENGTH :: 20.0
+WEAPON_GUN_ROD_WIDTH :: 5.0
+WEAPON_GUN_COLOR :: rl.Color{180, 180, 190, 255}
+WEAPON_MELEE_WEDGE_WIDTH :: 8.0 // Melee_Weapon.range supplies the length, matching its hit-arc reach
+WEAPON_MELEE_COLOR :: rl.Color{210, 210, 220, 255}
+WEAPON_MAGIC_ROD_LENGTH :: 16.0
+WEAPON_MAGIC_ROD_WIDTH :: 4.0
+WEAPON_MAGIC_ROD_COLOR :: rl.Color{110, 80, 150, 255}
+WEAPON_MAGIC_ORB_RADIUS :: 5.0
+WEAPON_MAGIC_ORB_COLOR :: rl.Color{255, 205, 90, 255}
+
+WEAPON_GUN_MUZZLE_STREAK_COUNT :: 4
+WEAPON_GUN_MUZZLE_SPREAD_DEGREES :: 20.0
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
 
@@ -574,6 +583,11 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool 
 	gun.ammo_in_clip -= 1
 
 	fire_pellets(weapon^, gun^, origin, aim_dir)
+	// muzzle effect (art-revamp ticket 02) - the enhanced particle layer
+	// (streak burst + flash) confirmed to supply the "punch" plain
+	// icon-transform lacked
+	spawn_streak_burst(origin, aim_dir, WEAPON_GUN_MUZZLE_STREAK_COUNT, WEAPON_GUN_MUZZLE_SPREAD_DEGREES, WEAPON_GUN_COLOR)
+	spawn_muzzle_flash(origin, rl.Fade(rl.WHITE, 0.8))
 
 	if gun.ammo_in_clip <= 0 {
 		start_reload(weapon)
@@ -588,7 +602,7 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool 
 // Mirrors Gun.spread_angle's cone-around-aim_dir idea, reused for hit
 // detection instead of pellet fan-out.
 enemy_in_melee_arc :: proc(melee: Melee_Weapon, origin, aim_dir: Vec2, enemy: Enemy) -> bool {
-	enemy_box := actor_collision_rect(enemy.rect, enemy.animation)
+	enemy_box := actor_collision_rect(enemy.rect)
 	enemy_radius := max(enemy_box.width, enemy_box.height) / 2
 
 	to_enemy := Vec2{enemy.x, enemy.y} - origin
@@ -635,6 +649,7 @@ try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, target: Vec2
 	switch magic.spell_kind {
 	case .Fireball:
 		cast_fireball(magic^, damage, origin, aim_dir)
+		spawn_muzzle_flash(origin, WEAPON_MAGIC_ORB_COLOR) // art-revamp ticket 02
 	case .Flamethrower:
 		cast_flamethrower_tick(magic^, damage, origin, aim_dir, enemies)
 	case .Poison_Cloud:
