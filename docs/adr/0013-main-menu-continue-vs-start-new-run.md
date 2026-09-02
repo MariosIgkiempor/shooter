@@ -1,0 +1,11 @@
+# Main Menu offers explicit Continue vs Start New Run, replacing the silent relaunch skip
+
+Status: accepted
+
+The [Main menu flow](../../.scratch/main-menu/map.md) map's [Save and Continue semantics](../../.scratch/main-menu/issues/02-save-and-continue-semantics.md) ticket decided how the new Main Menu (shown on every launch) relates to a Run already in progress. Today, `Player.run_started` silently gates the Splash-mode transition: if true, the game skips straight to map-select, preserving the in-progress Run's Gold/weapon/Upgrade-stacks; if false, it goes through Account Progression and weapon-select. That silent skip is retired. Instead, the Main Menu shows a "Continue" button whenever a Run is in progress (same target as today's skip: straight to map-select, Gold/weapon/Upgrades intact) alongside an always-present "Start New Run" button that goes through weapon-select fresh.
+
+Two further consequences fall out of making this an explicit choice rather than an automatic skip:
+- Picking "Start New Run" while a Run is in progress requires a confirmation step first — silently discarding real progress on a misclick was an acceptable risk when the game did it automatically based on saved state, but not when it's one button-press away from another visible option.
+- Discarding a Run this way grants no XP for it — XP stays strictly a Run-*end* grant tied to death (see [ADR-0009](0009-xp-is-a-run-end-grant.md)), not to a Run merely ending its existence. Abandoning and dying are both ways a Run stops, but only one of them is a Run *end*.
+
+Consequences: `Player.run_started` keeps its current meaning ("a Run is in progress") and gains a second consumer — the Main Menu's own "show Continue?" check — rather than being retired; only its old sole consumer, the Splash-mode branch (`main.odin:328`), goes away. The Main Menu therefore always renders at least "Start New Run" plus the Account Progression content ([ADR-0012](0012-account-progression-folds-into-main-menu.md)), and additionally "Continue" whenever `run_started` is true. This is a decision record only — the actual `ProgramMode`/`hud.odin` wiring, and the confirmation step's UI treatment, happen after the [Main menu flow](../../.scratch/main-menu/map.md) map resolves.

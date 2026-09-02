@@ -161,15 +161,21 @@ draw_splash_ui :: proc() {
 	draw_atlas_tile(tex.rect, dest, {})
 }
 
-// shown once per process launch, right after Splash, when there's no Run
-// already in progress (see update_game's .Splash case - a resumed Run skips
-// straight past this to Selecting, same as it always skipped Run_Start).
-// Single-column panel: Account Level/XP-into-level bar, unspent-XP balance,
-// then the Account_Stat spend list - moved here from the old Run End screen
-// (see CONTEXT.md's Account progression entry) since spending is now a
-// pre-Run decision rather than something squeezed in right after death.
-// "Start Game" hands off to the existing weapon-pick screen.
-draw_account_progression_ui :: proc() {
+// shown on every process launch, right after Splash (see update_game's
+// .Splash case, which now advances here unconditionally - ADR-0013 retired
+// the old silent skip-to-Selecting branch). Two-column layout, flipped
+// Variant B from the main-menu map's "Main Menu screen prototype" ticket
+// (validated on throwaway branch prototype/main-menu, commit 25491c2):
+// "Progression" panel on the left carries the old draw_account_progression_ui
+// content (Account Level/XP-into-level, unspent-XP balance, the
+// Account_Stat spend list - moved here from the old Run End screen, see
+// CONTEXT.md's Account progression entry) unconditionally, even at
+// unspent_xp == 0 (ADR-0012); "Shooter" panel on the right carries the
+// actions - "Continue" (only when a Run is in progress, straight to
+// Selecting, Gold/weapon/Upgrades intact) alongside an always-present
+// "Start New Run" (through weapon-pick, Run_Start) that requires a confirm
+// step first if it would discard a Run already in progress (ADR-0013).
+draw_main_menu_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
 	defer ui.theme = previous_theme
@@ -177,22 +183,59 @@ draw_account_progression_ui :: proc() {
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
 	ui.begin_frame(game.window_width, game.window_height)
 
-	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-		if ui.begin("Account Progression", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			ui.text("Account Lv. {}", game.player.level)
-			// no slash in the HUD font's glyph set (atlas.odin's
-			// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
-			ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
-			ui.text("Unspent: {} XP", game.player.unspent_xp)
+	if ui.column({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}, gap = ui.theme.gap * 2}) {
+		if ui.row({gap = ui.theme.gap * 2}) {
+			if ui.begin("Progression", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+				ui.text("Account Lv. {}", game.player.level)
+				// no slash in the HUD font's glyph set (atlas.odin's
+				// LETTERS_IN_FONT) - it renders as "?", hence "of" instead
+				ui.text("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level))
+				ui.text("Unspent: {} XP", game.player.unspent_xp)
 
-			if ui.column({gap = ui.theme.gap}) {
-				for stat in Account_Stat {
-					draw_account_stat_row(stat)
+				if ui.column({gap = ui.theme.gap}) {
+					for stat in Account_Stat {
+						draw_account_stat_row(stat)
+					}
 				}
 			}
 
-			if ui.button("Start Game", {panel = true}) {
-				game.program_mode = .Run_Start
+			if ui.begin("Shooter", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+				if !game.confirming_new_run {
+					if game.player.run_started {
+						if ui.button("Continue", {panel = true}) {
+							game.program_mode = .Selecting
+						}
+					}
+					if ui.button("Start New Run", {panel = true}) {
+						if game.player.run_started {
+							game.confirming_new_run = true
+						} else {
+							game.program_mode = .Run_Start
+						}
+					}
+				}
+			}
+		}
+
+		if game.confirming_new_run {
+			if ui.begin("Discard current Run?", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
+				ui.text("Your Gold, weapon tier, and Upgrades will be lost.")
+				if ui.row({gap = ui.theme.gap}) {
+					if ui.button("Yes, discard", {panel = true}) {
+						// commit the abandonment now, not on the later
+						// weapon-pick click (start_new_run) - otherwise
+						// quitting between this confirm and picking a
+						// weapon leaves run_started stale-true, and the
+						// "discarded" Run silently reappears as
+						// Continue-able on next launch
+						game.player.run_started = false
+						game.confirming_new_run = false
+						game.program_mode = .Run_Start
+					}
+					if ui.button("Cancel", {panel = true}) {
+						game.confirming_new_run = false
+					}
+				}
 			}
 		}
 	}
@@ -200,16 +243,17 @@ draw_account_progression_ui :: proc() {
 	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
 }
 
-// shown once per Run (ProgramMode.Run_Start) between Account_Progression and
+// shown once per Run (ProgramMode.Run_Start) between Main_Menu and
 // Selecting/Playing/Editing: three columns, one per Weapon_Family (Decision
 // 01, Variant A), each listing that family's Weapon_Kinds as buttons.
 // Picking a weapon starts a fresh Run (start_new_run) and proceeds to the
 // existing map-select screen, not straight into Playing - mirrors the old
 // Class-select -> map-select order, just re-entered every Run instead of
-// once ever. game.player.run_started makes load_game (via Splash) skip
-// straight past this screen when resuming a Run already in progress (see
-// CONTEXT.md's Run entry and ADR-0008); the Run End screen's Continue clears
-// it again after death.
+// once ever. game.player.run_started drives the Main Menu's "Continue"
+// button (draw_main_menu_ui), which bypasses this screen entirely when a
+// Run is already in progress (see CONTEXT.md's Run entry and ADR-0008,
+// ADR-0013); the Run End screen's Continue clears run_started again after
+// death.
 draw_run_start_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -275,10 +319,10 @@ draw_map_selection_ui :: proc() {
 // CONTEXT.md's Account progression entry and ADR-0009), replacing the old
 // Game Over screen entirely rather than stacking alongside it. Run summary
 // only (Kills/Survived/Gold earned/XP earned) - the Account Level/XP bar and
-// Account_Stat spend list that used to live here moved to the pre-Run
-// Account_Progression screen (see draw_account_progression_ui), since
-// spending is now a pre-Run decision rather than something squeezed in right
-// after death. Continue leads there instead of straight to weapon-pick.
+// Account_Stat spend list that used to live here moved to the Main Menu
+// (see draw_main_menu_ui), since spending is now a pre-Run decision rather
+// than something squeezed in right after death. Continue leads there
+// instead of straight to weapon-pick.
 draw_run_end_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -299,7 +343,7 @@ draw_run_end_ui :: proc() {
 			if ui.button("Continue", {panel = true}) {
 				game.run_ended = false
 				game.player.run_started = false
-				game.program_mode = .Account_Progression
+				game.program_mode = .Main_Menu
 			}
 		}
 	}

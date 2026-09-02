@@ -27,15 +27,16 @@ SPLASH_MIN_SECONDS :: 1.5
 // save file might otherwise imply - see the json:"-" tag below, which
 // already prevents that on its own. It's a cosmetic, button-less beat
 // (draw_splash_ui) that update_game's .Splash case advances out of on a
-// timer or the first key/click, landing on Account_Progression for a fresh
-// Run or skipping straight to Selecting (map choice) if Player.run_started
-// is already true - a Run already in progress shouldn't be discarded by
-// re-picking a starter weapon on every relaunch, see CONTEXT.md's Run entry
-// and ADR-0008. Unlike Selecting, which re-runs every launch regardless,
-// Account_Progression and Run_Start are both skipped in that resumed case.
+// timer or the first key/click, landing unconditionally on Main_Menu -
+// every launch shows it now, regardless of Player.run_started (ADR-0013).
+// Main_Menu (draw_main_menu_ui, hud.odin) folds in the old
+// Account_Progression content (ADR-0012) and offers "Continue" (only when
+// run_started - straight to Selecting, matching today's map-choice-only
+// resume) alongside an always-present "Start New Run" (through Run_Start,
+// weapon-pick) - see CONTEXT.md's Run entry and ADR-0008.
 ProgramMode :: enum {
 	Splash,
-	Account_Progression,
+	Main_Menu,
 	Run_Start,
 	Selecting,
 	Playing,
@@ -104,6 +105,14 @@ game: struct {
 	// same rationale as run_ended.
 	shopping:      bool `json:"-"`,
 
+	// true while the Main Menu's "Discard current Run?" panel is showing
+	// (draw_main_menu_ui) - set when "Start New Run" is pressed with a Run
+	// already in progress (ADR-0013), cleared by either Yes or Cancel. Never
+	// saved, same rationale as run_ended/shopping: reopens closed on load,
+	// no state is lost since nothing is actually discarded until a starter
+	// weapon is picked on the Run_Start screen (start_new_run).
+	confirming_new_run: bool `json:"-"`,
+
 	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
 	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
 	// toggles independently instead of the old single debug_overlay bool
@@ -162,12 +171,12 @@ load_game :: proc() {
 
 	// never trust a stale persisted value even though program_mode's
 	// json:"-" tag already prevents it from round-tripping. Always start at
-	// Splash - update_game's .Splash case is what actually branches on
-	// Player.run_started once Splash finishes, skipping straight past
-	// Account_Progression/Run_Start on a save with a Run already in
-	// progress, since re-showing weapon-pick would let a re-click in
-	// draw_run_start_ui blow away the just-loaded (possibly Shop-upgraded)
-	// weapon/Gold/Upgrade-stacks above.
+	// Splash, which unconditionally advances to Main_Menu - that screen is
+	// what branches on Player.run_started (draw_main_menu_ui, hud.odin),
+	// showing "Continue" straight to Selecting on a save with a Run already
+	// in progress rather than "Start New Run"'s Run_Start, since re-showing
+	// weapon-pick would let a re-click in draw_run_start_ui blow away the
+	// just-loaded (possibly Shop-upgraded) weapon/Gold/Upgrade-stacks above.
 	game.program_mode = .Splash
 
 	log_info("Loaded game from `{}`", SAVE_GAME_PATH)
@@ -263,8 +272,8 @@ update_game :: proc() {
 		switch game.program_mode {
 		case .Splash:
 		// no-op: F1 does nothing on the splash screen
-		case .Account_Progression:
-		// no-op: F1 does nothing before a Run has been started
+		case .Main_Menu:
+		// no-op: F1 does nothing on the Main Menu
 		case .Run_Start:
 		// no-op: F1 does nothing before a starter weapon has been chosen
 		case .Selecting:
@@ -325,10 +334,10 @@ update_game :: proc() {
 		if game.splash_elapsed_seconds >= SPLASH_MIN_SECONDS ||
 		   is_mouse_button_pressed(.LEFT) ||
 		   is_any_key_pressed() {
-			game.program_mode = game.player.run_started ? .Selecting : .Account_Progression
+			game.program_mode = .Main_Menu
 		}
-	case .Account_Progression:
-	// no-op: draw_account_progression_ui's buttons handle their own clicks
+	case .Main_Menu:
+	// no-op: draw_main_menu_ui's buttons handle their own clicks
 	case .Run_Start:
 	// no-op: draw_run_start_ui's buttons handle their own clicks
 	case .Selecting:
@@ -775,9 +784,9 @@ draw_game :: proc() {
 		case .Splash:
 		// no-op: draw_splash_ui (below, alongside the other modals) draws
 		// its own full-screen content
-		case .Account_Progression:
-		// no-op: draw_account_progression_ui (below, alongside the other
-		// modals) draws its own full-screen content
+		case .Main_Menu:
+		// no-op: draw_main_menu_ui (below, alongside the other modals)
+		// draws its own full-screen content
 		case .Run_Start:
 		// no-op: draw_run_start_ui (below, alongside the other modals)
 		// draws its own full-screen content
@@ -806,8 +815,8 @@ draw_game :: proc() {
 		draw_splash_ui()
 	}
 
-	if game.program_mode == .Account_Progression {
-		draw_account_progression_ui()
+	if game.program_mode == .Main_Menu {
+		draw_main_menu_ui()
 	}
 
 	if game.program_mode == .Run_Start {
