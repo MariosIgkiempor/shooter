@@ -10,10 +10,27 @@ Color :: rl.Color
 Texture :: rl.Texture
 Font :: rl.Font
 Camera :: rl.Camera2D
+RenderTexture2D :: rl.RenderTexture2D
 
 ATLAS_DATA :: #load("data/atlas.png")
 atlas: Texture
 font: Font
+
+// two-pass separable Gaussian blur (renderer.odin's begin_blur_shader_mode/
+// ensure_blur_textures) backing the menu backdrop blur - see ADR-0015 and
+// hud.odin's blurred_backdrop_strength. Loaded via #load (not a runtime
+// rl.LoadShader path) for the same reason ATLAS_DATA is: the compiled binary
+// shouldn't depend on `data/` being reachable relative to its own cwd.
+BLUR_FS_SOURCE :: #load("data/shaders/blur.fs", string)
+blur_shader:         rl.Shader
+blur_direction_loc:  i32
+blur_texel_size_loc: i32
+
+// lazily allocated by ensure_blur_textures on first use (blurred_backdrop_
+// strength() > 0), not unconditionally like atlas/font - a session that
+// never opens a Screen over a populated world never allocates these.
+blur_scene_texture: RenderTexture2D
+blur_pass_texture:  RenderTexture2D
 
 initialize_renderer :: proc() {
 	atlas_image := rl.LoadImageFromMemory(".png", raw_data(ATLAS_DATA), i32(len(ATLAS_DATA)))
@@ -21,11 +38,21 @@ initialize_renderer :: proc() {
 	rl.UnloadImage(atlas_image)
 	font = load_atlased_font()
 	rl.SetShapesTexture(atlas, SHAPES_TEXTURE_RECT)
+
+	blur_fs_cstring := strings.clone_to_cstring(BLUR_FS_SOURCE, context.temp_allocator)
+	blur_shader = rl.LoadShaderFromMemory(nil, blur_fs_cstring)
+	blur_direction_loc = rl.GetShaderLocation(blur_shader, "direction")
+	blur_texel_size_loc = rl.GetShaderLocation(blur_shader, "texel_size")
 }
 
 deinitialize_renderer :: proc() {
 	rl.UnloadTexture(atlas)
 	delete_atlased_font(font)
+	rl.UnloadShader(blur_shader)
+	if blur_scene_texture.id != 0 {
+		rl.UnloadRenderTexture(blur_scene_texture)
+		rl.UnloadRenderTexture(blur_pass_texture)
+	}
 }
 
 begin_drawing :: proc() {
@@ -46,6 +73,73 @@ begin_using_camera :: proc(camera: Camera) {
 
 end_using_camera :: proc() {
 	rl.EndMode2D()
+}
+
+begin_texture_mode :: proc(target: RenderTexture2D) {
+	rl.BeginTextureMode(target)
+}
+
+end_texture_mode :: proc() {
+	rl.EndTextureMode()
+}
+
+// direction's magnitude is this pass's blur radius in pixels - (radius, 0)
+// for the horizontal pass, (0, radius) for the vertical pass. texel_size is
+// 1/resolution, letting the shader turn a pixel-space radius into a UV
+// offset without knowing the render texture's size itself.
+begin_blur_shader_mode :: proc(direction, texel_size: Vec2) {
+	direction := direction
+	texel_size := texel_size
+	rl.SetShaderValue(blur_shader, blur_direction_loc, &direction, .VEC2)
+	rl.SetShaderValue(blur_shader, blur_texel_size_loc, &texel_size, .VEC2)
+	rl.BeginShaderMode(blur_shader)
+}
+
+end_shader_mode :: proc() {
+	rl.EndShaderMode()
+}
+
+// draws a RenderTexture2D's color buffer to the currently active target at
+// full dest size, flipped right-side-up - raylib stores render-texture
+// content upside-down (OpenGL's bottom-left texture origin), corrected here
+// by negating the source rect's height.
+draw_render_texture :: proc(target: RenderTexture2D, dest: Rect, tint: Color = rl.WHITE) {
+	src := Rect{0, 0, f32(target.texture.width), -f32(target.texture.height)}
+	rl.DrawTexturePro(target.texture, src, dest, {}, 0, tint)
+}
+
+// (re)allocates the offscreen blur render textures to (width, height) only
+// when they don't already match - mirrors how game.window_width/height are
+// refreshed every frame but only actually change on a real resize
+// (main.odin's update_game), never reallocated unconditionally. Called once
+// per frame, only on the blurred_backdrop_strength() > 0 path.
+//
+// Checks both textures independently (not just blur_scene_texture) so a
+// partial allocation failure - e.g. blur_scene_texture's LoadRenderTexture
+// succeeding but blur_pass_texture's failing - gets retried next frame
+// instead of leaving blur_pass_texture permanently zero-valued (which would
+// make begin_texture_mode silently target the real backbuffer, id 0, rather
+// than an offscreen texture).
+ensure_blur_textures :: proc(width, height: int) {
+	scene_matches := int(blur_scene_texture.texture.width) == width && int(blur_scene_texture.texture.height) == height
+	pass_matches := int(blur_pass_texture.texture.width) == width && int(blur_pass_texture.texture.height) == height
+	if scene_matches && pass_matches {
+		return
+	}
+	if blur_scene_texture.id != 0 {
+		rl.UnloadRenderTexture(blur_scene_texture)
+	}
+	if blur_pass_texture.id != 0 {
+		rl.UnloadRenderTexture(blur_pass_texture)
+	}
+	blur_scene_texture = rl.LoadRenderTexture(i32(width), i32(height))
+	blur_pass_texture = rl.LoadRenderTexture(i32(width), i32(height))
+	// raylib's render textures default to REPEAT wrap - without CLAMP, the
+	// blur shader's edge taps (fragTexCoord going outside [0,1] near the
+	// screen border) would sample wrapped-around pixels from the opposite
+	// edge, producing a visible seam instead of a clean edge fade
+	rl.SetTextureWrap(blur_scene_texture.texture, .CLAMP)
+	rl.SetTextureWrap(blur_pass_texture.texture, .CLAMP)
 }
 
 // an axis-aligned world-space extent, expressed as min/max rather than

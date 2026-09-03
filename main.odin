@@ -17,6 +17,12 @@ PIXEL_WINDOW_HEIGHT :: 180
 GAMEPLAY_ZOOM :: 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
+// starting points only - tune visually against Shop/Run_End, same as
+// weapon-action-feel's per-weapon timing constants were treated (see
+// ADR-0015 and hud.odin's blurred_backdrop_strength)
+BLUR_MAX_RADIUS_PX :: 6.0
+BLUR_DIM_ALPHA_MAX :: 0.45
+
 // how long Splash (ProgramMode.Splash) shows at minimum before a key/click
 // can skip it - purely a branding beat, not tied to any real loading (see
 // ProgramMode's doc comment)
@@ -745,7 +751,6 @@ ease_out_cubic :: proc(t: f32) -> f32 {
 
 draw_game :: proc() {
 	begin_drawing()
-	clear_background(rl.DARKGRAY)
 
 	// in editor mode the camera is driven by update_editor_camera instead
 	if game.program_mode == .Playing {
@@ -759,44 +764,23 @@ draw_game :: proc() {
 		game.camera.offset += update_screen_shake(rl.GetFrameTime())
 	}
 
-	begin_using_camera(game.camera)
-	{
-		draw_tilemap(&game.current_map.tilemap)
-		for &enemy in game.enemies {
-			draw_enemy(enemy)
-			if game.debug.visualizers[.Pathfinding] {
-				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
-			}
-		}
-		draw_actor(game.player.rect, game.player.squash)
-		draw_weapon(game.player)
-		if game.debug.visualizers[.Colliders] {
-			draw_debug_colliders()
-		}
-		if game.debug.visualizers[.Weapon_Area] {
-			draw_debug_weapon_area(game.player)
-		}
-		if game.debug.visualizers[.Attack_Ranges] {
-			draw_debug_attack_ranges()
-		}
-		if game.debug.visualizers[.Movement_Styles] {
-			draw_debug_movement_styles()
-		}
-		draw_bullets(game.bullets[:])
-		draw_enemy_bullets(game.enemy_bullets[:])
-		draw_poison_clouds(game.poison_clouds[:])
-		draw_pickups(game.pickups[:])
-		draw_particles(game.particles[:])
-		draw_damage_numbers(game.damage_numbers[:])
-		if game.program_mode == .Playing {
-			draw_player_resource_indicators(game.player)
-		}
+	backdrop_strength := blurred_backdrop_strength()
 
-		if game.program_mode == .Editing {
-			draw_editor_world_overlay()
-		}
+	// a minimized/zero-sized window would divide-by-zero computing
+	// draw_blurred_world's texel_size and hand LoadRenderTexture a 0x0 size -
+	// falling back to the direct path here mirrors how
+	// camera_visible_world_rect (renderer.odin) already falls back to
+	// GAMEPLAY_ZOOM rather than dividing by a zero camera.zoom
+	can_blur := backdrop_strength > 0 && game.window_width > 0 && game.window_height > 0
+
+	if can_blur {
+		draw_blurred_world(backdrop_strength)
+	} else {
+		clear_background(rl.DARKGRAY)
+		begin_using_camera(game.camera)
+		draw_world_contents()
+		end_using_camera()
 	}
-	end_using_camera()
 
 	game.ui_camera = Camera {
 		zoom = game.window_height / PIXEL_WINDOW_HEIGHT,
@@ -869,6 +853,86 @@ draw_game :: proc() {
 	}
 
 	end_drawing()
+
+	// the tilemap/enemies/player/weapon/debug-visualizer/bullet/particle/
+	// damage-number/resource-indicator/editor-overlay draw calls that make up
+	// "the game world" - factored out so draw_blurred_world can render the
+	// identical content into an offscreen texture instead of straight to the
+	// backbuffer, with zero duplication between the two paths.
+	draw_world_contents :: proc() {
+		draw_tilemap(&game.current_map.tilemap)
+		for &enemy in game.enemies {
+			draw_enemy(enemy)
+			if game.debug.visualizers[.Pathfinding] {
+				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
+			}
+		}
+		draw_actor(game.player.rect, game.player.squash)
+		draw_weapon(game.player)
+		if game.debug.visualizers[.Colliders] {
+			draw_debug_colliders()
+		}
+		if game.debug.visualizers[.Weapon_Area] {
+			draw_debug_weapon_area(game.player)
+		}
+		if game.debug.visualizers[.Attack_Ranges] {
+			draw_debug_attack_ranges()
+		}
+		if game.debug.visualizers[.Movement_Styles] {
+			draw_debug_movement_styles()
+		}
+		draw_bullets(game.bullets[:])
+		draw_enemy_bullets(game.enemy_bullets[:])
+		draw_poison_clouds(game.poison_clouds[:])
+		draw_pickups(game.pickups[:])
+		draw_particles(game.particles[:])
+		draw_damage_numbers(game.damage_numbers[:])
+		if game.program_mode == .Playing {
+			draw_player_resource_indicators(game.player)
+		}
+
+		if game.program_mode == .Editing {
+			draw_editor_world_overlay()
+		}
+	}
+
+	// renders draw_world_contents into an offscreen texture, blurs it through
+	// a two-pass separable Gaussian shader, and composites the blurred result
+	// plus a flat dim rect to the backbuffer instead of drawing straight to
+	// it - both blur radius and dim alpha scale linearly with `strength`
+	// (0..1) so this fades continuously through blurred_backdrop_strength's
+	// own ramp rather than snapping on at a threshold. See hud.odin's
+	// blurred_backdrop_strength and ADR-0015.
+	draw_blurred_world :: proc(strength: f32) {
+		ensure_blur_textures(int(game.window_width), int(game.window_height))
+
+		full_rect := Rect{0, 0, game.window_width, game.window_height}
+		texel_size := Vec2{1 / game.window_width, 1 / game.window_height}
+		radius := BLUR_MAX_RADIUS_PX * strength
+
+		begin_texture_mode(blur_scene_texture)
+		clear_background(rl.DARKGRAY)
+		begin_using_camera(game.camera)
+		draw_world_contents()
+		end_using_camera()
+		end_texture_mode()
+
+		begin_texture_mode(blur_pass_texture)
+		// no clear needed here - the horizontal pass below is an opaque,
+		// full-texture draw (the shader's Gaussian weights sum to 1.0 and
+		// blur_scene_texture is itself fully opaque), so every pixel gets
+		// overwritten regardless of what was here before
+		begin_blur_shader_mode({radius, 0}, texel_size)
+		draw_render_texture(blur_scene_texture, full_rect)
+		end_shader_mode()
+		end_texture_mode()
+
+		begin_blur_shader_mode({0, radius}, texel_size)
+		draw_render_texture(blur_pass_texture, full_rect)
+		end_shader_mode()
+
+		draw_rectangle(full_rect, rl.Fade(rl.BLACK, BLUR_DIM_ALPHA_MAX * strength))
+	}
 
 	// player body: a rectangle (ACTOR_SIZE), continuously squashed in place
 	// by `scale` while moving - no rotation/tilt, see update_actor_squash

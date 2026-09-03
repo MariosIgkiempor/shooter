@@ -349,6 +349,32 @@ menu_element_anim :: proc(reveal_rank, dismiss_rank: int) -> Menu_Element_Anim {
 	return {alpha = e, scale = MENU_THEME.scale_from + (1 - MENU_THEME.scale_from) * e}
 }
 
+// 0 whenever there's no Screen at all (Playing/Editing) or the current
+// Screen has no populated world behind it (Splash/Main_Menu/Run_Start/
+// Map_Selection - program_mode is .Splash/.Main_Menu/.Run_Start/.Selecting
+// there, never .Playing, per apply_screen_kind) - otherwise reuses
+// menu_element_anim's own rank-0 alpha (the same value the Screen's panel
+// fill/border already animate with), so the backdrop blur can never drift
+// out of sync with the panel's own Reveal/Dismiss - see ADR-0015.
+//
+// Deliberately checks program_mode == .Playing rather than
+// current_map.name != "" - current_screen's own doc comment already
+// establishes that shopping/run_ended only ever apply while program_mode ==
+// .Playing, so this is an equivalent, always-current read. current_map.name
+// would instead go stale: current_map is never reset once a map's been
+// played (see hud.odin's clone_map call site), so it would still read
+// non-empty on returning to Main_Menu after a Run ends, incorrectly
+// blurring behind it.
+blurred_backdrop_strength :: proc() -> f32 {
+	if _, has_screen := current_screen().?; !has_screen {
+		return 0
+	}
+	if game.program_mode != .Playing {
+		return 0
+	}
+	return menu_element_anim(0, 0).alpha
+}
+
 Menu_Theme :: struct {
 	fill, fill_hover, fill_pressed, fill_disabled: Color,
 	border_color:                                  Color,
