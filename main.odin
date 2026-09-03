@@ -113,6 +113,13 @@ game: struct {
 	// weapon is picked on the Run_Start screen (start_new_run).
 	confirming_new_run: bool `json:"-"`,
 
+	// the shared Reveal/Dismiss transition record (ADR-0014, hud.odin) that
+	// every Screen change goes through via request_screen_change - never
+	// saved, same rationale as run_ended/shopping: a save taken mid-
+	// transition simply reopens at rest (its zero value already matches a
+	// fresh Splash launch, see Menu_Transition's doc comment).
+	menu_transition: Menu_Transition `json:"-"`,
+
 	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
 	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
 	// toggles independently instead of the old single debug_overlay bool
@@ -268,6 +275,11 @@ update_game :: proc() {
 		game.mouse.position = get_mouse_position()
 	}
 
+	// once per frame, ahead of everything below that reads program_mode/
+	// run_ended/shopping - so a Dismiss window that finishes this frame is
+	// already reflected in every guard/switch further down (ADR-0014)
+	update_menu_transition()
+
 	if is_key_pressed(.F1) {
 		switch game.program_mode {
 		case .Splash:
@@ -325,7 +337,14 @@ update_game :: proc() {
 	   game.program_mode == .Playing &&
 	   !game.run_ended &&
 	   !game.debug.panel_open {
-		game.shopping = !game.shopping
+		// Shop<->Playing is a Screen change like any other (ADR-0014) - just
+		// one whose "other side" isn't a Screen, hence request_screen_change
+		// taking nil to mean "back to Playing" rather than a Screen_Kind
+		if game.shopping {
+			request_screen_change(nil)
+		} else {
+			request_screen_change(.Shop)
+		}
 	}
 
 	switch game.program_mode {
@@ -334,7 +353,7 @@ update_game :: proc() {
 		if game.splash_elapsed_seconds >= SPLASH_MIN_SECONDS ||
 		   is_mouse_button_pressed(.LEFT) ||
 		   is_any_key_pressed() {
-			game.program_mode = .Main_Menu
+			request_screen_change(.Main_Menu)
 		}
 	case .Main_Menu:
 	// no-op: draw_main_menu_ui's buttons handle their own clicks
@@ -574,16 +593,21 @@ recompute_player_stats :: proc() {
 }
 
 // applies enemy damage to the player, granting this Run's XP and opening the
-// Run End screen at 0 hp (ADR-0009). God Mode (debug.odin) makes the player
-// fully invulnerable - skipped before any damage-taken effects (burst/shake)
-// fire, so a god-mode hit reads as a clean whiff rather than a damage flash
-// with no health lost. Also bails once game.run_ended is already true - more
-// than one attacking enemy/bullet can land a hit in the same frame (multiple
-// update_enemies/update_enemy_bullets hits before the next frame's Playing
-// guard kicks in), and without this guard each of those re-enters the
-// health <= 0 branch below and double-grants this Run's XP.
+// Run End screen at 0 hp (ADR-0009, via request_screen_change - ADR-0014).
+// God Mode (debug.odin) makes the player fully invulnerable - skipped before
+// any damage-taken effects (burst/shake) fire, so a god-mode hit reads as a
+// clean whiff rather than a damage flash with no health lost. Also bails
+// once a Run_End Screen change is already pending - more than one attacking
+// enemy/bullet can land a hit in the same frame (multiple update_enemies/
+// update_enemy_bullets hits before the next frame's Playing guard kicks in),
+// and without this guard each of those re-enters the health <= 0 branch
+// below and double-grants this Run's XP. Checks screen_change_pending_to
+// rather than game.run_ended itself, since run_ended no longer flips the
+// instant death happens - it's deferred until Run_End's Dismiss window
+// completes (see update_menu_transition), which would otherwise leave this
+// guard open for the whole window instead of closing immediately.
 damage_player :: proc(amount: f32) {
-	if game.debug.god_mode || game.run_ended {
+	if game.debug.god_mode || game.run_ended || screen_change_pending_to(.Run_End) {
 		return
 	}
 
@@ -596,7 +620,7 @@ damage_player :: proc(amount: f32) {
 		game.player.health = 0
 		game.last_run_xp_earned = compute_run_xp(game.player.kills, game.player.survival_seconds, game.player.gold_earned)
 		grant_account_xp(game.last_run_xp_earned)
-		game.run_ended = true
+		request_screen_change(.Run_End)
 	}
 }
 
