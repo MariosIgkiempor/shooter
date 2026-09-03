@@ -273,7 +273,10 @@ apply_screen_kind :: proc(to: Maybe(Screen_Kind)) {
 	game.shopping = has_screen && screen == .Shop
 
 	if !has_screen {
-		return // back to Playing - program_mode is already .Playing
+		if game.menu_transition.current == .Map_Selection {
+			game.program_mode = .Playing
+		}
+		return // Shop/Run_End close back to Playing - program_mode is already .Playing there
 	}
 
 	switch screen {
