@@ -4,17 +4,17 @@ import "core:math/linalg"
 import "core:math/rand"
 import rl "vendor:raylib"
 
-PICKUP_DROP_CHANCE :: 0.25 // chance an enemy death drops any pickup at all
-PICKUP_MAGNET_RADIUS :: 40.0
-PICKUP_PICKUP_RADIUS :: 6.0
-PICKUP_HOMING_ACCEL :: 800.0 // px/s^2 once inside magnet radius
-PICKUP_MAX_SPEED :: 260.0
-PICKUP_HEAL_AMOUNT :: 50.0 // health pickup heal amount
+PICKUP_DROP_CHANCE: f32 = 0.25 // chance an enemy death drops any pickup at all
+PICKUP_MAGNET_RADIUS: f32 = 40.0
+PICKUP_PICKUP_RADIUS: f32 = 6.0
+PICKUP_HOMING_ACCEL: f32 = 800.0 // px/s^2 once inside magnet radius
+PICKUP_MAX_SPEED: f32 = 260.0
+PICKUP_HEAL_AMOUNT: f32 = 50.0 // health pickup heal amount
 // Gold granted per Gold pickup is no longer flat - it comes from the dying
 // enemy's Enemy_Gold_Preset (account_progression.odin) and rides on the
 // Pickup itself, so a tougher Enemy_Kind can be worth more without touching
 // the drop machinery.
-PICKUP_GOLD_RADIUS :: 5.0 // world-space draw radius
+PICKUP_GOLD_RADIUS: f32 = 5.0 // world-space draw radius
 
 // shape/color per kind (art-revamp ticket 03, colors amended by ticket 05):
 // Gold is a plain circle (the fixed anchor the other two are chosen not to

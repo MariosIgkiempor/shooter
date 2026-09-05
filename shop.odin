@@ -2,8 +2,8 @@ package shooter
 
 import "core:math"
 
-WEAPON_TIER_BASE_PRICE :: 150 // gold cost of a Weapon_Family's first tier-up purchase
-WEAPON_TIER_PRICE_GROWTH :: 1.6 // multiplier per tier step up the ladder
+WEAPON_TIER_BASE_PRICE: int = 150 // gold cost of a Weapon_Family's first tier-up purchase
+WEAPON_TIER_PRICE_GROWTH: f32 = 1.6 // multiplier per tier step up the ladder
 
 // 0-based position of `kind` within its Weapon_Family's tier ladder
 // (weapon_family_kinds) - tier 0 is always the family's starting weapon,

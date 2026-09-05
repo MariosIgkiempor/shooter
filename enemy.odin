@@ -7,9 +7,9 @@ import "core:math/rand"
 import "core:slice"
 import rl "vendor:raylib"
 
-MAX_ENEMIES :: 24
+MAX_ENEMIES: int = 24
 ENEMY_SIZE: i32 = 12
-ENEMY_MAX_HEALTH :: 50
+ENEMY_MAX_HEALTH: f32 = 50
 
 // which per-kind Gold payout (enemy_gold_presets, account_progression.odin) an
 // Enemy grants on death - a single placeholder member today, but the lookup
@@ -348,7 +348,7 @@ SEPARATION_STRENGTH := [Movement_Style_Kind]f32 {
 // cell size for the neighbour-lookup spatial grid; sized to the largest
 // Separation radius (Grounded's) so a 3x3 cell neighbourhood always covers
 // every style's search radius
-SEPARATION_GRID_CELL_SIZE :: 40
+SEPARATION_GRID_CELL_SIZE: f32 = 40
 
 Separation_Grid :: map[Vec2i][dynamic]int
 
@@ -420,8 +420,8 @@ compute_separation_direction :: proc(enemies: []Enemy, index: int, grid: Separat
 
 // -- Swarmer surround -----------------------------------------------------
 
-SWARMER_FALLBACK_SURROUND_RADIUS :: 60 // used when the Swarmer's Attack Style is nil (no attack_range to read)
-SWARMER_RING_ROTATION_SPEED :: 0.3 // radians/sec, matches the swarmer-surround prototype's slow ring drift
+SWARMER_FALLBACK_SURROUND_RADIUS: f32 = 60 // used when the Swarmer's Attack Style is nil (no attack_range to read)
+SWARMER_RING_ROTATION_SPEED: f32 = 0.3 // radians/sec, matches the swarmer-surround prototype's slow ring drift
 
 // the distance a Swarmer orbits the player at - its own Attack Style's
 // engagement range, so orbiting and attacking naturally coincide (validated
@@ -496,15 +496,27 @@ assign_swarmer_slots :: proc(enemies: []Enemy, player_pos: Vec2, t: f32) -> map[
 
 // -- Floater drift ---------------------------------------------------------
 
-FLOATER_WOBBLE_SIDE_DAMPING :: 0.4 // matches the floater-movement prototype's (1 - pullStrength*0.4) side-weight falloff
-FLOATER_WOBBLE_BOOST_SCALE :: 0.6 // matches the prototype's wobbleBoost formula
-FLOATER_WOBBLE_AMPLITUDE_CEILING :: 80 // px, the validated ceiling wobble_amplitude tunes against
+FLOATER_WOBBLE_SIDE_DAMPING: f32 = 0.4 // matches the floater-movement prototype's (1 - pullStrength*0.4) side-weight falloff
+FLOATER_WOBBLE_BOOST_SCALE: f32 = 0.6 // matches the prototype's wobbleBoost formula
+FLOATER_WOBBLE_AMPLITUDE_CEILING: f32 = 80 // px, the validated ceiling wobble_amplitude tunes against
 
 // layered-sine pseudo-noise: cheap, deterministic per phase, no lookup
 // table - good enough to feel "erratic" without a real noise library.
 // Mirrors the floater-movement prototype's Steering.wobbleSignal exactly.
+// the two sine weights and the harmonic's frequency/phase multipliers, named
+// so they can be Tunables - the numbers themselves are unchanged from the
+// floater-movement prototype
+FLOATER_WOBBLE_PRIMARY_WEIGHT: f32 = 0.7
+FLOATER_WOBBLE_HARMONIC_WEIGHT: f32 = 0.3
+FLOATER_WOBBLE_HARMONIC_FREQ: f32 = 2.3
+FLOATER_WOBBLE_HARMONIC_PHASE: f32 = 1.7
+
 floater_wobble_signal :: proc(t, phase, freq: f32) -> f32 {
-	return math.sin(t * freq + phase) * 0.7 + math.sin(t * freq * 2.3 + phase * 1.7) * 0.3
+	return(
+		math.sin(t * freq + phase) * FLOATER_WOBBLE_PRIMARY_WEIGHT +
+		math.sin(t * freq * FLOATER_WOBBLE_HARMONIC_FREQ + phase * FLOATER_WOBBLE_HARMONIC_PHASE) *
+			FLOATER_WOBBLE_HARMONIC_WEIGHT \
+	)
 }
 
 // blends a homing pull toward the target with a perpendicular wobble that's
@@ -629,8 +641,8 @@ spawn_enemy_at :: proc(position: Vec2, movement_template: Movement_Style, attack
 
 // -- off-screen spawn placement (enemy-spawn-revamp map, ticket 02) --------
 
-OFFSCREEN_SPAWN_MARGIN :: 30 // px beyond the visible rect's own half-diagonal
-OFFSCREEN_SPAWN_MAX_RETRIES :: 6
+OFFSCREEN_SPAWN_MARGIN: f32 = 30 // px beyond the visible rect's own half-diagonal
+OFFSCREEN_SPAWN_MAX_RETRIES: int = 6
 
 // the tilemap's own world-space extent, spanning every authored tile - used
 // to clamp a chosen spawn point back onto the playable map. Computed by
@@ -785,7 +797,7 @@ update_enemies :: proc(dt: f32) {
 	}
 }
 
-RANGED_RETREAT_LOOKAHEAD :: 100 // arbitrary distance behind the enemy to aim a retreat path at; only direction matters since the goal recomputes every frame
+RANGED_RETREAT_LOOKAHEAD: f32 = 100 // arbitrary distance behind the enemy to aim a retreat path at; only direction matters since the goal recomputes every frame
 
 // the point a chasing/homing Movement Style should aim for, given the
 // enemy's own Attack Style. Melee (or no attack) simply closes to the
@@ -836,7 +848,6 @@ chase_to :: proc(
 	}
 
 	path_index := 0
-	ARRIVE_RADIUS: f32 = 4.0
 	for path_index < len(enemy.path) &&
 	    linalg.distance(cell_center_to_world(enemy.path[path_index], tile_size), Vec2{enemy.x, enemy.y}) <
 		    ARRIVE_RADIUS {
@@ -889,8 +900,12 @@ build_inflated_collision_map :: proc(tilemap: ^Tilemap, radius: i32) -> Collisio
 	return result
 }
 
+// how close an enemy must get to a path node before it advances to the next.
+// Hoisted out of chase_to so a Tunable can hold its address.
+ARRIVE_RADIUS: f32 = 4.0
+
 Path :: [dynamic]Vec2i
-MAX_SEARCH_NODES :: 1024
+MAX_SEARCH_NODES: int = 1024
 find_path :: proc(collision_map: Collision_Map, start, goal: Vec2i) -> (path: Path, ok: bool) {
 	frontier: queue.Queue(Vec2i)
 	defer queue.destroy(&frontier)

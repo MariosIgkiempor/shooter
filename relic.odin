@@ -102,11 +102,14 @@ try_buy_relic :: proc(kind: Relic_Kind) -> bool {
 
 // -- Orbiting Orb -----------------------------------------------------------
 
-RELIC_ORB_ORBIT_RADIUS :: 46.0 // distance from the player's mid-body to an orb's center
-RELIC_ORB_SIZE :: 7.0 // an orb's own radius, both drawn and hit-tested
-RELIC_ORB_ANGULAR_SPEED :: 2.2 // radians/sec the whole ring rotates at
-RELIC_ORB_BASE_DAMAGE :: 14.0 // per tick, before Might
-RELIC_ORB_TICK_RATE :: 3.0 // damage ticks/sec while an enemy overlaps
+RELIC_ORB_ORBIT_RADIUS: f32 = 46.0 // distance from the player's mid-body to an orb's center
+RELIC_ORB_SIZE: f32 = 7.0 // an orb's own radius, both drawn and hit-tested
+RELIC_ORB_ANGULAR_SPEED: f32 = 2.2 // radians/sec the whole ring rotates at
+RELIC_ORB_BASE_DAMAGE: f32 = 14.0 // per tick, before Might
+RELIC_ORB_TICK_RATE: f32 = 3.0 // damage ticks/sec while an enemy overlaps
+
+// the bright inner disc's radius as a fraction of RELIC_ORB_SIZE
+RELIC_ORB_CORE_FRACTION: f32 = 0.45
 
 RELIC_ORB_COLOR :: rl.Color{120, 200, 255, 200}
 RELIC_ORB_CORE_COLOR :: rl.Color{235, 250, 255, 255}
@@ -216,6 +219,6 @@ draw_relics :: proc() {
 	for index in 0 ..< count {
 		position := relic_orb_position(index, count, center, game.relic_state.orb_phase)
 		rl.DrawCircleV(position, RELIC_ORB_SIZE, RELIC_ORB_COLOR)
-		rl.DrawCircleV(position, RELIC_ORB_SIZE * 0.45, RELIC_ORB_CORE_COLOR)
+		rl.DrawCircleV(position, RELIC_ORB_SIZE * RELIC_ORB_CORE_FRACTION, RELIC_ORB_CORE_COLOR)
 	}
 }

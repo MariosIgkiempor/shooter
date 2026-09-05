@@ -4,17 +4,17 @@ import "core:math"
 import "core:math/linalg"
 import rl "vendor:raylib"
 
-BULLET_RADIUS :: 2.0
+BULLET_RADIUS: f32 = 2.0
 BULLET_TRAIL_COLOR :: rl.Color{255, 241, 150, 200} // gun pellets
 FIREBALL_TRAIL_COLOR :: rl.Color{255, 140, 30, 220} // Fire_Wand's explosion_radius > 0 bullets
 
 // bullet shape dimensions (art-revamp ticket 03): plain bullets are a thin
 // streak, Fireball bullets get a thicker "comet" so "this one explodes" reads
 // at a glance rather than only on close color inspection
-BULLET_STREAK_LENGTH :: 10.0
-BULLET_STREAK_WIDTH :: BULLET_RADIUS * 2
-BULLET_COMET_LENGTH :: 14.0
-BULLET_COMET_WIDTH :: BULLET_RADIUS * 3.2
+BULLET_STREAK_LENGTH: f32 = 10.0
+BULLET_STREAK_WIDTH: f32 = 4.0 // was BULLET_RADIUS * 2; independent now that radius is a Tunable
+BULLET_COMET_LENGTH: f32 = 14.0
+BULLET_COMET_WIDTH: f32 = 6.4 // was BULLET_RADIUS * 3.2; see BULLET_STREAK_WIDTH
 
 Bullet :: struct {
 	position:         Vec2,

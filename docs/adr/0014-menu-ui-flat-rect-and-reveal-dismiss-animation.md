@@ -9,3 +9,7 @@ Reveal/Dismiss timer state is **not** per-element: a single shared transition re
 Considered Options: each screen owning its own "pending dismiss" flag instead of one shared `request_screen_change` chokepoint (rejected — a deferred-transition mechanism is pointless if call sites can still bypass it, and centralizing it means every future Screen change gets Dismiss for free); a named per-screen state struct with one field per animated element (rejected — the prototype proved elapsed time + rank sufficient, so per-element fields would be unused complexity); extending the new unified Screen concept to replace every `program_mode`/`run_ended`/`shopping` check across the codebase (rejected — scoped narrowly to the menu-drawing/transition code, since gameplay logic elsewhere has no need for it).
 
 See [Flat-Rect Menu UI: Transitions & Animation](../../.scratch/menu-ui-polish/map.md) and [Component API & Reveal/Dismiss state model](../../.scratch/menu-ui-polish/issues/02-component-api-and-state-model.md) for the full spec this settles.
+
+## Update (ADR-0020)
+
+The nine-slice remnant this ADR left behind is gone. `debug.odin`'s F8 panel was its last consumer; it now draws through the same flat-rect render-command backend the editor uses, `draw_nine_slice`/`draw_nine_slice_tiled` and the `Ui_9square_*` source art have been deleted, and `HUD_THEME` survives only as a flat palette that keeps the F8 panel visually distinct from the editor. No nine-slice rendering remains anywhere in the game.

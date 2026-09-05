@@ -5,61 +5,61 @@ import "core:math/linalg"
 import "core:math/rand"
 import rl "vendor:raylib"
 
-PARTICLE_DRAG :: 6.0 // 1/s exponential-ish velocity decay
+PARTICLE_DRAG: f32 = 6.0 // 1/s exponential-ish velocity decay
 
 // hit-spark preset: fast, small, very short-lived - a crisp instant spark
-HIT_SPARK_COUNT :: 6
-HIT_SPARK_MIN_SPEED :: 60.0
-HIT_SPARK_MAX_SPEED :: 160.0
-HIT_SPARK_MIN_LIFETIME :: 0.1
-HIT_SPARK_MAX_LIFETIME :: 0.2
-HIT_SPARK_MIN_RADIUS :: 1.8
-HIT_SPARK_MAX_RADIUS :: 3.5
+HIT_SPARK_COUNT: int = 6
+HIT_SPARK_MIN_SPEED: f32 = 60.0
+HIT_SPARK_MAX_SPEED: f32 = 160.0
+HIT_SPARK_MIN_LIFETIME: f32 = 0.1
+HIT_SPARK_MAX_LIFETIME: f32 = 0.2
+HIT_SPARK_MIN_RADIUS: f32 = 1.8
+HIT_SPARK_MAX_RADIUS: f32 = 3.5
 
 // damage-burst preset: slower, bigger, longer-lived - a more noticeable "hurt" cue
-DAMAGE_BURST_COUNT :: 10
-DAMAGE_BURST_MIN_SPEED :: 30.0
-DAMAGE_BURST_MAX_SPEED :: 90.0
-DAMAGE_BURST_MIN_LIFETIME :: 0.25
-DAMAGE_BURST_MAX_LIFETIME :: 0.45
-DAMAGE_BURST_MIN_RADIUS :: 2.5
-DAMAGE_BURST_MAX_RADIUS :: 5.0
+DAMAGE_BURST_COUNT: int = 10
+DAMAGE_BURST_MIN_SPEED: f32 = 30.0
+DAMAGE_BURST_MAX_SPEED: f32 = 90.0
+DAMAGE_BURST_MIN_LIFETIME: f32 = 0.25
+DAMAGE_BURST_MAX_LIFETIME: f32 = 0.45
+DAMAGE_BURST_MIN_RADIUS: f32 = 2.5
+DAMAGE_BURST_MAX_RADIUS: f32 = 5.0
 
 // flame-tick-burst preset: small and short-lived, fired once per
 // Flame_Staff Automatic tick (ticket 06's confirmed finding - a discrete
 // per-tick pulse read better than a continuous stream at its 100ms tick
 // rate) - reuses the same flat-circle burst as hit_spark/damage_burst, just
 // warm-colored
-FLAME_TICK_BURST_COUNT :: 5
-FLAME_TICK_BURST_MIN_SPEED :: 40.0
-FLAME_TICK_BURST_MAX_SPEED :: 90.0
-FLAME_TICK_BURST_MIN_LIFETIME :: 0.08
-FLAME_TICK_BURST_MAX_LIFETIME :: 0.15
-FLAME_TICK_BURST_MIN_RADIUS :: 2.0
-FLAME_TICK_BURST_MAX_RADIUS :: 4.0
+FLAME_TICK_BURST_COUNT: int = 5
+FLAME_TICK_BURST_MIN_SPEED: f32 = 40.0
+FLAME_TICK_BURST_MAX_SPEED: f32 = 90.0
+FLAME_TICK_BURST_MIN_LIFETIME: f32 = 0.08
+FLAME_TICK_BURST_MAX_LIFETIME: f32 = 0.15
+FLAME_TICK_BURST_MIN_RADIUS: f32 = 2.0
+FLAME_TICK_BURST_MAX_RADIUS: f32 = 4.0
 
 // Fire_Wand charge-particle preset: tiny embers drifting inward toward the
 // muzzle, spawned one-per-frame throughout Windup (update_magic_cast_particles,
 // weapon.odin) - replaces a single flat growing circle with particles that
 // read as energy gathering into a point
-FIRE_WAND_CHARGE_MIN_LIFETIME :: 0.12
-FIRE_WAND_CHARGE_MAX_LIFETIME :: 0.22
-FIRE_WAND_CHARGE_MIN_RADIUS :: 1.0
-FIRE_WAND_CHARGE_MAX_RADIUS :: 2.2
-FIRE_WAND_CHARGE_SPREAD :: 7.0 // px, shrinks toward the muzzle as Windup progress -> 1
-FIRE_WAND_CHARGE_INWARD_PULL :: 5.0 // 1/s, how fast a charge ember drifts toward the muzzle
+FIRE_WAND_CHARGE_MIN_LIFETIME: f32 = 0.12
+FIRE_WAND_CHARGE_MAX_LIFETIME: f32 = 0.22
+FIRE_WAND_CHARGE_MIN_RADIUS: f32 = 1.0
+FIRE_WAND_CHARGE_MAX_RADIUS: f32 = 2.2
+FIRE_WAND_CHARGE_SPREAD: f32 = 7.0 // px, shrinks toward the muzzle as Windup progress -> 1
+FIRE_WAND_CHARGE_INWARD_PULL: f32 = 5.0 // 1/s, how fast a charge ember drifts toward the muzzle
 
 // muzzle-effect presets (art-revamp ticket 02): a fanned streak burst plus a
 // one-shot flash, fired once at Resolve - the enhanced particle layer
 // confirmed to supply the "punch" plain icon-transform lacked
-MUZZLE_STREAK_MIN_SPEED :: 250.0
-MUZZLE_STREAK_MAX_SPEED :: 400.0
-MUZZLE_STREAK_MIN_LIFETIME :: 0.06
-MUZZLE_STREAK_MAX_LIFETIME :: 0.12
-MUZZLE_STREAK_LENGTH :: 8.0
-MUZZLE_STREAK_WIDTH :: 2.0
-MUZZLE_FLASH_MAX_RADIUS :: 14.0
-MUZZLE_FLASH_LIFETIME :: 0.1
+MUZZLE_STREAK_MIN_SPEED: f32 = 250.0
+MUZZLE_STREAK_MAX_SPEED: f32 = 400.0
+MUZZLE_STREAK_MIN_LIFETIME: f32 = 0.06
+MUZZLE_STREAK_MAX_LIFETIME: f32 = 0.12
+MUZZLE_STREAK_LENGTH: f32 = 8.0
+MUZZLE_STREAK_WIDTH: f32 = 2.0
+MUZZLE_FLASH_MAX_RADIUS: f32 = 14.0
+MUZZLE_FLASH_LIFETIME: f32 = 0.1
 
 // poison-gas puff preset (art-revamp ticket 06): a flat square that
 // shrinks+fades, replacing the old animated-sprite puff
@@ -69,21 +69,21 @@ POISON_GAS_SQUARE_COLOR :: rl.Color{90, 200, 90, 200}
 // in place via PARTICLE_DRAG-less lifetime decay), spawned once per bullet
 // per frame so gun pellets and Fireball read as leaving a trail rather than
 // a bare dot in flight
-BULLET_TRAIL_MIN_LIFETIME :: 0.08
-BULLET_TRAIL_MAX_LIFETIME :: 0.16
-BULLET_TRAIL_MIN_RADIUS :: 0.8
-BULLET_TRAIL_MAX_RADIUS :: 1.6
+BULLET_TRAIL_MIN_LIFETIME: f32 = 0.08
+BULLET_TRAIL_MAX_LIFETIME: f32 = 0.16
+BULLET_TRAIL_MIN_RADIUS: f32 = 0.8
+BULLET_TRAIL_MAX_RADIUS: f32 = 1.6
 
 // Flame_Staff cone-fill preset: small embers scattered across the
 // Flamethrower's live cone each frame it's held, replacing a flat translucent
 // sector - distinct from spawn_flame_tick_burst's discrete per-tick pulse at
 // the muzzle, this is the continuous "reach" fill
-FLAME_CONE_MIN_LIFETIME :: 0.1
-FLAME_CONE_MAX_LIFETIME :: 0.2
-FLAME_CONE_MIN_RADIUS :: 1.5
-FLAME_CONE_MAX_RADIUS :: 3.5
-FLAME_CONE_MIN_DRIFT_SPEED :: 10.0
-FLAME_CONE_MAX_DRIFT_SPEED :: 30.0
+FLAME_CONE_MIN_LIFETIME: f32 = 0.1
+FLAME_CONE_MAX_LIFETIME: f32 = 0.2
+FLAME_CONE_MIN_RADIUS: f32 = 1.5
+FLAME_CONE_MAX_RADIUS: f32 = 3.5
+FLAME_CONE_MIN_DRIFT_SPEED: f32 = 10.0
+FLAME_CONE_MAX_DRIFT_SPEED: f32 = 30.0
 
 // what a Particle looks like - a plain filled circle, an oriented streak
 // (art-revamp ticket 02), a one-shot radial-gradient flash (ticket 02), or a

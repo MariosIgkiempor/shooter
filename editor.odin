@@ -23,6 +23,11 @@ import ui "vendor/ui/ui"
 EditorMode :: enum {
 	Tiles,
 	Collisions,
+	// balance/feel numbers rather than map content (tuning.odin). A third mode
+	// rather than an always-visible section for two reasons: it's mutually
+	// exclusive with the work Tiles/Collisions do, and it means the 18x13 tile
+	// palette isn't emitting nodes while a Tuning Group is expanded.
+	Tuning,
 }
 
 EditorTool :: enum {
@@ -61,6 +66,11 @@ editor: struct {
 	// whether the map-switcher's list-and-pick panel is open; purely a UI
 	// toggle, unrelated to game.editing_map itself
 	picking_map:   bool,
+	// which Tuning Group is expanded in Tuning mode, at most one at a time -
+	// the same one-open-at-a-time shape as expanded_spawn_triggers below, but a
+	// single value since a Tuning Group list is a menu rather than a set of
+	// independently-inspectable rows
+	expanded_tuning_group: Maybe(Tuning_Group),
 	// which rows of the always-visible Spawn Trigger list (editor_window)
 	// are expanded, keyed by index into game.editing_map.spawn_triggers -
 	// purely a UI toggle, unrelated to the persisted Spawn_Trigger itself,
@@ -360,23 +370,7 @@ draw_editor :: proc() {
 		editor_window()
 	}
 
-	render_commands := ui.end_frame()
-
-	for cmd in render_commands {
-		switch cmd.kind {
-		case .Rectangle:
-			rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
-		case .Text:
-			rl.DrawTextEx(
-				font,
-				strings.clone_to_cstring(cmd.text, context.temp_allocator),
-				rl.Vector2(cmd.pos),
-				f32(cmd.font_size),
-				0,
-				rl.Color(cmd.color),
-			)
-		}
-	}
+	draw_ui_render_commands(ui.end_frame())
 
 	// atlas tiles over the palette cells, plus the selection outline
 	for cell in editor.palette_cells {
@@ -421,6 +415,7 @@ editor_window :: proc() {
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
+			mode_button("Tuning", .Tuning)
 		}
 
 		switch editor.mode {
@@ -428,6 +423,15 @@ editor_window :: proc() {
 			tiles_mode_ui()
 		case .Collisions:
 			collisions_mode_ui()
+		case .Tuning:
+			tuning_mode_ui()
+		}
+
+		// Tuning edits globals, not the open Map - the Spawn Trigger panel and
+		// the map Save/Clear footer below would both be misleading next to it,
+		// so Tuning mode ends here with its own footer (see tuning_mode_ui)
+		if editor.mode == .Tuning {
+			return
 		}
 
 		// always-visible, like the Map row above - there's no map position to
@@ -512,6 +516,131 @@ collisions_mode_ui :: proc() {
 // click-place a trigger at anymore, so this isn't a dedicated EditorMode.
 // Clicking a row's summary toggles an inline detail panel beneath it
 // (multiple rows may be expanded at once, per the winning prototype).
+
+// -- Tuning mode -------------------------------------------------------------
+// Every Tuning Group as a collapsible row, at most one expanded (see
+// editor.expanded_tuning_group). Only the expanded group emits Tunable rows,
+// which is what keeps a frame's node count small - and what makes the group
+// list itself the navigation, since vendor/ui has no scroll container.
+tuning_mode_ui :: proc() {
+	overridden := 0
+	for t in tunables {
+		if tunable_overridden(t) {
+			overridden += 1
+		}
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		// edits are already live in memory (see tuning_row); Save only writes
+		// them to disk, exactly like the map editor's own Save button below.
+		// Deliberately not autosaved on drag: that would thrash the file mid-
+		// drag and turn every experiment into a git diff.
+		if ui.button("Save Tuning") {
+			save_tuning()
+		}
+		if ui.button("Reset All") {
+			for t in tunables {
+				tunable_reset(t)
+			}
+			apply_tuning_change()
+		}
+		ui.spacer()
+		ui.text("{} of {} overridden", overridden, len(tunables))
+	}
+
+	for group in Tuning_Group {
+		expanded := false
+		if current, ok := editor.expanded_tuning_group.?; ok {
+			expanded = current == group
+		}
+
+		// the override count rides on the group's own label so a collapsed
+		// group still says whether anything inside it has been moved
+		group_overrides := tuning_group_override_count(group)
+		label := tuning_group_display_name[group]
+		if group_overrides > 0 {
+			label = fmt.tprintf("{} [{}]", label, group_overrides)
+		}
+
+		if selectable_button(fmt.tprintf("tuning_group_{}", group), label, expanded) {
+			editor.expanded_tuning_group = expanded ? nil : group
+		}
+
+		if !expanded {
+			continue
+		}
+
+		for tunable in tunables_in_group(group) {
+			tuning_row(tunable)
+		}
+
+		if group_overrides > 0 {
+			if ui.row({gap = ui.theme.gap}) {
+				ui.spacer()
+				if selectable_button(fmt.tprintf("tuning_reset_group_{}", group), "Reset Group", false) {
+					tuning_reset_group(group)
+					apply_tuning_change()
+				}
+			}
+		}
+	}
+}
+
+// one Tunable: a label+value line (with Reset when Overridden), then the
+// control. ui.slider is f32-only, so int rides on an f32 proxy - the same
+// idiom draw_spawn_trigger_detail already uses for Kills_Reached.count - and
+// bool gets an ON/OFF button instead, matching debug.odin's toggles.
+tuning_row :: proc(tunable: ^Tunable) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}: {}", tunable.label, tunable_value_text(tunable^))
+		ui.spacer()
+		if tunable_overridden(tunable^) {
+			if selectable_button(fmt.tprintf("{}_reset", tunable.slug), "Reset", false) {
+				tunable_reset(tunable^)
+				apply_tuning_change()
+			}
+		}
+	}
+
+	switch value in tunable.value {
+	case ^bool:
+		if selectable_button(tunable.slug, value^ ? "ON" : "OFF", value^) {
+			value^ = !value^
+			apply_tuning_change()
+		}
+	case ^int:
+		proxy := f32(value^)
+		if ui.slider(tunable.slug, &proxy, tunable.min, tunable.max) {
+			tunable_set(tunable^, proxy)
+			apply_tuning_change()
+		}
+	case ^f32:
+		// ui.slider uses its label as the node key, and a slug is already
+		// unique across the whole registry - so it doubles as the key here
+		if ui.slider(tunable.slug, value, tunable.min, tunable.max) {
+			apply_tuning_change()
+		}
+	}
+}
+
+tunable_value_text :: proc(tunable: Tunable) -> string {
+	switch value in tunable.value {
+	case ^bool:
+		return value^ ? "ON" : "OFF"
+	case ^int:
+		return fmt.tprintf("{}", value^)
+	case ^f32:
+		// two literal format strings rather than one with a runtime precision:
+		// Odin's fmt has no `{:.*f}`, and writing it emits its own error text
+		// into the label. A 0..1 ratio needs more digits to read as changing at
+		// all than a 0..800 speed does.
+		if tunable.max <= 2 {
+			return fmt.tprintf("{:.3f}", value^)
+		}
+		return fmt.tprintf("{:.1f}", value^)
+	}
+	return ""
+}
 
 DEFAULT_SPAWN_TRIGGER_INTERVAL :: 3
 DEFAULT_SPAWN_CONDITION_KILLS :: 10

@@ -8,14 +8,18 @@ import rl "vendor:raylib"
 // flat squares that shrink+fade (art-revamp ticket 06). Kept slow and
 // short-lived so a puff never drifts past the cloud's own radius before it
 // fades.
-POISON_GAS_SPAWN_INTERVAL :: 0.1
-POISON_GAS_SPRITE_SIZE :: 14.0
-POISON_GAS_MIN_LIFETIME :: 0.5
-POISON_GAS_MAX_LIFETIME :: 0.9
-POISON_GAS_MAX_DRIFT_SPEED :: 6.0
+POISON_GAS_SPAWN_INTERVAL: f32 = 0.1
+POISON_GAS_SPRITE_SIZE: f32 = 14.0
+POISON_GAS_MIN_LIFETIME: f32 = 0.5
+POISON_GAS_MAX_LIFETIME: f32 = 0.9
+POISON_GAS_MAX_DRIFT_SPEED: f32 = 6.0
 // keeps puff centers away from the very edge, since the sprite itself has
 // radius (a puff spawned exactly on the boundary would draw half outside it)
-POISON_GAS_SPAWN_RADIUS_FRACTION :: 0.75
+POISON_GAS_SPAWN_RADIUS_FRACTION: f32 = 0.75
+
+// alpha (0..255) of the flat disc drawn under the gas puffs to mark the
+// cloud's actual damage radius
+POISON_CLOUD_FILL_ALPHA: f32 = 90
 
 Poison_Cloud :: struct {
 	position:        Vec2,
@@ -133,6 +137,6 @@ update_poison_clouds :: proc(dt: f32) {
 
 draw_poison_clouds :: proc(clouds: []Poison_Cloud) {
 	for cloud in clouds {
-		rl.DrawCircleV(cloud.position, cloud.radius, rl.Color{50, 180, 60, 90})
+		rl.DrawCircleV(cloud.position, cloud.radius, rl.Color{50, 180, 60, u8(POISON_CLOUD_FILL_ALPHA)})
 	}
 }
