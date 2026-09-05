@@ -1,7 +1,6 @@
 # Per-map theming and ambient effects
 
 Type: prototype
-Blocked by: 02
 Status: open
 
 ## Question
@@ -15,4 +14,6 @@ This does **not** reopen tile rendering. [Art revamp](../../art-revamp/map.md)'s
 - **Cost.** Ambient effects run every frame over a whole screen of tiles, against an existing standing fog item about unmeasured per-frame transform cost at scale.
 - **Where the palette shows.** The Map Selection swatch and the world should agree; today the swatch colour exists only for the menu.
 
-Prototype it — this is a look-at-it question. Blocked by [Map layout authoring model](02-map-layout-authoring-model.md), since a generator may want to own theming as another parameter rather than an authored field.
+Prototype it — this is a look-at-it question.
+
+[Map layout authoring model](02-map-layout-authoring-model.md) voids the generator caveat this was blocked on: nothing generates a Map, so a Map owns its theming as authored data. It also changes the terms of the `map_icon_colors` promotion question in this ticket's favour — the editor is already growing map-level authoring fields (`name`, `player_start`, `time_limit`, `victory_multiplier`), so a colour picker is one more field on a panel that now exists, not the new burden the original comment warned about. And `Tile.atlas_coords` is deleted, so per-tile visual variation is off the table entirely: whatever identity a Map gets, it comes from a per-*map* palette plus code-driven ambience.

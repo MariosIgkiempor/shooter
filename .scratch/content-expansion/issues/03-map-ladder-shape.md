@@ -1,7 +1,6 @@
 # Map ladder shape
 
 Type: grilling
-Blocked by: 02
 Status: open
 
 ## Question
@@ -19,4 +18,8 @@ To settle:
 - **Presentation.** [hud.odin](../../../hud.odin)'s `draw_map_selection_ui` draws one button per `Map_Name` in a single column, with a swatch icon per map. That does not scale past a handful, and it has no vocabulary for "locked", "cleared", or "harder". Decide what the screen becomes — the layout work itself belongs to the implementation follow-on, but the information it must convey is decided here.
 - **Does clearing a rung persist?** Nothing on the Account records which Maps have been cleared today. A ladder may or may not want that.
 
-Blocked by [Map layout authoring model](02-map-layout-authoring-model.md): if layouts are generated, a "rung" may be a parameter set rather than an authored file, which changes what escalating across rungs even means.
+[Map layout authoring model](02-map-layout-authoring-model.md) has settled what a rung is made of, and hands this ticket two constraints and one extra job:
+
+- A rung is a **hand-drawn file**, so the rung count is bounded by what a person will actually draw — decide it as a number someone commits to, not an aspiration.
+- **Footprint is flat** across rungs (~54×48, capped by `MAX_SEARCH_NODES`), so "layout hostility" as an escalation axis means denser and meaner geometry, never a bigger arena.
+- This ticket **produces the per-rung authoring briefs** — size, chokepoints, sightlines, enemy mix, spawn timeline, `time_limit`, `victory_multiplier` — since drawing them is authoring and belongs to the implementation follow-on.
