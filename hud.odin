@@ -43,6 +43,8 @@ HUD_THEME :: ui.Theme {
 	padding             = 10,
 	gap                 = 8,
 	button_press_offset = BUTTON_PRESS_SINK,
+	scrollbar_track     = {40, 44, 52, 255},
+	scrollbar_thumb     = {96, 104, 122, 255},
 }
 
 // the whole backend: walks the ui library's render commands and draws them.
@@ -52,6 +54,20 @@ HUD_THEME :: ui.Theme {
 // anymore, only flat fills in whichever theme is current.
 draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 	for cmd in commands {
+		// scroll containers are the library's business, not this backend's: it
+		// gets told the rect each command is visible through and scissors to
+		// it, and only when the command actually crosses that rect's edge -
+		// which, outside a scroll container, is never
+		clipped := layout.command_needs_clip(cmd)
+		if clipped {
+			rl.BeginScissorMode(
+				i32(cmd.clip.x),
+				i32(cmd.clip.y),
+				i32(cmd.clip.width),
+				i32(cmd.clip.height),
+			)
+		}
+
 		switch cmd.kind {
 		case .Rectangle:
 			rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
@@ -64,6 +80,10 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 				0,
 				rl.Color(cmd.color),
 			)
+		}
+
+		if clipped {
+			rl.EndScissorMode()
 		}
 	}
 }

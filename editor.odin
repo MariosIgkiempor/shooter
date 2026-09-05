@@ -120,6 +120,15 @@ update_editor_camera :: proc() {
 	camera := &editor.camera
 	wheel := get_mouse_wheel_move()
 
+	// a notch the editor's ui already scrolled must not also pan or zoom the
+	// world. One frame stale, like editor.ui_hovered below: the ui is declared
+	// during the draw phase, so the newest answer available here is the one
+	// last frame's layout produced - and the pointer was over the same panel
+	// then, which is what makes that good enough
+	if layout.scroll_consumed() {
+		wheel = {}
+	}
+
 	if is_key_down(.LEFT_SUPER) || is_key_down(.RIGHT_SUPER) {
 		if wheel.y != 0 {
 			mouse_world := rl.GetScreenToWorld2D(game.mouse, camera^)
@@ -363,7 +372,7 @@ draw_editor :: proc() {
 	clear(&editor.palette_cells)
 	editor.ui_hovered = false
 
-	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT), get_mouse_wheel_move())
 	ui.begin_frame(game.window_width, game.window_height)
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, padding = 12}) {
@@ -520,8 +529,17 @@ collisions_mode_ui :: proc() {
 // -- Tuning mode -------------------------------------------------------------
 // Every Tuning Group as a collapsible row, at most one expanded (see
 // editor.expanded_tuning_group). Only the expanded group emits Tunable rows,
-// which is what keeps a frame's node count small - and what makes the group
-// list itself the navigation, since vendor/ui has no scroll container.
+// which is what keeps a frame's node count small - the ~275 Tunables all at
+// once would be about 1700 nodes against layout's cap of 1024 - and what makes
+// the group list itself the navigation.
+//
+// The list scrolls (vendor/ui gained scroll containers for this); the Save/
+// Reset footer above it deliberately doesn't, so the two buttons stay put
+// wherever you are in the list. The scroll box takes a share of the window
+// height rather than growing into the editor window's slack, which keeps
+// Tiles and Collisions mode laying out exactly as they did.
+TUNING_LIST_HEIGHT_FRACTION :: 0.6
+
 tuning_mode_ui :: proc() {
 	overridden := 0
 	for t in tunables {
@@ -548,6 +566,21 @@ tuning_mode_ui :: proc() {
 		ui.text("{} of {} overridden", overridden, len(tunables))
 	}
 
+	// explicitly keyed, as ui.scroll_area requires: the offset is retained
+	// across frames by node id, and this container's siblings come and go as
+	// groups expand
+	if ui.scroll_area(
+		"tuning_groups",
+		{
+			size = {y = layout.fixed(game.window_height * TUNING_LIST_HEIGHT_FRACTION)},
+			gap = ui.theme.gap,
+		},
+	) {
+		tuning_group_list()
+	}
+}
+
+tuning_group_list :: proc() {
 	for group in Tuning_Group {
 		expanded := false
 		if current, ok := editor.expanded_tuning_group.?; ok {
