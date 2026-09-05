@@ -668,22 +668,36 @@ draw_main_menu_ui :: proc() {
 		3 * MENU_TEXT_LINE_HEIGHT +
 		f32(len(Account_Stat)) * (MENU_ICON_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT)
 
+	// Relics are Account progression too (ADR-0019) but get their own panel
+	// rather than more rows on Progression's: the two are different kinds of
+	// purchase, and one panel carrying both ladders already stands 482px
+	// tall against the 540px default window, overflowing outright the moment
+	// a second Relic exists.
+	relics_h :=
+		pad * 2 +
+		MENU_TEXT_LINE_HEIGHT +
+		f32(len(Relic_Kind)) * (MENU_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT)
+
 	button_count := 1 // "Start New Run" always shows
 	if game.player.run_started {
 		button_count += 1 // "Continue" only with a Run in progress
 	}
 	shooter_h := pad * 2 + f32(button_count) * MENU_BUTTON_LINE_HEIGHT
 
-	row_h := max(progression_h, shooter_h)
-	row_w := panel_w * 2 + panel_gap
+	row_h := max(progression_h, relics_h, shooter_h)
+	row_w := panel_w * 3 + panel_gap * 2
 	row_x := (game.window_width - row_w) / 2
 	row_y := (game.window_height - row_h) / 2
 
+	// the two progression panels sit together on the left, the panel
+	// carrying the actual navigation last
 	progression_rect := Rect{row_x, row_y, panel_w, progression_h}
-	shooter_rect := Rect{row_x + panel_w + panel_gap, row_y, panel_w, shooter_h}
+	relics_rect := Rect{row_x + panel_w + panel_gap, row_y, panel_w, relics_h}
+	shooter_rect := Rect{row_x + (panel_w + panel_gap) * 2, row_y, panel_w, shooter_h}
 
 	panel_anim := menu_element_anim(0, button_count) // panel reveals first, dismisses last (rank button_count)
 	draw_menu_panel(progression_rect, panel_anim)
+	draw_menu_panel(relics_rect, panel_anim)
 	draw_menu_panel(shooter_rect, panel_anim)
 
 	y := progression_rect.y + pad
@@ -720,6 +734,20 @@ draw_main_menu_ui :: proc() {
 
 	for stat in Account_Stat {
 		y = draw_account_stat_row(stat, progression_rect.x + pad, y, panel_w - pad * 2, panel_anim)
+	}
+
+	ry := relics_rect.y + pad
+	draw_text(
+		"Relics",
+		Vec2{relics_rect.x + pad, ry},
+		MENU_THEME.font_size,
+		0,
+		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
+	)
+	ry += MENU_TEXT_LINE_HEIGHT
+
+	for kind in Relic_Kind {
+		ry = draw_relic_row(kind, relics_rect.x + pad, ry, panel_w - pad * 2, panel_anim)
 	}
 
 	sy := shooter_rect.y + pad
@@ -801,6 +829,51 @@ draw_account_stat_row :: proc(stat: Account_Stat, x, y, width: f32, anim: Menu_E
 		clicked, _ := draw_menu_button(button_rect, button_label, anim, disabled = !affordable)
 		if clicked {
 			try_buy_account_stat(stat)
+		}
+	}
+	cursor += MENU_BUTTON_LINE_HEIGHT
+
+	return cursor
+}
+
+// the Relic ladder's equivalent of draw_account_stat_row, in the same three
+// states (locked / MAXED / buyable) and the same two-line shape, since a
+// Relic reuses Account_Stat's whole purchase mechanism - geometric price,
+// hard cap, Account-Level unlock gate - and only differs in what a stack
+// buys (ADR-0019). Drawn into its own panel beside Progression's rather
+// than continuing its rows, since the two are different kinds of purchase.
+// Returns the cursor's new y, same convention.
+draw_relic_row :: proc(kind: Relic_Kind, x, y, width: f32, anim: Menu_Element_Anim) -> f32 {
+	preset := relic_presets[kind]
+	stack := game.player.relic_stacks[kind]
+	cursor := y
+
+	label := fmt.tprintf("{} [{} of {}]", preset.display_name, stack, preset.max_stack)
+	draw_text(label, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
+	cursor += MENU_TEXT_LINE_HEIGHT
+
+	switch {
+	case !relic_unlocked(kind):
+		draw_text(
+			fmt.tprintf("Unlocks at Lv. {}", preset.unlock_level),
+			Vec2{x, cursor},
+			MENU_THEME.font_size,
+			0,
+			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
+		)
+	case relic_maxed(kind):
+		draw_text(
+			"MAXED",
+			Vec2{x, cursor},
+			MENU_THEME.font_size,
+			0,
+			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
+		)
+	case:
+		button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
+		button_label := fmt.tprintf("Spend {} Gold", relic_price(kind, stack))
+		if clicked, _ := draw_menu_button(button_rect, button_label, anim); clicked {
+			try_buy_relic(kind)
 		}
 	}
 	cursor += MENU_BUTTON_LINE_HEIGHT

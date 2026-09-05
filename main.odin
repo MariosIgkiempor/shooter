@@ -92,6 +92,13 @@ game: struct {
 	damage_numbers:         [dynamic]Damage_Number `json:"-"`,
 	screen_shake_trauma:    f32 `json:"-"`,
 
+	// every Relic's transient runtime (relic.odin) - the orbit phase and
+	// tick timer the Orbiting Orb rotates on. Never persisted: the purchased
+	// stack counts live on Player (relic_stacks) and the ring is derived
+	// from them every frame, so a saved phase would only restore the orbs to
+	// a stale angle for one frame on load.
+	relic_state:            Relic_State `json:"-"`,
+
 	// true while the Run End modal is open (see end_run); simulation is
 	// paused. Never saved - a save taken mid-modal simply reopens closed,
 	// which is fine since no Run state is lost (the Gold settle is already
@@ -254,6 +261,7 @@ initialize_program :: proc() -> runtime.Context {
 	reset_particles()
 	reset_damage_numbers()
 	reset_screen_shake()
+	reset_relics()
 	// runtime combat state, deliberately not persisted (see Player.health) -
 	// reset here so both fresh games and loads start at full health
 	game.player.health = game.player.max_health
@@ -463,6 +471,7 @@ update_game :: proc() {
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
 		update_poison_clouds(rl.GetFrameTime())
+		update_relics(rl.GetFrameTime())
 		update_pickups(rl.GetFrameTime())
 		update_particles(rl.GetFrameTime())
 		update_damage_numbers(rl.GetFrameTime())
@@ -554,6 +563,12 @@ Player :: struct {
 	banked_progress:     int, // banked Gold counted toward the next Account level, net of the remainder each level-up consumes
 	level:               int, // Account level, starts at 1 - gates Account_Stat unlock_level
 	account_stat_stacks: [Account_Stat]int, // how many times each Account_Stat has been bought, ever
+	// how many times each Relic has been bought, ever - Account progression's
+	// behavioural axis alongside account_stat_stacks' numeric one (ADR-0019).
+	// The sole source of truth every Relic's live effect is derived from
+	// (relic.odin's relic_orb_count), never applied onto anything that could
+	// then drift out of sync with it.
+	relic_stacks:        [Relic_Kind]int,
 
 	// true once a starter weapon has been picked for the Run currently in
 	// progress (hud.odin's draw_run_start_ui) - load_game uses this to skip
@@ -754,6 +769,10 @@ start_new_run :: proc(starter_kind: Weapon_Kind) {
 	clear(&game.pickups)
 	clear(&game.particles)
 	reset_screen_shake()
+	// the ring itself is Account-scoped and survives (relic_stacks is not
+	// reset here, deliberately, same as gold/level/account_stat_stacks) -
+	// only its transient phase/tick timer restart with the Run
+	reset_relics()
 
 	// deliberately NOT reset: `gold` is the single, Account-scoped currency
 	// (ADR-0016). Only the balance this Run starts from is recorded, so
@@ -987,6 +1006,12 @@ draw_game :: proc() {
 		}
 		draw_actor(game.player.rect, game.player.squash)
 		draw_weapon(game.player)
+		// gated the same way draw_player_resource_indicators is below: the
+		// ring is Playing-only combat furniture, not something the editor's
+		// or a menu Screen's view of the world should show
+		if game.program_mode == .Playing {
+			draw_relics()
+		}
 		if game.debug.visualizers[.Colliders] {
 			draw_debug_colliders()
 		}
