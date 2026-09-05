@@ -1154,7 +1154,7 @@ draw_game :: proc() {
 	FLAME_STAFF_PULSE_SCALE :: 0.35 // extra scale at the start of a Follow-through pulse, decaying to 0
 	SWORD_SWING_OUT_TIME :: 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
 	SWORD_SWING_RETURN_TIME :: 0.11 // seconds, ease-out extreme -> neutral
-	SWORD_ECHO_COUNT :: 3 // motion-trail echoes sampled through the swing (ticket 02)
+	SWORD_ECHO_COUNT :: 3 // capacity for motion-trail echoes; how many a weapon actually leaves is per-kind (Weapon_Visual.swing_echo_count)
 	SWORD_ECHO_STEP :: 0.025 // seconds between each sampled echo
 
 	// angle offset (added to the pre-swing base angle) at `time_since_resolve`
@@ -1202,11 +1202,13 @@ draw_game :: proc() {
 			}
 		}
 
-		// Sword's Resolve swing-through, plus its motion-trail echoes
-		// (ticket 02): several fading copies of the same wedge sampled at
+		// Melee's Resolve swing-through, plus its motion-trail echoes
+		// (ticket 02): several fading copies of the same blade sampled at
 		// slightly earlier points on the same swing curve, not a new
-		// particle primitive - collected here, drawn after the main blade
-		// below.
+		// particle primitive - collected here, drawn behind the main blade
+		// below. How many echoes a weapon leaves is per-kind now
+		// (Weapon_Visual.swing_echo_count), so Dagger stays a quick jab and
+		// Sword reads as a heavy sweep, rather than a hardcoded kind check.
 		echo_angles: [SWORD_ECHO_COUNT]f32
 		echo_count := 0
 
@@ -1220,15 +1222,14 @@ draw_game :: proc() {
 				base_angle := angle
 				angle += sword_swing_offset(v.arc_degrees, time_since_resolve)
 
-				if weapon.kind == .Sword {
-					for i in 1 ..= SWORD_ECHO_COUNT {
-						t := time_since_resolve - f32(i) * SWORD_ECHO_STEP
-						if t < 0 || t >= swing_total {
-							continue
-						}
-						echo_angles[echo_count] = base_angle + sword_swing_offset(v.arc_degrees, t)
-						echo_count += 1
+				wanted := min(weapon_visuals[weapon.kind].swing_echo_count, SWORD_ECHO_COUNT)
+				for i in 1 ..= wanted {
+					t := time_since_resolve - f32(i) * SWORD_ECHO_STEP
+					if t < 0 || t >= swing_total {
+						continue
 					}
+					echo_angles[echo_count] = base_angle + sword_swing_offset(v.arc_degrees, t)
+					echo_count += 1
 				}
 			}
 		}
@@ -1249,47 +1250,26 @@ draw_game :: proc() {
 			}
 		}
 
-		switch v in weapon.variant {
-		case Gun:
-			draw_rod(
-				pivot,
-				angle,
-				WEAPON_GUN_ROD_LENGTH * pulse_scale,
-				WEAPON_GUN_ROD_WIDTH * pulse_scale,
-				WEAPON_GUN_COLOR,
-			)
+		// The weapon draws through the *same* glyph the Shop and Run Start
+		// screens show (icon.odin's weapon_icons), mapped by a pivot frame
+		// instead of a box frame - one geometry definition, two adapters, so
+		// a Shop icon and the thing in your hands can't drift apart
+		// (ADR-0018). All the pivot/angle/pulse work above is unchanged; it
+		// just feeds the frame now instead of three hand-rolled shape calls.
+		glyph := weapon_icons[weapon.kind]
+		size := weapon_world_frame_size(weapon) * pulse_scale
 
-		case Melee_Weapon:
-			for i in 0 ..< echo_count {
-				fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
-				draw_wedge(
-					pivot,
-					echo_angles[i],
-					v.range * pulse_scale,
-					WEAPON_MELEE_WEDGE_WIDTH * pulse_scale,
-					rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5),
-				)
-			}
-			draw_wedge(
-				pivot,
-				angle,
-				v.range * pulse_scale,
-				WEAPON_MELEE_WEDGE_WIDTH * pulse_scale,
-				WEAPON_MELEE_COLOR,
+		// echoes first, so the live blade draws over its own trail
+		for i in 0 ..< echo_count {
+			fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
+			glyph(
+				icon_frame_pivot(pivot, echo_angles[i], size),
+				rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5),
+				1,
 			)
-
-		case Magic:
-			length := WEAPON_MAGIC_ROD_LENGTH * pulse_scale
-			draw_rod(
-				pivot,
-				angle,
-				length,
-				WEAPON_MAGIC_ROD_WIDTH * pulse_scale,
-				WEAPON_MAGIC_ROD_COLOR,
-			)
-			tip := rotate_point({length, 0}, pivot, angle)
-			rl.DrawCircleV(tip, WEAPON_MAGIC_ORB_RADIUS * pulse_scale, WEAPON_MAGIC_ORB_COLOR)
 		}
+
+		glyph(icon_frame_pivot(pivot, angle, size), nil, 1)
 	}
 
 	// F8 debug panel visualizer: outlines the player's and every enemy's actual collision

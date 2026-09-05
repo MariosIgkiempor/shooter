@@ -194,17 +194,14 @@ draw_resource_bar :: proc(bar: Rect, frac: f32, fill_color: Color, particles: []
 	}
 }
 
-draw_resource_indicator_icon :: proc(pos: Vec2, texture: Texture_Name) {
-	icon := atlas_textures[texture]
-	draw_atlas_tile(icon.rect, {pos.x, pos.y, RESOURCE_BAR_ICON_SIZE, RESOURCE_BAR_ICON_SIZE}, {})
-}
-
-// Melee_Weapon/Magic have no dedicated Cooldown icon art yet - out of scope
-// for this map (ticket 01) - so this draws a plain filled circle in place of
-// an atlas tile
-draw_resource_indicator_placeholder_icon :: proc(pos: Vec2, color: Color) {
-	radius: f32 = RESOURCE_BAR_ICON_SIZE / 2.0 // f32 division - RESOURCE_BAR_ICON_SIZE/2 alone is untyped-int division and truncates 9/2 to 4, not 4.5
-	rl.DrawCircleV(pos + radius, radius, color)
+// the indicator's glyph is a shape-drawn icon (icon.odin), not an atlas
+// tile - there is no icon art in the atlas any more, and a code-drawn glyph
+// scales into this 9px slot from the same unit-space definition the ~20px
+// menu rows use. Tinted with the bar's own live color rather than its world
+// color: this row already goes orange while reloading and red when dry, and
+// the icon has to follow its bar or the two contradict each other.
+draw_resource_indicator_icon :: proc(pos: Vec2, icon: Icon_Proc, color: Color) {
+	icon(icon_frame_rect({pos.x, pos.y, RESOURCE_BAR_ICON_SIZE, RESOURCE_BAR_ICON_SIZE}), color, 1)
 }
 
 // the player's secondary indicator (Ammo for Gun, Cooldown for Melee_Weapon/
@@ -219,7 +216,7 @@ Player_Secondary_Resource :: struct {
 	frac:    f32,
 	chaotic: bool, // Gun reload: distinct fast/chaotic particle treatment
 	color:   Color,
-	icon:    Texture_Name, // .None means draw_resource_indicator_placeholder_icon instead (Melee_Weapon/Magic have no Cooldown icon art yet)
+	icon:    Icon_Proc, // Ammo's stacked bars for Gun, a clock face for Melee_Weapon/Magic
 }
 
 player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resource, ok: bool) {
@@ -237,12 +234,17 @@ player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resour
 			color = RESOURCE_EMPTY_COLOR
 		}
 
-		// .None: Ammo has no dedicated icon art post-art-revamp (ticket 06) -
-		// falls back to draw_resource_indicator_placeholder_icon, same as
-		// Melee_Weapon/Magic's Cooldown below
-		return Player_Secondary_Resource{frac = ammo_frac, chaotic = v.reload_timer > 0, color = color, icon = .None}, true
+		// the same stacked-bars mark the Ammo pickup uses in the world, so
+		// the bar you're watching drain and the thing that refills it read
+		// as the same resource
+		return Player_Secondary_Resource{frac = ammo_frac, chaotic = v.reload_timer > 0, color = color, icon = icon_ammo}, true
 	case Melee_Weapon, Magic:
-		return Player_Secondary_Resource{frac = weapon_ready_fraction(weapon), color = RESOURCE_COOLDOWN_COLOR, icon = .None}, true
+		return Player_Secondary_Resource {
+				frac = weapon_ready_fraction(weapon),
+				color = RESOURCE_COOLDOWN_COLOR,
+				icon = icon_clock,
+			},
+			true
 	}
 	return {}, false
 }
@@ -273,11 +275,7 @@ draw_player_resource_indicators :: proc(player: Player) {
 	if secondary, ok := player_secondary_resource(player.weapon); ok {
 		secondary_icon_pos, secondary_bar := resource_indicator_row_rects(feet, doc, 1, true)
 
-		if secondary.icon == .None {
-			draw_resource_indicator_placeholder_icon(secondary_icon_pos, secondary.color)
-		} else {
-			draw_resource_indicator_icon(secondary_icon_pos, secondary.icon)
-		}
+		draw_resource_indicator_icon(secondary_icon_pos, secondary.icon, secondary.color)
 		draw_resource_bar(secondary_bar, secondary.frac, secondary.color, player_secondary_bar_particles[:])
 	}
 }

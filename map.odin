@@ -26,6 +26,17 @@ Map :: struct {
 	victory_multiplier: f32,
 }
 
+// the swatch color the Map Selection screen's icon draws in (icon.odin's
+// icon_map_swatch). Presentation only, so it lives here rather than on Map
+// itself: Map round-trips through data/maps/*.json and the map_builder, and
+// a color baked into that format would need the level editor to grow a
+// color picker to author it. Promote it onto Map if maps ever gain real
+// per-map theming. Kept out of the generated maps.odin - build.sh re-runs
+// the map_builder every build and would wipe it.
+map_icon_colors: [Map_Name]Color = {
+	.Desert_Dungeon = {214, 178, 108, 255}, // warm sand, matching the tilemap palette
+}
+
 load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 	log_info("Loading map from `{}`", path)
 

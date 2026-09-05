@@ -191,16 +191,6 @@ draw_atlas_tile :: proc(atlas_rect, dest: Rect, origin: Vec2, rotation: f32 = 0,
 	rl.DrawTexturePro(atlas, atlas_rect, dest, origin, rotation, tint)
 }
 
-// rotates a point expressed in `pivot`-local space by angle_deg and returns
-// its world position - shared by every shape (art-revamp) that needs to
-// place geometry relative to a rotated pivot (weapon wedges, comets, orbs)
-rotate_point :: proc(local, pivot: Vec2, angle_deg: f32) -> Vec2 {
-	rad := math.to_radians(angle_deg)
-	c := math.cos(rad)
-	s := math.sin(rad)
-	return pivot + Vec2{local.x * c - local.y * s, local.x * s + local.y * c}
-}
-
 // a thin oriented streak, centered on `position` and elongated along
 // `direction` - the shared shape for bullets and streak particles (art-revamp
 // tickets 02/03), giving visual continuity between a weapon's muzzle effect
@@ -222,23 +212,12 @@ draw_comet :: proc(position, direction: Vec2, length, width: f32, color: Color) 
 	rl.DrawCircleV(position + dir * (length * 0.25), width * 0.7, color)
 }
 
-// a rod extending from `pivot` (the grip) along angle_deg for `length`,
-// `width` wide (art-revamp ticket 02's Gun/Magic shapes)
-draw_rod :: proc(pivot: Vec2, angle_deg: f32, length, width: f32, color: Color) {
-	dest := Rect{pivot.x, pivot.y, length, width}
-	origin := Vec2{0, width / 2}
-	draw_rectangle(dest, color, origin, angle_deg)
-}
-
-// a wedge/blade silhouette (art-revamp ticket 02's Melee shape): a triangle
-// with its base at `pivot` (the grip) and its tip `length` away along the
-// angle, `width` wide at the base
-draw_wedge :: proc(pivot: Vec2, angle_deg: f32, length, width: f32, color: Color) {
-	tip := rotate_point({length, 0}, pivot, angle_deg)
-	base_a := rotate_point({0, -width / 2}, pivot, angle_deg)
-	base_b := rotate_point({0, width / 2}, pivot, angle_deg)
-	rl.DrawTriangle(base_a, tip, base_b, color)
-}
+// The rod/wedge helpers art-revamp ticket 02 introduced for the three
+// per-family weapon shapes lived here. ADR-0018 replaced them: weapon
+// geometry is per-kind now and authored once in icon.odin, drawn through an
+// Icon_Frame so the same definition serves both a Shop icon and the world.
+// draw_streak/draw_comet/draw_flash below stay - bullets and particles
+// still use them.
 
 // a one-shot radial-gradient glow, fully opaque at the center fading to
 // transparent at `radius` (art-revamp ticket 02's "flash") - callers fade

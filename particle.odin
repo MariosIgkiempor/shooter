@@ -228,13 +228,16 @@ spawn_streak_burst :: proc(
 }
 
 // a one-shot bright flash at `position` - a weapon's muzzle/cast effect
-// (art-revamp ticket 02)
-spawn_muzzle_flash :: proc(position: Vec2, color: rl.Color) {
+// (art-revamp ticket 02). `radius` comes from the firing weapon's
+// Weapon_Visual so magnitude varies per Weapon_Kind while the flash's shape
+// stays a family-level primitive (ADR-0018); it falls back to the shared
+// default for any caller with no weapon behind it.
+spawn_muzzle_flash :: proc(position: Vec2, color: rl.Color, radius: f32 = MUZZLE_FLASH_MAX_RADIUS) {
 	append(
 		&game.particles,
 		Particle {
 			position = position,
-			visual = Particle_Flash{color = color, max_radius = MUZZLE_FLASH_MAX_RADIUS},
+			visual = Particle_Flash{color = color, max_radius = radius},
 			lifetime = MUZZLE_FLASH_LIFETIME,
 			max_lifetime = MUZZLE_FLASH_LIFETIME,
 		},

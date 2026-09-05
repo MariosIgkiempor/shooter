@@ -71,6 +71,20 @@ draw_debug_panel_ui :: proc() {
 				game.player.run_start_gold += DEBUG_GOLD_GRANT
 			}
 
+			// weapon silhouettes are per-kind now (ADR-0018) and the only
+			// honest way to judge one is at gameplay zoom while it rotates
+			// with your aim - so the global size multiplier is a live
+			// slider rather than a constant to recompile against. Drives
+			// Gun/Magic only; a melee blade's drawn length reports its real
+			// reach and must not be scaled away from it.
+			ui.text("Weapon size: {:.2f}x", weapon_visual_scale)
+			ui.slider(
+				"weapon_visual_scale",
+				&weapon_visual_scale,
+				WEAPON_VISUAL_SCALE_MIN,
+				WEAPON_VISUAL_SCALE_MAX,
+			)
+
 			god_mode_label := fmt.tprintf("God Mode: {}", game.debug.god_mode ? "ON" : "OFF")
 			if ui.button(god_mode_label, {panel = true}) {
 				game.debug.god_mode = !game.debug.god_mode

@@ -417,6 +417,65 @@ MENU_BUTTON_HEIGHT :: 32
 MENU_TEXT_LINE_HEIGHT := MENU_THEME.font_size + MENU_THEME.gap
 MENU_BUTTON_LINE_HEIGHT := MENU_BUTTON_HEIGHT + MENU_THEME.gap
 
+// -- icon slots (icon.odin) --------------------------------------------------
+//
+// Icons sit *above* their label, centered, on anything the player browses
+// and picks between - weapon tiers, upgrades, account stats, maps - so the
+// glyph is the target and the text is its caption. Read-only `label: value`
+// readouts (the Run End receipt) are the exception and keep their icon
+// inline to the left: a receipt line is read left-to-right as a sentence,
+// and centering it under a mark makes it slower to read, not faster.
+MENU_ICON_SIZE :: 20
+MENU_ICON_GAP :: 4 // between a stacked icon and the label under it
+
+// the Shop is the one screen where the stacked treatment doesn't fit at the
+// default 960x540 window - it was already ~512px tall with plain text rows.
+// A smaller glyph there buys back most of the difference (the rest comes
+// from draw_shop_ui balancing the two Upgrade blocks across both columns).
+MENU_SHOP_ICON_SIZE :: 15
+
+// an icon stacked above a single text line, as one row
+MENU_ICON_TEXT_LINE_HEIGHT := MENU_ICON_SIZE + MENU_ICON_GAP + MENU_TEXT_LINE_HEIGHT
+MENU_SHOP_ICON_TEXT_LINE_HEIGHT := MENU_SHOP_ICON_SIZE + MENU_ICON_GAP + MENU_TEXT_LINE_HEIGHT
+
+// a button carrying a stacked icon+label instead of a bare label
+MENU_ICON_BUTTON_HEIGHT :: MENU_BUTTON_HEIGHT + MENU_ICON_SIZE + MENU_ICON_GAP
+MENU_ICON_BUTTON_LINE_HEIGHT := MENU_ICON_BUTTON_HEIGHT + MENU_THEME.gap
+
+// draws `icon` centered in a MENU_ICON_SIZE-tall band at the top of `width`,
+// then returns the y the caption below it should start at. The one place
+// the stacked-icon geometry lives, so every row using it can't drift.
+draw_menu_stacked_icon :: proc(
+	icon: Icon_Proc,
+	x, y, width: f32,
+	size: f32,
+	tint: Maybe(Color),
+	alpha: f32,
+) -> f32 {
+	icon(icon_frame_rect({x + (width - size) / 2, y, size, size}), tint, alpha)
+	return y + size + MENU_ICON_GAP
+}
+
+// horizontally centers `text` in `width` and draws it - the caption half of
+// a stacked icon row
+draw_menu_centered_text :: proc(text: string, x, y, width: f32, color: Color) {
+	size := rl.MeasureTextEx(font, strings.clone_to_cstring(text, context.temp_allocator), MENU_THEME.font_size, 0)
+	draw_text(text, Vec2{x + (width - size.x) / 2, y}, MENU_THEME.font_size, 0, color)
+}
+
+// the Run End receipt's inline treatment: a glyph in the left gutter, the
+// line's text starting after it. Returns the x the text should start at.
+MENU_INLINE_ICON_SIZE :: 16
+MENU_INLINE_ICON_GAP :: 6
+
+draw_menu_inline_icon :: proc(icon: Icon_Proc, x, y: f32, tint: Maybe(Color), alpha: f32) -> f32 {
+	// centered against the text line's own height, not the icon's, so glyphs
+	// sit on the same optical baseline as the words beside them
+	iy := y + (MENU_THEME.font_size - MENU_INLINE_ICON_SIZE) / 2
+	icon(icon_frame_rect({x, iy, MENU_INLINE_ICON_SIZE, MENU_INLINE_ICON_SIZE}), tint, alpha)
+	return x + MENU_INLINE_ICON_SIZE + MENU_INLINE_ICON_GAP
+}
+
 Menu_Button_State :: enum {
 	Normal,
 	Hover,
@@ -454,11 +513,17 @@ draw_menu_panel :: proc(rect: Rect, anim: Menu_Element_Anim) {
 // unchanged) - gated by anim.alpha > 0.8 so a still-animating button can't
 // be clicked mid-Reveal/Dismiss (mirrors the prototype's `interactive :=
 // alpha > 0.8`); this only suppresses hover/click detection, not drawing.
+// `icon` is optional: nil keeps the original single-centered-label layout
+// (Close/Continue/Spend buttons have nothing meaningful to depict), while a
+// supplied glyph stacks above the label per the MENU_ICON_SIZE block above -
+// so the button must be sized MENU_ICON_BUTTON_HEIGHT by its caller.
 draw_menu_button :: proc(
 	rect: Rect,
 	label: string,
 	anim: Menu_Element_Anim,
 	disabled: bool = false,
+	icon: Icon_Proc = nil,
+	icon_tint: Maybe(Color) = nil,
 ) -> (
 	clicked: bool,
 	state: Menu_Button_State,
@@ -502,8 +567,35 @@ draw_menu_button :: proc(
 
 	text_color := disabled ? MENU_THEME.text_disabled : MENU_THEME.text
 	text_size := rl.MeasureTextEx(font, strings.clone_to_cstring(label, context.temp_allocator), MENU_THEME.font_size, 0)
-	text_pos := Vec2{dest.x + (dest.width - text_size.x) / 2, dest.y + (dest.height - text_size.y) / 2}
-	draw_text(label, text_pos, MENU_THEME.font_size, 0, menu_with_alpha(text_color, anim.alpha))
+
+	if icon == nil {
+		text_pos := Vec2{dest.x + (dest.width - text_size.x) / 2, dest.y + (dest.height - text_size.y) / 2}
+		draw_text(label, text_pos, MENU_THEME.font_size, 0, menu_with_alpha(text_color, anim.alpha))
+		return clicked, state
+	}
+
+	// a disabled button flattens its glyph to the same gray as its label, so
+	// the icon can't keep reading as live while the text says otherwise
+	// (icon.odin's tint-replaces-rather-than-multiplies note)
+	tint := icon_tint
+	if disabled {
+		tint = MENU_THEME.text_disabled
+	}
+
+	// the icon scales with the button so a shorter MENU_BUTTON_HEIGHT button
+	// that opted into an icon still fits both halves
+	icon_size := min(f32(MENU_ICON_SIZE) * anim.scale, dest.height - text_size.y - MENU_ICON_GAP)
+	stack_h := icon_size + MENU_ICON_GAP + text_size.y
+	top := dest.y + (dest.height - stack_h) / 2
+
+	icon(icon_frame_rect({dest.x + (dest.width - icon_size) / 2, top, icon_size, icon_size}), tint, anim.alpha)
+	draw_text(
+		label,
+		Vec2{dest.x + (dest.width - text_size.x) / 2, top + icon_size + MENU_ICON_GAP},
+		MENU_THEME.font_size,
+		0,
+		menu_with_alpha(text_color, anim.alpha),
+	)
 
 	return clicked, state
 }
@@ -574,7 +666,7 @@ draw_main_menu_ui :: proc() {
 	progression_h :=
 		pad * 2 +
 		3 * MENU_TEXT_LINE_HEIGHT +
-		f32(len(Account_Stat)) * (MENU_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT)
+		f32(len(Account_Stat)) * (MENU_ICON_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT)
 
 	button_count := 1 // "Start New Run" always shows
 	if game.player.run_started {
@@ -595,9 +687,12 @@ draw_main_menu_ui :: proc() {
 	draw_menu_panel(shooter_rect, panel_anim)
 
 	y := progression_rect.y + pad
+	// both of these are `label: value` readouts, so their glyphs sit inline
+	// to the left rather than stacked above (see the MENU_ICON_SIZE block)
+	text_x := draw_menu_inline_icon(icon_level, progression_rect.x + pad, y, nil, panel_anim.alpha)
 	draw_text(
 		fmt.tprintf("Account Lv. {}", game.player.level),
-		Vec2{progression_rect.x + pad, y},
+		Vec2{text_x, y},
 		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
@@ -605,9 +700,10 @@ draw_main_menu_ui :: proc() {
 	y += MENU_TEXT_LINE_HEIGHT
 	// no slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT) -
 	// it renders as "?", hence "of" instead
+	text_x = draw_menu_inline_icon(icon_gold, progression_rect.x + pad, y, nil, panel_anim.alpha)
 	draw_text(
 		fmt.tprintf("Banked: {} of {}", game.player.banked_progress, gold_required_for_level(game.player.level)),
-		Vec2{progression_rect.x + pad, y},
+		Vec2{text_x, y},
 		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
@@ -665,31 +761,45 @@ draw_account_stat_row :: proc(stat: Account_Stat, x, y, width: f32, anim: Menu_E
 	stack := game.player.account_stat_stacks[stat]
 	cursor := y
 
+	unlocked := account_stat_unlocked(stat)
+	maxed := account_stat_maxed(stat)
+	affordable := game.player.gold >= account_stat_price(stat, stack)
+
+	// locked / maxed / unaffordable all flatten the glyph to the row's own
+	// disabled gray - a locked row stays drawn rather than hidden so the
+	// ladder banking is buying stays visible, and its icon has to say so too
+	tint: Maybe(Color) = nil
+	text_color := MENU_THEME.text
+	if !unlocked || maxed || !affordable {
+		tint = MENU_THEME.text_disabled
+		text_color = MENU_THEME.text_disabled
+	}
+
+	// Vigor/Might/Swiftness share the Max_Health/Damage/Move_Speed Upgrade
+	// glyphs outright - same stat, bought on the other progression axis
+	cursor = draw_menu_stacked_icon(account_stat_icons[stat], x, cursor, width, MENU_ICON_SIZE, tint, anim.alpha)
+
 	label := fmt.tprintf("{} [{} of {}]", preset.display_name, stack, preset.max_stack)
-	draw_text(label, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
+	draw_menu_centered_text(label, x, cursor, width, menu_with_alpha(text_color, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
 	switch {
-	case !account_stat_unlocked(stat):
-		draw_text(
+	case !unlocked:
+		draw_menu_centered_text(
 			fmt.tprintf("Unlocks at Lv. {}", preset.unlock_level),
-			Vec2{x, cursor},
-			MENU_THEME.font_size,
-			0,
+			x,
+			cursor,
+			width,
 			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
 		)
-	case account_stat_maxed(stat):
-		draw_text(
-			"MAXED",
-			Vec2{x, cursor},
-			MENU_THEME.font_size,
-			0,
-			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
-		)
+	case maxed:
+		draw_menu_centered_text("MAXED", x, cursor, width, menu_with_alpha(MENU_THEME.text_disabled, anim.alpha))
 	case:
 		button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
 		button_label := fmt.tprintf("Spend {} Gold", account_stat_price(stat, stack))
-		if clicked, _ := draw_menu_button(button_rect, button_label, anim); clicked {
+		// no icon on the button - the row's glyph is already above it
+		clicked, _ := draw_menu_button(button_rect, button_label, anim, disabled = !affordable)
+		if clicked {
 			try_buy_account_stat(stat)
 		}
 	}
@@ -764,7 +874,7 @@ draw_run_start_ui :: proc() {
 		}
 	}
 
-	col_content_h := MENU_TEXT_LINE_HEIGHT + f32(max_kinds) * MENU_BUTTON_LINE_HEIGHT
+	col_content_h := MENU_TEXT_LINE_HEIGHT + f32(max_kinds) * MENU_ICON_BUTTON_LINE_HEIGHT
 	panel_w := col_w * f32(family_count) + col_gap * f32(family_count - 1) + pad * 2
 	panel_h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + col_content_h
 
@@ -795,12 +905,20 @@ draw_run_start_ui :: proc() {
 		y += MENU_TEXT_LINE_HEIGHT
 
 		for kind in weapon_family_kinds[family] {
-			button_rect := Rect{col_x, y, col_w, MENU_BUTTON_HEIGHT}
-			if clicked, _ := draw_menu_button(button_rect, weapon_display_name[kind], anim); clicked {
+			button_rect := Rect{col_x, y, col_w, MENU_ICON_BUTTON_HEIGHT}
+			// per-kind glyph, not per-family: Pistol/SMG/Shotgun are three
+			// distinct silhouettes here, which is the whole of ADR-0018
+			clicked, _ := draw_menu_button(
+				button_rect,
+				weapon_display_name[kind],
+				anim,
+				icon = weapon_icons[kind],
+			)
+			if clicked {
 				start_new_run(kind)
 				request_screen_change(.Map_Selection)
 			}
-			y += MENU_BUTTON_LINE_HEIGHT
+			y += MENU_ICON_BUTTON_LINE_HEIGHT
 		}
 
 		col_x += col_w + col_gap
@@ -817,7 +935,7 @@ draw_map_selection_ui :: proc() {
 	pad := MENU_THEME.padding
 	w: f32 = 300
 	button_count := len(Map_Name)
-	h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + f32(button_count) * MENU_BUTTON_LINE_HEIGHT
+	h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + f32(button_count) * MENU_ICON_BUTTON_LINE_HEIGHT
 
 	rect := Rect{(game.window_width - w) / 2, (game.window_height - h) / 2, w, h}
 	anim := menu_element_anim(0, 0)
@@ -835,8 +953,19 @@ draw_map_selection_ui :: proc() {
 	for name in Map_Name {
 		chosen := maps[name]
 
-		button_rect := Rect{rect.x + pad, y, w - pad * 2, MENU_BUTTON_HEIGHT}
-		if clicked, _ := draw_menu_button(button_rect, chosen.name, anim); clicked {
+		// a flat swatch in the Map's own color - passed as the icon's tint
+		// rather than baked into a glyph, since a swatch's color *is* its
+		// content (see icon_swatch). A placeholder vocabulary while Map_Name
+		// has one case; worth designing properly at map two.
+		button_rect := Rect{rect.x + pad, y, w - pad * 2, MENU_ICON_BUTTON_HEIGHT}
+		clicked, _ := draw_menu_button(
+			button_rect,
+			chosen.name,
+			anim,
+			icon = icon_swatch,
+			icon_tint = map_icon_colors[name],
+		)
+		if clicked {
 			// clone_map, never a plain value copy - game.current_map would
 			// otherwise alias the shared baked table's backing tile/spawner
 			// memory (see clone_map's doc comment)
@@ -844,7 +973,7 @@ draw_map_selection_ui :: proc() {
 			apply_chosen_map(chosen, map_identity_string(name))
 			request_screen_change(nil) // Playing isn't a Screen - see current_screen
 		}
-		y += MENU_BUTTON_LINE_HEIGHT
+		y += MENU_ICON_BUTTON_LINE_HEIGHT
 	}
 }
 
@@ -905,19 +1034,28 @@ draw_run_end_ui :: proc() {
 	y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
 	text_color := menu_with_alpha(MENU_THEME.text, anim.alpha)
 
-	line :: proc(text: string, x: f32, y: ^f32, color: Color) {
-		draw_text(text, Vec2{x, y^}, MENU_THEME.font_size, 0, color)
+	// a receipt is read left-to-right as a sentence, so its glyphs stay
+	// inline in the left gutter rather than stacked above centered text -
+	// the exception to the icon-above-label rule the browsable screens use
+	line :: proc(icon: Icon_Proc, text: string, x: f32, y: ^f32, color: Color, alpha: f32) {
+		text_x := draw_menu_inline_icon(icon, x, y^, nil, alpha)
+		draw_text(text, Vec2{text_x, y^}, MENU_THEME.font_size, 0, color)
 		y^ += MENU_TEXT_LINE_HEIGHT
 	}
 
-	line(fmt.tprintf("Kills: {}", total_kills(game.player.kills)), rect.x + pad, &y, text_color)
-	line(fmt.tprintf("Gold earned: {}", receipt.earned), rect.x + pad, &y, text_color)
-	line(fmt.tprintf("Gold spent: {}", receipt.spent), rect.x + pad, &y, text_color)
+	// all four money lines take Gold's own circle. The repetition groups
+	// them as "these are the money lines" against Kills and Account Lv.,
+	// which is what a receipt wants - and four near-identical modifier
+	// glyphs at this size is where legibility would collapse.
+	a := anim.alpha
+	line(icon_kills, fmt.tprintf("Kills: {}", total_kills(game.player.kills)), rect.x + pad, &y, text_color, a)
+	line(icon_gold, fmt.tprintf("Gold earned: {}", receipt.earned), rect.x + pad, &y, text_color, a)
+	line(icon_gold, fmt.tprintf("Gold spent: {}", receipt.spent), rect.x + pad, &y, text_color, a)
 	if receipt.bonus > 0 {
-		line(fmt.tprintf("Victory bonus: {}", receipt.bonus), rect.x + pad, &y, text_color)
+		line(icon_gold, fmt.tprintf("Victory bonus: {}", receipt.bonus), rect.x + pad, &y, text_color, a)
 	}
-	line(fmt.tprintf("Banked: {}", receipt.banked), rect.x + pad, &y, text_color)
-	line(fmt.tprintf("Account Lv. {}", game.player.level), rect.x + pad, &y, text_color)
+	line(icon_gold, fmt.tprintf("Banked: {}", receipt.banked), rect.x + pad, &y, text_color, a)
+	line(icon_level, fmt.tprintf("Account Lv. {}", game.player.level), rect.x + pad, &y, text_color, a)
 
 	y += MENU_THEME.gap
 
@@ -943,7 +1081,16 @@ draw_shop_ui :: proc() {
 	col_gap := MENU_THEME.gap * 2
 	w := col_w * 2 + col_gap + pad * 2
 
-	content_h := max(shop_weapon_ladder_height(), shop_upgrades_height())
+	// the family-gated Upgrade block rides in the left column under the
+	// weapon ladder rather than under the general block on the right.
+	// Stacking each row's glyph above its caption grew every row by ~19px,
+	// and the Shop was already ~512px tall at the default 960x540 window -
+	// balancing the two columns is what keeps it on screen without
+	// scrolling (ADR-0010: no layout engine to scroll with).
+	content_h := max(
+		shop_weapon_ladder_height() + shop_family_upgrades_height(),
+		shop_general_upgrades_height(),
+	)
 	h := pad * 2 + MENU_TEXT_LINE_HEIGHT + MENU_THEME.gap + content_h + MENU_THEME.gap + MENU_BUTTON_LINE_HEIGHT
 
 	rect := Rect{(game.window_width - w) / 2, (game.window_height - h) / 2, w, h}
@@ -963,7 +1110,16 @@ draw_shop_ui :: proc() {
 	right_x := left_x + col_w + col_gap
 
 	draw_shop_weapon_ladder(left_x, col_y, col_w, anim)
-	draw_shop_upgrades(right_x, col_y, col_w, anim)
+	family := weapon_kind_family[game.player.weapon.kind]
+	draw_shop_upgrade_block(
+		weapon_family_display_name[family],
+		true,
+		left_x,
+		col_y + shop_weapon_ladder_height(),
+		col_w,
+		anim,
+	)
+	draw_shop_upgrade_block("General", false, right_x, col_y, col_w, anim)
 
 	close_rect := Rect{rect.x + pad, rect.y + h - pad - MENU_BUTTON_HEIGHT, w - pad * 2, MENU_BUTTON_HEIGHT}
 	if clicked, _ := draw_menu_button(close_rect, "Close", anim); clicked {
@@ -976,7 +1132,7 @@ draw_shop_ui :: proc() {
 // keeps draw_shop_ui's panel sizing a single pass instead of needing to
 // pre-walk this column's content
 shop_weapon_ladder_height :: proc() -> f32 {
-	return 2 * MENU_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT
+	return MENU_TEXT_LINE_HEIGHT + MENU_SHOP_ICON_TEXT_LINE_HEIGHT + MENU_ICON_BUTTON_LINE_HEIGHT
 }
 
 // current weapon plus either a "buy next tier" button or, at the ladder's
@@ -988,22 +1144,30 @@ draw_shop_weapon_ladder :: proc(x, y, width: f32, anim: Menu_Element_Anim) {
 
 	draw_text("Weapon Ladder", Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
 	cursor += MENU_TEXT_LINE_HEIGHT
-	draw_text(weapon_display_name[game.player.weapon.kind], Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
+
+	// the equipped weapon's own glyph above its name - the same mark the
+	// world draws in the player's hands (ADR-0018)
+	kind := game.player.weapon.kind
+	cursor = draw_menu_stacked_icon(weapon_icons[kind], x, cursor, width, MENU_SHOP_ICON_SIZE, nil, anim.alpha)
+	draw_menu_centered_text(weapon_display_name[kind], x, cursor, width, text_color)
 	cursor += MENU_TEXT_LINE_HEIGHT
 
-	if next, has_next := weapon_next_tier(game.player.weapon.kind).?; has_next {
+	if next, has_next := weapon_next_tier(kind).?; has_next {
 		price := weapon_tier_price(weapon_tier_index(next))
 		label := fmt.tprintf("Buy {} - {}g", weapon_display_name[next], price)
-		button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
-		if clicked, _ := draw_menu_button(button_rect, label, anim); clicked {
+		button_rect := Rect{x, cursor, width, MENU_ICON_BUTTON_HEIGHT}
+		// the *next* tier's glyph, so the button shows what you're buying
+		// rather than what you already have
+		clicked, _ := draw_menu_button(button_rect, label, anim, icon = weapon_icons[next])
+		if clicked {
 			try_buy_next_weapon_tier()
 		}
 	} else {
-		draw_text("Fully Upgraded", Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
+		draw_menu_centered_text("Fully Upgraded", x, cursor, width, text_color)
 	}
 }
 
-// counts how many Upgrade_Kinds draw_shop_upgrades will draw in one of its
+// counts how many Upgrade_Kinds draw_shop_upgrade_block will draw in one of its
 // two buckets (general/family-gated), mirroring its own filter exactly, so
 // draw_shop_ui can size the panel before drawing into it
 shop_upgrade_kind_count :: proc(family: Weapon_Family, gated: bool) -> int {
@@ -1017,38 +1181,47 @@ shop_upgrade_kind_count :: proc(family: Weapon_Family, gated: bool) -> int {
 	return count
 }
 
-shop_upgrades_height :: proc() -> f32 {
-	family := weapon_kind_family[game.player.weapon.kind]
-	row_count := shop_upgrade_kind_count(family, false) + shop_upgrade_kind_count(family, true)
-	return 2 * MENU_TEXT_LINE_HEIGHT + f32(row_count) * (MENU_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT)
+// one Upgrade row: its glyph, its name+stack caption, then a buy button or
+// a MAXED label in the button's place
+shop_upgrade_row_height :: proc() -> f32 {
+	return MENU_SHOP_ICON_TEXT_LINE_HEIGHT + MENU_BUTTON_LINE_HEIGHT
 }
 
-// general Upgrades first, then the equipped weapon's family's one
-// family-specific slot - both queries reuse upgrade_available_to_family
-// rather than re-inlining its upgrade_presets[kind].family.? check, so the
-// gating rule only lives in one place (upgrade.odin)
-draw_shop_upgrades :: proc(x, y, width: f32, anim: Menu_Element_Anim) {
+// a header line plus `row_count` Upgrade rows - the shape of both the
+// general and the family-gated block
+shop_upgrade_block_height :: proc(row_count: int) -> f32 {
+	return MENU_TEXT_LINE_HEIGHT + f32(row_count) * shop_upgrade_row_height()
+}
+
+shop_general_upgrades_height :: proc() -> f32 {
 	family := weapon_kind_family[game.player.weapon.kind]
-	text_color := menu_with_alpha(MENU_THEME.text, anim.alpha)
+	return shop_upgrade_block_height(shop_upgrade_kind_count(family, false))
+}
+
+shop_family_upgrades_height :: proc() -> f32 {
+	family := weapon_kind_family[game.player.weapon.kind]
+	return shop_upgrade_block_height(shop_upgrade_kind_count(family, true))
+}
+
+// one block of Upgrade rows under a header: `gated` picks the general
+// (false) or family-specific (true) bucket. Both queries reuse
+// upgrade_available_to_family rather than re-inlining its
+// upgrade_presets[kind].family.? check, so the gating rule only lives in
+// one place (upgrade.odin). Returns the cursor's new y.
+draw_shop_upgrade_block :: proc(header: string, gated: bool, x, y, width: f32, anim: Menu_Element_Anim) -> f32 {
+	family := weapon_kind_family[game.player.weapon.kind]
 	cursor := y
 
-	draw_text("General", Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
+	draw_text(header, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
-	for kind in Upgrade_Kind {
-		_, gated := upgrade_presets[kind].family.?
-		if !gated && upgrade_available_to_family(kind, family) {
-			cursor = draw_shop_upgrade_row(kind, x, cursor, width, anim)
-		}
-	}
 
-	draw_text(weapon_family_display_name[family], Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
-	cursor += MENU_TEXT_LINE_HEIGHT
 	for kind in Upgrade_Kind {
-		_, gated := upgrade_presets[kind].family.?
-		if gated && upgrade_available_to_family(kind, family) {
+		_, kind_gated := upgrade_presets[kind].family.?
+		if kind_gated == gated && upgrade_available_to_family(kind, family) {
 			cursor = draw_shop_upgrade_row(kind, x, cursor, width, anim)
 		}
 	}
+	return cursor
 }
 
 // current stack/cap plus either a buy button or, at the cap, a "MAXED" label
@@ -1059,18 +1232,37 @@ draw_shop_upgrade_row :: proc(kind: Upgrade_Kind, x, y, width: f32, anim: Menu_E
 	stack := game.player.upgrade_stacks[kind]
 	cursor := y
 
+	maxed := upgrade_maxed(kind)
+	price := upgrade_price(kind, stack)
+	affordable := game.player.gold >= price
+
+	// a maxed or unaffordable row flattens its glyph to the same gray its
+	// text already uses, so the icon can't keep reading as purchasable while
+	// the row isn't (icon.odin's tint-replaces note)
+	tint: Maybe(Color) = nil
+	text_color := MENU_THEME.text
+	if maxed || !affordable {
+		tint = MENU_THEME.text_disabled
+		text_color = MENU_THEME.text_disabled
+	}
+
+	cursor = draw_menu_stacked_icon(upgrade_icons[kind], x, cursor, width, MENU_SHOP_ICON_SIZE, tint, anim.alpha)
+
 	// parens/slash aren't in the HUD font's glyph set (atlas.odin's
 	// LETTERS_IN_FONT) and render as "?" - brackets/hyphen are
 	label := fmt.tprintf("{} [{}-{}]", preset.display_name, stack, preset.max_stack)
-	draw_text(label, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
+	draw_menu_centered_text(label, x, cursor, width, menu_with_alpha(text_color, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
-	if upgrade_maxed(kind) {
-		draw_text("MAXED", Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text_disabled, anim.alpha))
+	if maxed {
+		draw_menu_centered_text("MAXED", x, cursor, width, menu_with_alpha(MENU_THEME.text_disabled, anim.alpha))
 	} else {
-		price := upgrade_price(kind, stack)
 		button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
-		if clicked, _ := draw_menu_button(button_rect, fmt.tprintf("Buy - {}g", price), anim); clicked {
+		// no icon on the button - the row's glyph is already directly above
+		// it. `disabled` when unaffordable stops the button claiming a
+		// purchase try_buy_upgrade would reject anyway.
+		clicked, _ := draw_menu_button(button_rect, fmt.tprintf("Buy - {}g", price), anim, disabled = !affordable)
+		if clicked {
 			try_buy_upgrade(kind)
 		}
 	}
@@ -1084,31 +1276,79 @@ draw_shop_upgrade_row :: proc(kind: Upgrade_Kind, x, y, width: f32, anim: Menu_E
 HUD_COUNTER_FONT_SIZE :: 10
 HUD_COUNTER_MARGIN :: 10 // mirrors the top-left "Editing" text's margin
 
-// top-right "Kills: N   Time: MM:SS" readout, drawn every frame while
-// Playing (main.odin's game.ui_camera block). Reads the existing Run-scoped
-// Player fields directly - see CONTEXT.md's Run entry and the enemy-spawn-
-// revamp map's ticket 01 - the same total_kills/survival_seconds the Run
-// End screen and Spawn Trigger Kills_Reached/Time_Elapsed conditions use.
-// No slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT), so
-// spaces separate the two stats instead of a "/"-joined format.
+// matches RESOURCE_BAR_ICON_SIZE - the Resource indicator's glyph slot is
+// the only other place an Icon is drawn at world/HUD scale rather than menu
+// scale, and the two reading at the same size keeps the screen coherent
+HUD_COUNTER_ICON_SIZE :: 9
+HUD_COUNTER_ICON_GAP :: 3 // between a counter's glyph and its number
+HUD_COUNTER_GAP :: 10 // between counters
+
+// one top-right Run-scoped readout: a glyph and a bare number, no label.
+// The glyph carries what the words used to.
+Hud_Counter :: struct {
+	icon: Icon_Proc,
+	text: string,
+}
+
+// top-right Kills / Time / Gold readout, drawn every frame while Playing
+// (main.odin's game.ui_camera block). Reads the existing Run-scoped Player
+// fields directly - see CONTEXT.md's Run entry and the enemy-spawn-revamp
+// map's ticket 01 - the same total_kills/survival_seconds the Run End screen
+// and Spawn Trigger Kills_Reached/Time_Elapsed conditions use, plus the same
+// `gold` the Shop spends.
 //
-// Counts *down* against the Map's time_limit now that running it out ends
-// the Run (ADR-0017), clamped at zero so the last frame before the Timed_Out
-// check fires never renders a negative clock. An untimed Map (time_limit <=
-// 0) keeps the original count-up.
+// Each counter is an Icon and a bare number, no label: three glyphs read
+// faster at a glance mid-fight than "Kills:"/"Time:" ever did, and dropping
+// the words is what buys the room for a third counter without crowding the
+// corner. Icons sit inline-left of their value, the same treatment the Run
+// End receipt's readout lines use (see the MENU_ICON_SIZE block).
+//
+// Time counts *down* against the Map's time_limit now that running it out
+// ends the Run (ADR-0017), clamped at zero so the last frame before the
+// Timed_Out check fires never renders a negative clock. An untimed Map
+// (time_limit <= 0) keeps the original count-up.
 draw_hud_counters :: proc() {
-	kills := total_kills(game.player.kills)
 	total_seconds := int(game.player.survival_seconds)
 	if limit := game.current_map.time_limit; limit > 0 {
 		total_seconds = max(0, int(limit) - total_seconds)
 	}
-	minutes := total_seconds / 60
-	seconds := total_seconds % 60
-	text := fmt.tprintf("Kills: {}   Time: {:02d}:{:02d}", kills, minutes, seconds)
 
-	size := rl.MeasureTextEx(font, strings.clone_to_cstring(text, context.temp_allocator), HUD_COUNTER_FONT_SIZE, 0)
+	counters := [?]Hud_Counter {
+		{icon_kills, fmt.tprintf("{}", total_kills(game.player.kills))},
+		{icon_clock, fmt.tprintf("{:02d}:{:02d}", total_seconds / 60, total_seconds % 60)},
+		{icon_gold, fmt.tprintf("{}", game.player.gold)},
+	}
+
+	// measured up front so the whole row can be right-aligned as a unit -
+	// otherwise a counter growing a digit would push the others sideways
+	// rather than the row growing leftward off its fixed right edge
+	text_widths: [len(counters)]f32
+	row_width: f32
+	for counter, i in counters {
+		text_widths[i] =
+			rl.MeasureTextEx(
+				font,
+				strings.clone_to_cstring(counter.text, context.temp_allocator),
+				HUD_COUNTER_FONT_SIZE,
+				0,
+			).x
+		row_width += HUD_COUNTER_ICON_SIZE + HUD_COUNTER_ICON_GAP + text_widths[i]
+	}
+	row_width += HUD_COUNTER_GAP * f32(len(counters) - 1)
+
 	virtual_width := game.window_width / game.ui_camera.zoom
-	pos := Vec2{virtual_width - size.x - HUD_COUNTER_MARGIN, HUD_COUNTER_MARGIN}
+	x := virtual_width - row_width - HUD_COUNTER_MARGIN
+	y: f32 = HUD_COUNTER_MARGIN
 
-	draw_text(text, pos, HUD_COUNTER_FONT_SIZE, 0, rl.WHITE)
+	// glyphs centered against the text line's height, not their own, so they
+	// sit on the same optical baseline as the numbers beside them
+	icon_y := y + (HUD_COUNTER_FONT_SIZE - HUD_COUNTER_ICON_SIZE) / 2
+
+	for counter, i in counters {
+		counter.icon(icon_frame_rect({x, icon_y, HUD_COUNTER_ICON_SIZE, HUD_COUNTER_ICON_SIZE}), nil, 1)
+		x += HUD_COUNTER_ICON_SIZE + HUD_COUNTER_ICON_GAP
+
+		draw_text(counter.text, Vec2{x, y}, HUD_COUNTER_FONT_SIZE, 0, rl.WHITE)
+		x += text_widths[i] + HUD_COUNTER_GAP
+	}
 }

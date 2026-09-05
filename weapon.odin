@@ -295,19 +295,87 @@ weapon_presets: [Weapon_Kind]Weapon = {
 // Magic = rod with a circular orb tip. Colors lean metal-toned for the
 // physical weapons (echoed by ticket 05's Ammo pickup color) and warm/glowy
 // for Magic's orb.
-WEAPON_GUN_ROD_LENGTH :: 20.0
-WEAPON_GUN_ROD_WIDTH :: 5.0
 WEAPON_GUN_COLOR :: rl.Color{180, 180, 190, 255}
-WEAPON_MELEE_WEDGE_WIDTH :: 8.0 // Melee_Weapon.range supplies the length, matching its hit-arc reach
 WEAPON_MELEE_COLOR :: rl.Color{210, 210, 220, 255}
-WEAPON_MAGIC_ROD_LENGTH :: 16.0
-WEAPON_MAGIC_ROD_WIDTH :: 4.0
 WEAPON_MAGIC_ROD_COLOR :: rl.Color{110, 80, 150, 255}
-WEAPON_MAGIC_ORB_RADIUS :: 5.0
 WEAPON_MAGIC_ORB_COLOR :: rl.Color{255, 205, 90, 255}
 
-WEAPON_GUN_MUZZLE_STREAK_COUNT :: 4
-WEAPON_GUN_MUZZLE_SPREAD_DEGREES :: 20.0
+// -- per-kind visual identity (ADR-0018) ------------------------------------
+//
+// The eight weapons are eight distinct silhouettes, in the world as well as
+// in the UI, and their effects share the family's *shapes* while varying in
+// *magnitude* per kind - a Pistol's muzzle flash is smaller than a
+// Shotgun's. The geometry itself lives in icon.odin (weapon_icons); this
+// table is only how big each one draws and how hard each one hits the
+// screen.
+//
+// Deliberately NOT stored on Weapon. Weapon is serialized into
+// data/game_save.json, so a stored copy would bake art into save data: a
+// player who saved before a retune would keep the old silhouette, and a
+// save predating the fields would decode them as zero - an invisible weapon,
+// silently, with no error. Derived from `kind` at draw time instead, the
+// same way draw_weapon already reads the live upgrade-scaled
+// Melee_Weapon.range rather than a stored copy. See ADR-0018 and ADR-0007.
+Weapon_Visual :: struct {
+	// world side of the glyph's unit square, in px, for Gun and Magic.
+	// Melee ignores it: its size comes from Melee_Weapon.range, because a
+	// blade's drawn length is *reporting* its actual reach, not decorating
+	// it - see weapon_world_frame_size.
+	length:                f32,
+	muzzle_streak_count:   int,
+	muzzle_spread_degrees: f32,
+	muzzle_flash_radius:   f32,
+	// motion-trail echoes behind a melee swing: several fading copies of the
+	// same blade sampled earlier on the swing curve. Zero for a weapon that
+	// shouldn't leave one, which is how Dagger stays a quick jab while Sword
+	// reads as a heavy sweep - previously a hardcoded `kind == .Sword` check
+	// in draw_weapon.
+	swing_echo_count:      int,
+}
+
+weapon_visuals: [Weapon_Kind]Weapon_Visual = {
+	// Ranged: the ladder reads as it climbs - a compact sidearm, a longer
+	// SMG, then the Shotgun's broad twin-barrel with the biggest report
+	.Pistol       = {length = 30, muzzle_streak_count = 3, muzzle_spread_degrees = 16, muzzle_flash_radius = 10},
+	.SMG          = {length = 34, muzzle_streak_count = 4, muzzle_spread_degrees = 22, muzzle_flash_radius = 12},
+	.Shotgun      = {length = 38, muzzle_streak_count = 7, muzzle_spread_degrees = 34, muzzle_flash_radius = 18},
+
+	// Melee: `length` unused (range supplies it). Only Sword trails echoes.
+	.Dagger       = {swing_echo_count = 0},
+	.Sword        = {swing_echo_count = 3},
+
+	// Magic: the flash is a cast effect rather than a muzzle report, so the
+	// streak burst stays at zero for all three - their family vocabulary is
+	// the flash and the tick burst, not streaks
+	.Fire_Wand    = {length = 30, muzzle_flash_radius = 13},
+	.Flame_Staff  = {length = 34, muzzle_flash_radius = 9},
+	.Poison_Staff = {length = 32, muzzle_flash_radius = 15},
+}
+
+// global multiplier on every weapon's drawn size, driven live by the F8
+// debug panel's slider so silhouettes can be judged in motion at gameplay
+// zoom rather than argued about statically (ADR-0018). Applies to Gun and
+// Magic only: scaling a melee blade would decouple its drawn length from
+// the reach it is reporting, making the silhouette lie about its hit arc.
+weapon_visual_scale: f32 = 1
+WEAPON_VISUAL_SCALE_MIN :: 0.4
+WEAPON_VISUAL_SCALE_MAX :: 2.5
+
+// the side, in px, of the unit square draw_weapon maps a weapon's glyph
+// onto. For Melee this is derived from the live `range` so the blade's tip
+// lands exactly at the weapon's actual reach - weapon_icon_reach says where
+// along the glyph that kind's business end sits, so a Dagger (tip at 0.80)
+// and a Sword (0.92) both point at their real range rather than short of it.
+weapon_world_frame_size :: proc(weapon: Weapon) -> f32 {
+	if melee, is_melee := weapon.variant.(Melee_Weapon); is_melee {
+		reach := weapon_icon_reach[weapon.kind]
+		if reach <= 0 {
+			return melee.range
+		}
+		return melee.range / reach
+	}
+	return weapon_visuals[weapon.kind].length * weapon_visual_scale
+}
 
 WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
 
@@ -488,7 +556,7 @@ resolve_weapon_action :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec
 		if v.spell_kind == .Poison_Cloud {
 			target = v.locked_target
 		}
-		return try_cast_magic(&v, weapon.damage, origin, aim_dir, target, enemies)
+		return try_cast_magic(&v, weapon_visuals[weapon.kind], weapon.damage, origin, aim_dir, target, enemies)
 	}
 	return false
 }
@@ -586,8 +654,9 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool 
 	// muzzle effect (art-revamp ticket 02) - the enhanced particle layer
 	// (streak burst + flash) confirmed to supply the "punch" plain
 	// icon-transform lacked
-	spawn_streak_burst(origin, aim_dir, WEAPON_GUN_MUZZLE_STREAK_COUNT, WEAPON_GUN_MUZZLE_SPREAD_DEGREES, WEAPON_GUN_COLOR)
-	spawn_muzzle_flash(origin, rl.Fade(rl.WHITE, 0.8))
+	visual := weapon_visuals[weapon.kind]
+	spawn_streak_burst(origin, aim_dir, visual.muzzle_streak_count, visual.muzzle_spread_degrees, WEAPON_GUN_COLOR)
+	spawn_muzzle_flash(origin, rl.Fade(rl.WHITE, 0.8), visual.muzzle_flash_radius)
 
 	if gun.ammo_in_clip <= 0 {
 		start_reload(weapon)
@@ -645,15 +714,29 @@ try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2
 // cooldown_timer gate in try_use_weapon. `target` is live mouse_world for
 // aim_dir-based spells, or Poison_Cloud's Trigger-locked point (already
 // clamped by lock_poison_cloud_target) - resolve_weapon_action decides which.
-try_cast_magic :: proc(magic: ^Magic, damage: f32, origin, aim_dir, target: Vec2, enemies: []Enemy) -> bool {
+// `visual` carries the casting weapon's per-kind effect magnitudes
+// (ADR-0018) - Magic has no `kind` of its own, and deriving one back from
+// spell_kind would be a second, silently-drifting source of truth.
+try_cast_magic :: proc(
+	magic: ^Magic,
+	visual: Weapon_Visual,
+	damage: f32,
+	origin, aim_dir, target: Vec2,
+	enemies: []Enemy,
+) -> bool {
 	switch magic.spell_kind {
 	case .Fireball:
 		cast_fireball(magic^, damage, origin, aim_dir)
-		spawn_muzzle_flash(origin, WEAPON_MAGIC_ORB_COLOR) // art-revamp ticket 02
+		spawn_muzzle_flash(origin, WEAPON_MAGIC_ORB_COLOR, visual.muzzle_flash_radius) // art-revamp ticket 02
 	case .Flamethrower:
 		cast_flamethrower_tick(magic^, damage, origin, aim_dir, enemies)
 	case .Poison_Cloud:
 		cast_poison_cloud(magic^, damage, target)
+		// the flash is the Magic family's own cast primitive, and
+		// Poison_Cloud was the one spell with no cast feedback at all -
+		// its ground-targeted placement reads as nothing happening
+		// otherwise. Same shape as its two siblings, its own magnitude.
+		spawn_muzzle_flash(target, ICON_POISON_COLOR, visual.muzzle_flash_radius)
 	}
 	return true
 }
