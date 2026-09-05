@@ -11,10 +11,19 @@ import "core:slice"
 // session plays on (game.current_map while Playing, game.editing_map while
 // Editing) - see CONTEXT.md's Map entry.
 Map :: struct {
-	name:           string,
-	player_start:   Vec2,
-	tilemap:        Tilemap,
-	spawn_triggers: [dynamic]Spawn_Trigger,
+	name:               string,
+	player_start:       Vec2,
+	tilemap:            Tilemap,
+	spawn_triggers:     [dynamic]Spawn_Trigger,
+	// -- objective (ADR-0017) ---------------------------------------------
+	// seconds the player has to clear the Map before the Run ends in
+	// Timed_Out. <= 0 means untimed, which only makes sense for a Map whose
+	// Spawn Trigger timeline is itself finite.
+	time_limit:         f32,
+	// multiplier applied to a cleared Run's net Gold take (bank_run_gold).
+	// Authored per Map so a later, harder rung of the ladder can pay more
+	// for the risk it asks the player to carry.
+	victory_multiplier: f32,
 }
 
 load_map :: proc(path: string) -> (map_data: Map, ok: bool) {

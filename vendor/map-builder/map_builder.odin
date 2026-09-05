@@ -133,10 +133,12 @@ Spawn_Trigger :: struct {
 }
 
 Map :: struct {
-	name:           string,
-	player_start:   Vec2,
-	tilemap:        Tilemap,
-	spawn_triggers: [dynamic]Spawn_Trigger,
+	name:               string,
+	player_start:       Vec2,
+	tilemap:            Tilemap,
+	spawn_triggers:     [dynamic]Spawn_Trigger,
+	time_limit:         f32,
+	victory_multiplier: f32,
 }
 
 Map_Source :: struct {
@@ -249,6 +251,7 @@ write_map_literal :: proc(f: ^os.File, m: Map) {
 	write_tilemap_literal(f, m.tilemap)
 	fmt.fprint(f, ", spawn_triggers = ")
 	write_spawn_triggers_literal(f, m.spawn_triggers)
+	fmt.fprintf(f, ", time_limit = %v, victory_multiplier = %v", m.time_limit, m.victory_multiplier)
 	fmt.fprint(f, "}")
 }
 

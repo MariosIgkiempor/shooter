@@ -1,6 +1,6 @@
 # Gold/Shop is the sole in-Run power curve; XP becomes Account progression
 
-Status: accepted
+Status: superseded by [ADR-0016](0016-gold-is-the-single-currency.md), which merged the two currencies this ADR separated into one Account-scoped Gold wallet.
 
 Originally (ADR-0002, weapon-types map ticket 06) XP level-ups granted free generic stat upgrades (`upgrade_weapon`) alongside Gold-bought weapon tiers as two coexisting progression axes. This is superseded: XP/Level and Class now form **Account progression** — state that survives Restart — while Gold, the equipped `Weapon_Kind`, and every Shop Upgrade's purchased stack count are **Run**-scoped and reset to their starting values on Restart. The level-up popup stays (kept for a future Account-progression payoff not yet designed) but drops its "Upgrade Weapon"/"Refill Ammo" buttons down to a single Continue.
 

@@ -10,7 +10,10 @@ PICKUP_PICKUP_RADIUS :: 6.0
 PICKUP_HOMING_ACCEL :: 800.0 // px/s^2 once inside magnet radius
 PICKUP_MAX_SPEED :: 260.0
 PICKUP_HEAL_AMOUNT :: 50.0 // health pickup heal amount
-PICKUP_GOLD_AMOUNT :: 10 // gold granted per Gold pickup, spent in the Shop
+// Gold granted per Gold pickup is no longer flat - it comes from the dying
+// enemy's Enemy_Gold_Preset (account_progression.odin) and rides on the
+// Pickup itself, so a tougher Enemy_Kind can be worth more without touching
+// the drop machinery.
 PICKUP_GOLD_RADIUS :: 5.0 // world-space draw radius
 
 // shape/color per kind (art-revamp ticket 03, colors amended by ticket 05):
@@ -40,18 +43,28 @@ Pickup :: struct {
 	velocity: Vec2,
 	kind:     Pickup_Kind,
 	homing:   bool, // sticky once true, so a fast player can't outrun it once it's triggered
+	// Gold only: the payout this drop carries, resolved from the dying
+	// enemy's kind at spawn time (enemy_gold_value) rather than read back
+	// from a global at collection time, so a drop is worth what the enemy
+	// that dropped it was worth. Ignored by Health/Ammo.
+	gold:     int,
 }
 
 reset_pickups :: proc() {
 	clear(&game.pickups)
 }
 
-// rolls PICKUP_DROP_CHANCE; on a hit, picks Health or Ammo 50/50 and spawns one
-maybe_spawn_pickup :: proc(position: Vec2) {
+// rolls PICKUP_DROP_CHANCE; on a hit, picks one of the three kinds uniformly
+// and spawns it. `kind` is the dying enemy's Enemy_Kind, used only to price a
+// Gold drop (enemy_gold_value) - the roll itself is unaffected by it.
+maybe_spawn_pickup :: proc(position: Vec2, kind: Enemy_Kind) {
 	if rand.float32() >= PICKUP_DROP_CHANCE {
 		return
 	}
-	append(&game.pickups, Pickup{position = position, kind = rand.choice_enum(Pickup_Kind)})
+	append(
+		&game.pickups,
+		Pickup{position = position, kind = rand.choice_enum(Pickup_Kind), gold = enemy_gold_value(kind)},
+	)
 }
 
 update_pickups :: proc(dt: f32) {
@@ -84,9 +97,9 @@ update_pickups :: proc(dt: f32) {
 }
 
 // Gold pickups scale with Account_Stat's Fortune (CONTEXT.md's Account_Stat
-// entry: "Fortune (Gold-gain rate)") and count toward gold_earned - one of
-// compute_run_xp's three Run-end inputs, tracked separately from `gold`
-// since spending in the Shop must not shrink it (account_progression.odin).
+// entry: "Fortune (Gold-gain rate)") and count toward gold_earned, tracked
+// separately from `gold` since spending must not shrink it - the Run End
+// receipt needs gross earnings and net take as separate lines (ADR-0016).
 collect_pickup :: proc(pickup: Pickup) {
 	switch pickup.kind {
 	case .Health:
@@ -94,7 +107,7 @@ collect_pickup :: proc(pickup: Pickup) {
 	case .Ammo:
 		refill_weapon_reserve(&game.player.weapon)
 	case .Gold:
-		amount := int(apply_account_stat_effect(f32(PICKUP_GOLD_AMOUNT), .Fortune, game.player.account_stat_stacks[.Fortune]))
+		amount := int(apply_account_stat_effect(f32(pickup.gold), .Fortune, game.player.account_stat_stacks[.Fortune]))
 		game.player.gold += amount
 		game.player.gold_earned += amount
 	}

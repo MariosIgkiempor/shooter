@@ -550,9 +550,9 @@ MENU_MAIN_MENU_PANEL_WIDTH :: 260
 
 // shown on every process launch, right after Splash (see update_game's
 // .Splash case). Two panels side by side: "Progression" carries the old
-// draw_account_progression_ui content (Account Level/XP-into-level, unspent
-// XP balance, the Account_Stat spend list - see CONTEXT.md's Account
-// progression entry) unconditionally, even at unspent_xp == 0 (ADR-0012);
+// draw_account_progression_ui content (Account Level, banked progress into
+// the next one, the Gold wallet, the Account_Stat spend list - see CONTEXT.md's Account
+// progression entry) unconditionally, even at zero Gold (ADR-0012);
 // "Shooter" carries the actions - "Continue" (only when a Run is in
 // progress, straight to Map_Selection, Gold/weapon/Upgrades intact)
 // alongside an always-present "Start New Run" (through weapon-pick,
@@ -606,7 +606,7 @@ draw_main_menu_ui :: proc() {
 	// no slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT) -
 	// it renders as "?", hence "of" instead
 	draw_text(
-		fmt.tprintf("XP: {} of {}", game.player.xp, xp_required_for_level(game.player.level)),
+		fmt.tprintf("Banked: {} of {}", game.player.banked_progress, gold_required_for_level(game.player.level)),
 		Vec2{progression_rect.x + pad, y},
 		MENU_THEME.font_size,
 		0,
@@ -614,7 +614,7 @@ draw_main_menu_ui :: proc() {
 	)
 	y += MENU_TEXT_LINE_HEIGHT
 	draw_text(
-		fmt.tprintf("Unspent: {} XP", game.player.unspent_xp),
+		fmt.tprintf("Gold: {}", game.player.gold),
 		Vec2{progression_rect.x + pad, y},
 		MENU_THEME.font_size,
 		0,
@@ -653,9 +653,11 @@ draw_main_menu_ui :: proc() {
 	}
 }
 
-// current stack plus a buy button - never a MAXED label (unlike
-// draw_shop_upgrade_row), since Account_Stat purchases have no cap and are
-// always available, just costing more XP the more of it is already owned.
+// current stack plus a buy button, or a label in place of the button when
+// the row can't be bought - now in all three of draw_shop_upgrade_row's
+// states rather than always-buyable, since ADR-0016 gave Account_Stat both a
+// max_stack and an Account-Level unlock gate. A locked row is still drawn
+// rather than hidden, so the ladder banking is buying stays visible.
 // Returns the cursor's new y, mirroring the running-y-cursor convention
 // every screen below uses.
 draw_account_stat_row :: proc(stat: Account_Stat, x, y, width: f32, anim: Menu_Element_Anim) -> f32 {
@@ -663,14 +665,33 @@ draw_account_stat_row :: proc(stat: Account_Stat, x, y, width: f32, anim: Menu_E
 	stack := game.player.account_stat_stacks[stat]
 	cursor := y
 
-	label := fmt.tprintf("{} [{}]", preset.display_name, stack)
+	label := fmt.tprintf("{} [{} of {}]", preset.display_name, stack, preset.max_stack)
 	draw_text(label, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
-	button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
-	button_label := fmt.tprintf("Spend {} XP", account_stat_price(stat, stack))
-	if clicked, _ := draw_menu_button(button_rect, button_label, anim); clicked {
-		try_buy_account_stat(stat)
+	switch {
+	case !account_stat_unlocked(stat):
+		draw_text(
+			fmt.tprintf("Unlocks at Lv. {}", preset.unlock_level),
+			Vec2{x, cursor},
+			MENU_THEME.font_size,
+			0,
+			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
+		)
+	case account_stat_maxed(stat):
+		draw_text(
+			"MAXED",
+			Vec2{x, cursor},
+			MENU_THEME.font_size,
+			0,
+			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
+		)
+	case:
+		button_rect := Rect{x, cursor, width, MENU_BUTTON_HEIGHT}
+		button_label := fmt.tprintf("Spend {} Gold", account_stat_price(stat, stack))
+		if clicked, _ := draw_menu_button(button_rect, button_label, anim); clicked {
+			try_buy_account_stat(stat)
+		}
 	}
 	cursor += MENU_BUTTON_LINE_HEIGHT
 
@@ -691,7 +712,7 @@ draw_confirm_new_run_dialog :: proc() {
 
 	draw_menu_panel(rect, anim)
 	draw_text(
-		"Your Gold, weapon tier, and Upgrades will be lost.",
+		"Your weapon tier and Upgrades will be lost. Gold is kept.",
 		Vec2{rect.x + pad, rect.y + pad},
 		MENU_THEME.font_size,
 		0,
@@ -827,26 +848,54 @@ draw_map_selection_ui :: proc() {
 	}
 }
 
-// shown once at death (game.run_ended, set by damage_player via
-// request_screen_change(.Run_End) - see CONTEXT.md's Account progression
-// entry and ADR-0009), replacing the old Game Over screen entirely rather
-// than stacking alongside it. Run summary only (Kills/Survived/Gold
-// earned/XP earned) - the Account Level/XP bar and Account_Stat spend list
-// that used to live here moved to the Main Menu (see draw_main_menu_ui),
-// since spending is now a pre-Run decision rather than something squeezed
-// in right after death. Continue leads there instead of straight to
-// weapon-pick. Unstaggered, like Run_Start/Map_Selection above.
+// shown once a Run finishes, however it finished (game.run_ended, set by
+// end_run via request_screen_change(.Run_End) - see ADR-0017). One screen
+// with a per-outcome header rather than a separate Victory Screen_Kind, so
+// no new wiring through current_screen/apply_screen_kind/rank_count is
+// needed for the two endings ADR-0017 added.
+//
+// The body is a receipt, not a summary: earned - spent = net, net + bonus =
+// banked. The "Gold spent" line is the whole point - with Gold as the single
+// currency (ADR-0016), a Shop purchase is paid for out of Account
+// progression, and this is the only place that cost is ever shown. The
+// Account Level/Account_Stat spend list stays on the Main Menu (ADR-0012);
+// Continue leads there.
+run_end_title :: proc(outcome: Run_Outcome) -> string {
+	switch outcome {
+	case .Cleared:
+		return "Map Cleared"
+	case .Timed_Out:
+		return "Out of Time"
+	case .Killed:
+		return "Killed"
+	}
+	return "Run Ended" // unreachable: outcome is always one of the above
+}
+
 draw_run_end_ui :: proc() {
+	receipt := game.last_run_receipt
+	// the bonus line only exists on a cleared Run
+	line_count := 5
+	if receipt.bonus > 0 {
+		line_count += 1
+	}
+
 	pad := MENU_THEME.padding
 	w: f32 = 320
-	h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + 4 * MENU_TEXT_LINE_HEIGHT + MENU_THEME.gap + MENU_BUTTON_LINE_HEIGHT
+	h :=
+		pad * 2 +
+		(MENU_THEME.font_size + 4) +
+		MENU_THEME.gap +
+		f32(line_count) * MENU_TEXT_LINE_HEIGHT +
+		MENU_THEME.gap +
+		MENU_BUTTON_LINE_HEIGHT
 
 	rect := Rect{(game.window_width - w) / 2, (game.window_height - h) / 2, w, h}
 	anim := menu_element_anim(0, 0)
 	draw_menu_panel(rect, anim)
 
 	draw_text(
-		"Run Ended",
+		run_end_title(game.last_run_outcome),
 		Vec2{rect.x + pad, rect.y + pad},
 		MENU_THEME.font_size + 4,
 		0,
@@ -855,14 +904,22 @@ draw_run_end_ui :: proc() {
 
 	y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
 	text_color := menu_with_alpha(MENU_THEME.text, anim.alpha)
-	draw_text(fmt.tprintf("Kills: {}", total_kills(game.player.kills)), Vec2{rect.x + pad, y}, MENU_THEME.font_size, 0, text_color)
-	y += MENU_TEXT_LINE_HEIGHT
-	draw_text(fmt.tprintf("Survived: {}s", int(game.player.survival_seconds)), Vec2{rect.x + pad, y}, MENU_THEME.font_size, 0, text_color)
-	y += MENU_TEXT_LINE_HEIGHT
-	draw_text(fmt.tprintf("Gold earned: {}", game.player.gold_earned), Vec2{rect.x + pad, y}, MENU_THEME.font_size, 0, text_color)
-	y += MENU_TEXT_LINE_HEIGHT
-	draw_text(fmt.tprintf("XP earned: {}", game.last_run_xp_earned), Vec2{rect.x + pad, y}, MENU_THEME.font_size, 0, text_color)
-	y += MENU_TEXT_LINE_HEIGHT + MENU_THEME.gap
+
+	line :: proc(text: string, x: f32, y: ^f32, color: Color) {
+		draw_text(text, Vec2{x, y^}, MENU_THEME.font_size, 0, color)
+		y^ += MENU_TEXT_LINE_HEIGHT
+	}
+
+	line(fmt.tprintf("Kills: {}", total_kills(game.player.kills)), rect.x + pad, &y, text_color)
+	line(fmt.tprintf("Gold earned: {}", receipt.earned), rect.x + pad, &y, text_color)
+	line(fmt.tprintf("Gold spent: {}", receipt.spent), rect.x + pad, &y, text_color)
+	if receipt.bonus > 0 {
+		line(fmt.tprintf("Victory bonus: {}", receipt.bonus), rect.x + pad, &y, text_color)
+	}
+	line(fmt.tprintf("Banked: {}", receipt.banked), rect.x + pad, &y, text_color)
+	line(fmt.tprintf("Account Lv. {}", game.player.level), rect.x + pad, &y, text_color)
+
+	y += MENU_THEME.gap
 
 	button_rect := Rect{rect.x + pad, y, w - pad * 2, MENU_BUTTON_HEIGHT}
 	if clicked, _ := draw_menu_button(button_rect, "Continue", anim); clicked {
@@ -1034,9 +1091,17 @@ HUD_COUNTER_MARGIN :: 10 // mirrors the top-left "Editing" text's margin
 // End screen and Spawn Trigger Kills_Reached/Time_Elapsed conditions use.
 // No slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT), so
 // spaces separate the two stats instead of a "/"-joined format.
+//
+// Counts *down* against the Map's time_limit now that running it out ends
+// the Run (ADR-0017), clamped at zero so the last frame before the Timed_Out
+// check fires never renders a negative clock. An untimed Map (time_limit <=
+// 0) keeps the original count-up.
 draw_hud_counters :: proc() {
 	kills := total_kills(game.player.kills)
 	total_seconds := int(game.player.survival_seconds)
+	if limit := game.current_map.time_limit; limit > 0 {
+		total_seconds = max(0, int(limit) - total_seconds)
+	}
 	minutes := total_seconds / 60
 	seconds := total_seconds % 60
 	text := fmt.tprintf("Kills: {}   Time: {:02d}:{:02d}", kills, minutes, seconds)

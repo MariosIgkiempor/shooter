@@ -156,7 +156,7 @@ explode_bullet :: proc(bullet: Bullet) {
 }
 
 // applies damage to game.enemies[index] at hit_position, spawning a hit
-// spark and, on death, tallying the kill (compute_run_xp's per-Enemy_Kind
+// spark and, on death, tallying the kill (the per-Enemy_Kind
 // input, tallied at Run end - see account_progression.odin) + a pickup drop
 // + removal - shared by bullet collision above and melee's arc/cone
 // hit-check (weapon.odin's try_swing_melee), so death handling is never
@@ -173,7 +173,7 @@ apply_hit_to_enemy :: proc(index: int, damage: f32, hit_position: Vec2) {
 
 	if enemy.health <= 0 {
 		game.player.kills[enemy.kind] += 1
-		maybe_spawn_pickup(Vec2{enemy.x, enemy.y})
+		maybe_spawn_pickup(Vec2{enemy.x, enemy.y}, enemy.kind)
 		delete(enemy.path)
 		unordered_remove(&game.enemies, index)
 	}

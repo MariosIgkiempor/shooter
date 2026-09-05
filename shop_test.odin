@@ -252,9 +252,9 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	previous_health := game.player.health
 	previous_weapon := game.player.weapon
 	previous_run_started := game.player.run_started
-	previous_xp := game.player.xp
+	previous_banked := game.player.banked_progress
 	previous_level := game.player.level
-	previous_unspent := game.player.unspent_xp
+	previous_run_start_gold := game.player.run_start_gold
 	previous_account_stat_stacks := game.player.account_stat_stacks
 	defer {
 		game.player.gold = previous_gold
@@ -267,17 +267,17 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 		game.player.health = previous_health
 		game.player.weapon = previous_weapon
 		game.player.run_started = previous_run_started
-		game.player.xp = previous_xp
+		game.player.banked_progress = previous_banked
 		game.player.level = previous_level
-		game.player.unspent_xp = previous_unspent
+		game.player.run_start_gold = previous_run_start_gold
 		game.player.account_stat_stacks = previous_account_stat_stacks
 		game.run_ended = false
 	}
 
 	game.player.account_stat_stacks = {}
-	game.player.xp = 42
+	game.player.banked_progress = 42
 	game.player.level = 7
-	game.player.unspent_xp = 15
+	game.player.run_start_gold = 0
 	game.player.gold = 500
 	game.player.gold_earned = 500
 	game.player.kills = {}
@@ -294,7 +294,6 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 
 	start_new_run(weapon_family_kinds[.Ranged][0])
 
-	testing.expect(t, game.player.gold == 0, "start_new_run should zero Gold")
 	testing.expect(t, game.player.gold_earned == 0, "start_new_run should zero gold_earned")
 	testing.expect(t, total_kills(game.player.kills) == 0, "start_new_run should zero kills")
 	testing.expect(t, game.player.survival_seconds == 0, "start_new_run should zero survival_seconds")
@@ -310,7 +309,16 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	testing.expect(t, game.player.run_started, "start_new_run should mark the Run as started")
 	testing.expect(t, !game.run_ended, "start_new_run should close the Run End modal")
 
-	testing.expect(t, game.player.xp == 42, "start_new_run must not touch xp (Account progression)")
+	testing.expect(t, game.player.banked_progress == 42, "start_new_run must not touch banked_progress (Account progression)")
 	testing.expect(t, game.player.level == 7, "start_new_run must not touch level (Account progression)")
-	testing.expect(t, game.player.unspent_xp == 15, "start_new_run must not touch unspent_xp (Account progression)")
+
+	// Gold is Account-scoped now (ADR-0016): a new Run inherits the wallet
+	// intact and only records the balance it started from, so bank_run_gold
+	// can tell this Run's take from savings carried in.
+	testing.expect(t, game.player.gold == 500, "start_new_run must not zero Gold (ADR-0016)")
+	testing.expect(
+		t,
+		game.player.run_start_gold == 500,
+		"start_new_run should record the wallet's balance as this Run's starting baseline",
+	)
 }

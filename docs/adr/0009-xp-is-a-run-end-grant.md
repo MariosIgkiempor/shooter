@@ -1,6 +1,6 @@
 # XP is a Run-end grant spent on permanent Account_Stat, not a real-time Level-up
 
-Status: accepted
+Status: superseded by [ADR-0016](0016-gold-is-the-single-currency.md), which retired XP entirely - the Run-end grant this ADR designed is now a Gold settle (`bank_run_gold`) of what the Run did not spend.
 
 [ADR-0006](0006-gold-shop-run-progression-xp-account-progression.md) established Gold/Shop as Run-scoped and XP/Level/Class as Account progression, but left XP's actual payoff undesigned: it was still collected in real time via orbs, and leveling up showed a Continue-only popup "reserved for a future Account-progression payoff not yet designed." The [Account Progression Rework](../../.scratch/account-progression/map.md) map designs that payoff.
 

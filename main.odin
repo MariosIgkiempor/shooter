@@ -53,18 +53,18 @@ game: struct {
 	// never persisted: every launch starts at .Splash regardless of whatever
 	// mode was active when the game was last saved - see load_game and
 	// update_game's .Splash case for where it goes from there
-	program_mode: ProgramMode `json:"-"`,
+	program_mode:           ProgramMode `json:"-"`,
 	// accumulated only while program_mode == .Splash (see update_game) -
 	// never persisted, since Splash only ever runs once per process launch
 	// and `game` starts zero-initialized either way
 	splash_elapsed_seconds: f32 `json:"-"`,
-	mouse:         MouseState,
-	window_width:  f32,
-	window_height: f32,
-	window_title:  cstring,
-	camera:        Camera,
-	ui_camera:     Camera,
-	player:        Player,
+	mouse:                  MouseState,
+	window_width:           f32,
+	window_height:          f32,
+	window_title:           cstring,
+	camera:                 Camera,
+	ui_camera:              Camera,
+	player:                 Player,
 
 	// Playing mode's live map state, instantiated (via clone_map) from the
 	// baked `maps` table once a map is chosen on the Selecting screen. Never
@@ -72,44 +72,44 @@ game: struct {
 	// every launch re-derives current_map fresh from the baked table -
 	// writing the full tilemap/spawners out here would just bloat the save
 	// file with data that's never read back on load.
-	current_map:        Map `json:"-"`,
+	current_map:            Map `json:"-"`,
 	// game_save.json's pointer to the active map's identity (a Map_Name's
 	// enum-case name - see map_identity_string), read by apply_chosen_map to
 	// decide resume-vs-reset player positioning on the next map choice
-	active_map_pointer: string,
+	active_map_pointer:     string,
 
 	// Editing mode's own map, isolated from current_map - see editor.odin's
 	// map switcher. Never persisted: edits are silently discarded on
 	// leaving Editing, so there's nothing worth saving between sessions.
-	editing_map:      Map `json:"-"`,
-	editing_map_path: string `json:"-"`,
+	editing_map:            Map `json:"-"`,
+	editing_map_path:       string `json:"-"`,
+	enemies:                [dynamic]Enemy `json:"-"`,
+	bullets:                [dynamic]Bullet `json:"-"`,
+	enemy_bullets:          [dynamic]Enemy_Bullet `json:"-"`,
+	poison_clouds:          [dynamic]Poison_Cloud `json:"-"`,
+	pickups:                [dynamic]Pickup `json:"-"`,
+	particles:              [dynamic]Particle `json:"-"`,
+	damage_numbers:         [dynamic]Damage_Number `json:"-"`,
+	screen_shake_trauma:    f32 `json:"-"`,
 
-	enemies:             [dynamic]Enemy `json:"-"`,
-	bullets:             [dynamic]Bullet `json:"-"`,
-	enemy_bullets:       [dynamic]Enemy_Bullet `json:"-"`,
-	poison_clouds:       [dynamic]Poison_Cloud `json:"-"`,
-	pickups:             [dynamic]Pickup `json:"-"`,
-	particles:           [dynamic]Particle `json:"-"`,
-	damage_numbers:      [dynamic]Damage_Number `json:"-"`,
-	screen_shake_trauma: f32 `json:"-"`,
+	// true while the Run End modal is open (see end_run); simulation is
+	// paused. Never saved - a save taken mid-modal simply reopens closed,
+	// which is fine since no Run state is lost (the Gold settle is already
+	// committed by bank_run_gold at the moment the Run ended).
+	run_ended:              bool `json:"-"`,
 
-	// true while the Run End modal is open (death - see damage_player);
-	// simulation is paused. Never saved - a save taken mid-modal simply
-	// reopens closed, which is fine since no Run state is lost (the XP grant
-	// is already committed by grant_account_xp at the moment of death).
-	run_ended:     bool `json:"-"`,
-
-	// the XP grant computed at the moment of death (compute_run_xp), kept
-	// only for draw_run_end_ui to display - not itself a source of truth for
-	// anything (game.player.xp/level/unspent_xp already reflect it via
-	// grant_account_xp), so it's never saved.
-	last_run_xp_earned: int `json:"-"`,
+	// how the last Run finished, and what it settled into the wallet
+	// (bank_run_gold) - kept only for draw_run_end_ui to display. Neither is
+	// a source of truth: game.player.gold/banked_progress/level already
+	// reflect the settle, so neither is saved.
+	last_run_outcome:       Run_Outcome `json:"-"`,
+	last_run_receipt:       Run_Receipt `json:"-"`,
 
 	// true while the Shop panel is open; simulation is paused the same way
 	// run_ended already gates update_game_state (see CONTEXT.md's Shop
 	// entry). Never saved - a save taken mid-Shop simply reopens closed,
 	// same rationale as run_ended.
-	shopping:      bool `json:"-"`,
+	shopping:               bool `json:"-"`,
 
 	// true while the Main Menu's "Discard current Run?" panel is showing
 	// (draw_main_menu_ui) - set when "Start New Run" is pressed with a Run
@@ -117,21 +117,21 @@ game: struct {
 	// saved, same rationale as run_ended/shopping: reopens closed on load,
 	// no state is lost since nothing is actually discarded until a starter
 	// weapon is picked on the Run_Start screen (start_new_run).
-	confirming_new_run: bool `json:"-"`,
+	confirming_new_run:     bool `json:"-"`,
 
 	// the shared Reveal/Dismiss transition record (ADR-0014, hud.odin) that
 	// every Screen change goes through via request_screen_change - never
 	// saved, same rationale as run_ended/shopping: a save taken mid-
 	// transition simply reopens at rest (its zero value already matches a
 	// fresh Splash launch, see Menu_Transition's doc comment).
-	menu_transition: Menu_Transition `json:"-"`,
+	menu_transition:        Menu_Transition `json:"-"`,
 
 	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
 	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
 	// toggles independently instead of the old single debug_overlay bool
 	// that gated all of them together, plus a Gold grant and God Mode. Never
 	// saved, same rationale as run_ended/shopping.
-	debug: Debug_State `json:"-"`,
+	debug:                  Debug_State `json:"-"`,
 }
 
 MouseState :: struct {
@@ -179,7 +179,11 @@ load_game :: proc() {
 	// if the save already reflects them correctly, but keeps a hand-edited
 	// save file self-healing instead of trusting its damage/action_rate/
 	// move_speed/max_health fields to already be consistent with its stacks
-	apply_upgrades(&game.player.weapon, game.player.upgrade_stacks, game.player.account_stat_stacks)
+	apply_upgrades(
+		&game.player.weapon,
+		game.player.upgrade_stacks,
+		game.player.account_stat_stacks,
+	)
 	recompute_player_stats()
 
 	// never trust a stale persisted value even though program_mode's
@@ -324,10 +328,7 @@ update_game :: proc() {
 	// requires) can never fire for whichever panel draws second. Requiring
 	// .Playing also keeps it from ever coexisting with the always-drawn
 	// Editing-mode editor, which hits the same collision.
-	if is_key_pressed(.F8) &&
-	   game.program_mode == .Playing &&
-	   !game.run_ended &&
-	   !game.shopping {
+	if is_key_pressed(.F8) && game.program_mode == .Playing && !game.run_ended && !game.shopping {
 		game.debug.panel_open = !game.debug.panel_open
 	}
 
@@ -398,7 +399,11 @@ update_game :: proc() {
 		update_actor_squash(&game.player.squash, input.x != 0 || input.y != 0, rl.GetFrameTime())
 
 		input = linalg.normalize0(input)
-		move_actor(&game.player.rect, &game.current_map.tilemap, input * rl.GetFrameTime() * game.player.move_speed)
+		move_actor(
+			&game.player.rect,
+			&game.current_map.tilemap,
+			input * rl.GetFrameTime() * game.player.move_speed,
+		)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
 		// silently fail the pending Resolve (gun_can_fire would see
@@ -435,13 +440,25 @@ update_game :: proc() {
 			game.enemies[:],
 		)
 
-		fire_pressed := game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
+		fire_pressed :=
+			game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
 
 		if fire_pressed {
-			try_use_weapon(&game.player.weapon, player_pos, game.player.aim_dir, mouse_world, game.enemies[:])
+			try_use_weapon(
+				&game.player.weapon,
+				player_pos,
+				game.player.aim_dir,
+				mouse_world,
+				game.enemies[:],
+			)
 		}
 
-		update_magic_cast_particles(game.player.weapon, player_pos, game.player.aim_dir, is_mouse_button_down(.LEFT))
+		update_magic_cast_particles(
+			game.player.weapon,
+			player_pos,
+			game.player.aim_dir,
+			is_mouse_button_down(.LEFT),
+		)
 
 		update_bullets(rl.GetFrameTime())
 		update_enemy_bullets(rl.GetFrameTime())
@@ -453,6 +470,10 @@ update_game :: proc() {
 
 		update_spawn_triggers(rl.GetFrameTime())
 		update_enemies(rl.GetFrameTime())
+
+		// last, so a kill landing this frame is already reflected in
+		// game.enemies when the clear check reads it
+		check_run_objectives()
 	}
 }
 
@@ -517,22 +538,21 @@ move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) {
 }
 
 Player :: struct {
-	using rect: Rect,
-	squash:     Vec2 `json:"-"`, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
-	weapon:     Weapon,
+	using rect:          Rect,
+	squash:              Vec2 `json:"-"`, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
+	weapon:              Weapon,
 	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
 	// this is the plain, persisted view of it, converted explicitly at the
 	// save_game/load_game boundary so json.unmarshal's union-decode-order
 	// guessing never runs on player-owned weapon state.
 	weapon_variant_save: Weapon_Variant_Save,
-	aim_dir:    Vec2, // world-space direction toward the mouse, updated every frame
+	aim_dir:             Vec2, // world-space direction toward the mouse, updated every frame
 
 	// -- Account progression (survives Runs - see CONTEXT.md's Account
-	// progression entry and ADR-0009). Only ever changed by grant_account_xp
-	// (Run-end XP grant) and try_buy_account_stat (Account_Stat spend).
-	xp:                  int, // progress toward next Account level; a milestone only, grants no purchasing power
-	level:               int, // Account level, starts at 1
-	unspent_xp:          int, // spendable balance for Account_Stat purchases; banks indefinitely, spending is optional
+	// progression entry and ADR-0016). Only ever changed by bank_run_gold
+	// (Run-end settle) and try_buy_account_stat (Account_Stat spend).
+	banked_progress:     int, // banked Gold counted toward the next Account level, net of the remainder each level-up consumes
+	level:               int, // Account level, starts at 1 - gates Account_Stat unlock_level
 	account_stat_stacks: [Account_Stat]int, // how many times each Account_Stat has been bought, ever
 
 	// true once a starter weapon has been picked for the Run currently in
@@ -542,40 +562,48 @@ Player :: struct {
 	// regardless. Cleared by the Run End screen's Continue after death, so
 	// (unlike the retired class_chosen) it's re-earned every Run rather than
 	// permanent.
-	run_started: bool,
-	// Run-scoped (ADR-0006): spent in the Shop, reset to 0 by start_new_run
-	// but otherwise persisted through save/quit like xp/level already are.
-	gold:       int,
-	// Run-scoped: total Gold ever picked up this Run (never decreases when
-	// spent in the Shop, unlike `gold` above) - one of compute_run_xp's
-	// three inputs. Reset to 0 by start_new_run.
-	gold_earned: int,
-	// Run-scoped: kills this Run, tallied per Enemy_Kind - another of
-	// compute_run_xp's inputs (see apply_hit_to_enemy). Reset to {} by
-	// start_new_run.
-	kills: [Enemy_Kind]int,
+	run_started:         bool,
+	// The single currency (ADR-0016), spent both in the Shop (weapon tiers
+	// and Upgrade stacks) and on the Main Menu (Account_Stat). Account-scoped:
+	// unlike every other field in the Run-scoped block below, start_new_run
+	// deliberately does *not* reset it - carrying Gold between Runs is what
+	// makes a Shop purchase cost Account progression.
+	gold:                int,
+	// The wallet's balance at the moment this Run started, so bank_run_gold
+	// can tell this Run's net take (picked up minus spent) from savings
+	// carried in. Set by start_new_run.
+	run_start_gold:      int,
+	// Run-scoped: gross Gold picked up this Run - never decreases when Gold
+	// is spent, unlike the `gold` wallet above. Its only consumer is the Run
+	// End receipt (hud.odin's draw_run_end_ui), which needs earned and spent
+	// as separate lines to make a Run's spending visible after the fact.
+	// Reset to 0 by start_new_run.
+	gold_earned:         int,
+	// Run-scoped: kills this Run, tallied per Enemy_Kind (see
+	// apply_hit_to_enemy). Reset to {} by start_new_run.
+	kills:               [Enemy_Kind]int,
 	// Run-scoped: seconds actually spent Playing this Run (see
-	// update_game_state) - the third of compute_run_xp's inputs. Reset to 0
-	// by start_new_run.
-	survival_seconds: f32,
+	// update_game_state), checked against the Map's time_limit (ADR-0017).
+	// Reset to 0 by start_new_run.
+	survival_seconds:    f32,
 	// Run-scoped (ADR-0007): how many times each Upgrade_Kind has been
 	// bought this Run - the sole source of truth an equipped Weapon's live
 	// stats are recomputed from (see apply_upgrades), never mutated
 	// in-place. Zeroed by start_new_run.
-	upgrade_stacks: [Upgrade_Kind]int,
+	upgrade_stacks:      [Upgrade_Kind]int,
 	// Run-scoped (ADR-0007), layered on top of any owned Account_Stat
 	// Swiftness (see recompute_player_stats) - the live, Upgrade-scaled
 	// value, reset by start_new_run.
-	move_speed: f32,
+	move_speed:          f32,
 	// Run-scoped (ADR-0007), layered on top of any owned Account_Stat Vigor
 	// (see recompute_player_stats) - the live, Upgrade-scaled cap, reset by
 	// start_new_run. A Max Health purchase (Upgrade or Vigor) heals current
 	// health by the same amount it raises this.
-	max_health: f32,
+	max_health:          f32,
 	// runtime combat state, not persisted (see initialize_program) - a saved
 	// game predating this field would otherwise unmarshal it as 0 and trigger
 	// an instant Run End on load
-	health:     f32 `json:"-"`,
+	health:              f32 `json:"-"`,
 }
 
 PLAYER_BASE_MOVE_SPEED :: 100
@@ -591,27 +619,105 @@ PLAYER_BASE_MAX_HEALTH :: 100
 // self-consistent with their sources of truth rather than accumulated in
 // place.
 recompute_player_stats :: proc() {
-	swiftness := apply_account_stat_effect(PLAYER_BASE_MOVE_SPEED, .Swiftness, game.player.account_stat_stacks[.Swiftness])
-	game.player.move_speed = apply_upgrade_effect(swiftness, .Move_Speed, game.player.upgrade_stacks[.Move_Speed])
+	swiftness := apply_account_stat_effect(
+		PLAYER_BASE_MOVE_SPEED,
+		.Swiftness,
+		game.player.account_stat_stacks[.Swiftness],
+	)
+	game.player.move_speed = apply_upgrade_effect(
+		swiftness,
+		.Move_Speed,
+		game.player.upgrade_stacks[.Move_Speed],
+	)
 
-	vigor := apply_account_stat_effect(PLAYER_BASE_MAX_HEALTH, .Vigor, game.player.account_stat_stacks[.Vigor])
-	game.player.max_health = apply_upgrade_effect(vigor, .Max_Health, game.player.upgrade_stacks[.Max_Health])
+	vigor := apply_account_stat_effect(
+		PLAYER_BASE_MAX_HEALTH,
+		.Vigor,
+		game.player.account_stat_stacks[.Vigor],
+	)
+	game.player.max_health = apply_upgrade_effect(
+		vigor,
+		.Max_Health,
+		game.player.upgrade_stacks[.Max_Health],
+	)
 }
 
-// applies enemy damage to the player, granting this Run's XP and opening the
-// Run End screen at 0 hp (ADR-0009, via request_screen_change - ADR-0014).
-// God Mode (debug.odin) makes the player fully invulnerable - skipped before
-// any damage-taken effects (burst/shake) fire, so a god-mode hit reads as a
-// clean whiff rather than a damage flash with no health lost. Also bails
-// once a Run_End Screen change is already pending - more than one attacking
-// enemy/bullet can land a hit in the same frame (multiple update_enemies/
-// update_enemy_bullets hits before the next frame's Playing guard kicks in),
-// and without this guard each of those re-enters the health <= 0 branch
-// below and double-grants this Run's XP. Checks screen_change_pending_to
-// rather than game.run_ended itself, since run_ended no longer flips the
-// instant death happens - it's deferred until Run_End's Dismiss window
-// completes (see update_menu_transition), which would otherwise leave this
-// guard open for the whole window instead of closing immediately.
+// how a Run finished (ADR-0017). Cleared is the only outcome that pays a
+// victory multiplier; the other two bank at face value.
+Run_Outcome :: enum {
+	Killed,
+	Timed_Out,
+	Cleared,
+}
+
+// settles the Run and opens the Run End screen (via request_screen_change -
+// ADR-0014). The single exit from Playing, shared by all three outcomes, so
+// the Gold settle happens in exactly one place no matter how a Run finished.
+// Bails once a Run_End Screen change is already pending - more than one
+// enemy/bullet can land a killing hit in the same frame (multiple
+// update_enemies/update_enemy_bullets hits before the next frame's Playing
+// guard kicks in), and without this guard each of those re-enters the
+// health <= 0 branch below and double-banks this Run. Checks
+// screen_change_pending_to rather than game.run_ended itself, since
+// run_ended no longer flips the instant the Run ends - it's deferred until
+// Run_End's Dismiss window completes (see update_menu_transition), which
+// would otherwise leave this guard open for the whole window instead of
+// closing immediately.
+end_run :: proc(outcome: Run_Outcome) {
+	if game.run_ended || screen_change_pending_to(.Run_End) {
+		return
+	}
+
+	game.last_run_outcome = outcome
+	game.last_run_receipt = bank_run_gold(outcome == .Cleared, game.current_map.victory_multiplier)
+	request_screen_change(.Run_End)
+}
+
+// whether every Spawn Trigger on the current Map has fired and finished, so
+// no further enemies can arrive (ADR-0017). A One_Shot trigger is done the
+// moment it fires; a Repeating one is done once its elapsed clock passes its
+// duration - and a Repeating trigger with duration <= 0 means indefinite, so
+// a Map containing one can never satisfy this and is by construction
+// unclearable. Deriving the win from the timeline this way rather than from
+// an authored kill quota is deliberate: fire_spawn_composition silently
+// skips spawns once MAX_ENEMIES is reached, so a quota can exceed what the
+// Map is ever able to put on the field.
+spawn_timeline_exhausted :: proc() -> bool {
+	for trigger in game.current_map.spawn_triggers {
+		if !trigger.fired {
+			return false
+		}
+
+		repeating, is_repeating := trigger.mode.(Repeating)
+		if !is_repeating {
+			continue
+		}
+
+		if repeating.duration <= 0 || trigger.elapsed <= repeating.duration {
+			return false
+		}
+	}
+	return true
+}
+
+// the Run's two non-death endings, checked once per simulated frame (see
+// update_game_state). Clearing is checked before the clock so a final kill
+// landing on the same frame the limit expires reads as the win it was.
+check_run_objectives :: proc() {
+	if spawn_timeline_exhausted() && len(game.enemies) == 0 {
+		end_run(.Cleared)
+		return
+	}
+
+	if game.current_map.time_limit > 0 && game.player.survival_seconds >= game.current_map.time_limit {
+		end_run(.Timed_Out)
+	}
+}
+
+// applies enemy damage to the player, ending the Run at 0 hp (ADR-0017, via
+// end_run). God Mode (debug.odin) makes the player fully invulnerable -
+// skipped before any damage-taken effects (burst/shake) fire, so a god-mode
+// hit reads as a clean whiff rather than a damage flash with no health lost.
 damage_player :: proc(amount: f32) {
 	if game.debug.god_mode || game.run_ended || screen_change_pending_to(.Run_End) {
 		return
@@ -624,9 +730,7 @@ damage_player :: proc(amount: f32) {
 	game.player.health -= amount
 	if game.player.health <= 0 {
 		game.player.health = 0
-		game.last_run_xp_earned = compute_run_xp(game.player.kills, game.player.survival_seconds, game.player.gold_earned)
-		grant_account_xp(game.last_run_xp_earned)
-		request_screen_change(.Run_End)
+		end_run(.Killed)
 	}
 }
 
@@ -636,10 +740,11 @@ heal_player :: proc(amount: f32) {
 }
 
 // resets Run-scoped state to a fresh Run's starting values and equips the
-// freshly chosen starter weapon: Gold, gold_earned, kills, survival_seconds,
+// freshly chosen starter weapon: gold_earned, kills, survival_seconds,
 // upgrade_stacks, move_speed, max_health, and the equipped weapon all reset.
-// Account progression (xp/level/unspent_xp/account_stat_stacks) stays
-// untouched. Called from the Run_Start screen's weapon-pick button
+// Account progression (gold/banked_progress/level/account_stat_stacks) stays
+// untouched - Gold included, since ADR-0016 made it the Account-scoped
+// currency both the Shop and Account_Stat spend from. Called from the Run_Start screen's weapon-pick button
 // (hud.odin's draw_run_start_ui), both for the very first Run and every Run
 // after a death.
 start_new_run :: proc(starter_kind: Weapon_Kind) {
@@ -650,7 +755,11 @@ start_new_run :: proc(starter_kind: Weapon_Kind) {
 	clear(&game.particles)
 	reset_screen_shake()
 
-	game.player.gold = 0
+	// deliberately NOT reset: `gold` is the single, Account-scoped currency
+	// (ADR-0016). Only the balance this Run starts from is recorded, so
+	// bank_run_gold can settle this Run's net take without re-banking
+	// savings carried in.
+	game.player.run_start_gold = game.player.gold
 	game.player.gold_earned = 0
 	game.player.kills = {}
 	game.player.survival_seconds = 0
@@ -663,12 +772,17 @@ start_new_run :: proc(starter_kind: Weapon_Kind) {
 	game.run_ended = false
 }
 
-XP_LEVEL_BASE :: 10 // xp required for level 1 -> 2
-XP_LEVEL_GROWTH :: 1.25 // multiplicative growth per level
+// banked Gold required for level 1 -> 2. Scaled up from the retired
+// XP curve's base of 10 by roughly the income ratio between the two
+// currencies: XP was minted tens-per-Run by a formula, whereas Gold is
+// picked up hundreds-per-Run, so the old base would have unlocked every
+// Account_Stat within a single session and left the gates never biting.
+LEVEL_BASE :: 500
+LEVEL_GROWTH :: 1.25 // multiplicative growth per level
 
-// xp required to advance from `level` to `level + 1`
-xp_required_for_level :: proc(level: int) -> int {
-	return int(f32(XP_LEVEL_BASE) * math.pow(f32(XP_LEVEL_GROWTH), f32(level - 1)))
+// banked Gold required to advance from `level` to `level + 1`
+gold_required_for_level :: proc(level: int) -> int {
+	return int(f32(LEVEL_BASE) * math.pow(f32(LEVEL_GROWTH), f32(level - 1)))
 }
 
 Tile :: struct {
@@ -706,7 +820,11 @@ ENEMY_SIZE_MAX :: 48.0
 ENEMY_SIZE_PER_MAX_HEALTH :: 0.28
 
 enemy_body_size :: proc(max_health: f32) -> f32 {
-	return clamp(ENEMY_SIZE_MIN + max_health * ENEMY_SIZE_PER_MAX_HEALTH, ENEMY_SIZE_MIN, ENEMY_SIZE_MAX)
+	return clamp(
+		ENEMY_SIZE_MIN + max_health * ENEMY_SIZE_PER_MAX_HEALTH,
+		ENEMY_SIZE_MIN,
+		ENEMY_SIZE_MAX,
+	)
 }
 
 // opacity fades toward ENEMY_MIN_OPACITY as health drops, so a badly-hurt
@@ -776,7 +894,7 @@ draw_game :: proc() {
 	if can_blur {
 		draw_blurred_world(backdrop_strength)
 	} else {
-		clear_background(rl.DARKGRAY)
+		clear_background(rl.GetColor(0x181818))
 		begin_using_camera(game.camera)
 		draw_world_contents()
 		end_using_camera()
@@ -911,7 +1029,7 @@ draw_game :: proc() {
 		radius := BLUR_MAX_RADIUS_PX * strength
 
 		begin_texture_mode(blur_scene_texture)
-		clear_background(rl.DARKGRAY)
+		clear_background(rl.GetColor(0x181818))
 		begin_using_camera(game.camera)
 		draw_world_contents()
 		end_using_camera()
@@ -1000,16 +1118,34 @@ draw_game :: proc() {
 	draw_bullets :: proc(bullets: []Bullet) {
 		for bullet in bullets {
 			if bullet.explosion_radius > 0 {
-				draw_comet(bullet.position, bullet.velocity, BULLET_COMET_LENGTH, BULLET_COMET_WIDTH, rl.YELLOW)
+				draw_comet(
+					bullet.position,
+					bullet.velocity,
+					BULLET_COMET_LENGTH,
+					BULLET_COMET_WIDTH,
+					rl.YELLOW,
+				)
 			} else {
-				draw_streak(bullet.position, bullet.velocity, BULLET_STREAK_LENGTH, BULLET_STREAK_WIDTH, rl.YELLOW)
+				draw_streak(
+					bullet.position,
+					bullet.velocity,
+					BULLET_STREAK_LENGTH,
+					BULLET_STREAK_WIDTH,
+					rl.YELLOW,
+				)
 			}
 		}
 	}
 
 	draw_enemy_bullets :: proc(bullets: []Enemy_Bullet) {
 		for bullet in bullets {
-			draw_streak(bullet.position, bullet.velocity, BULLET_STREAK_LENGTH, BULLET_STREAK_WIDTH, rl.RED)
+			draw_streak(
+				bullet.position,
+				bullet.velocity,
+				BULLET_STREAK_LENGTH,
+				BULLET_STREAK_WIDTH,
+				rl.RED,
+			)
 		}
 	}
 
@@ -1115,18 +1251,42 @@ draw_game :: proc() {
 
 		switch v in weapon.variant {
 		case Gun:
-			draw_rod(pivot, angle, WEAPON_GUN_ROD_LENGTH * pulse_scale, WEAPON_GUN_ROD_WIDTH * pulse_scale, WEAPON_GUN_COLOR)
+			draw_rod(
+				pivot,
+				angle,
+				WEAPON_GUN_ROD_LENGTH * pulse_scale,
+				WEAPON_GUN_ROD_WIDTH * pulse_scale,
+				WEAPON_GUN_COLOR,
+			)
 
 		case Melee_Weapon:
 			for i in 0 ..< echo_count {
 				fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
-				draw_wedge(pivot, echo_angles[i], v.range * pulse_scale, WEAPON_MELEE_WEDGE_WIDTH * pulse_scale, rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5))
+				draw_wedge(
+					pivot,
+					echo_angles[i],
+					v.range * pulse_scale,
+					WEAPON_MELEE_WEDGE_WIDTH * pulse_scale,
+					rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5),
+				)
 			}
-			draw_wedge(pivot, angle, v.range * pulse_scale, WEAPON_MELEE_WEDGE_WIDTH * pulse_scale, WEAPON_MELEE_COLOR)
+			draw_wedge(
+				pivot,
+				angle,
+				v.range * pulse_scale,
+				WEAPON_MELEE_WEDGE_WIDTH * pulse_scale,
+				WEAPON_MELEE_COLOR,
+			)
 
 		case Magic:
 			length := WEAPON_MAGIC_ROD_LENGTH * pulse_scale
-			draw_rod(pivot, angle, length, WEAPON_MAGIC_ROD_WIDTH * pulse_scale, WEAPON_MAGIC_ROD_COLOR)
+			draw_rod(
+				pivot,
+				angle,
+				length,
+				WEAPON_MAGIC_ROD_WIDTH * pulse_scale,
+				WEAPON_MAGIC_ROD_COLOR,
+			)
 			tip := rotate_point({length, 0}, pivot, angle)
 			rl.DrawCircleV(tip, WEAPON_MAGIC_ORB_RADIUS * pulse_scale, WEAPON_MAGIC_ORB_COLOR)
 		}

@@ -1,0 +1,36 @@
+# Shop and Upgrades
+
+Label: wayfinder:map
+
+## Destination
+
+An implementation-ready spec for the Shop: an on-demand UI panel, pausing the game while open, where the player spends Gold to (a) buy the next `Weapon_Kind` in their Class's Weapon tier ladder (mechanism already locked by the prior weapon-types map — see Notes) and (b) buy repeatable Upgrades, general or Class-specific, that stack up in price and cap out. Gold, the equipped weapon, and Upgrade stacks are **Run**-scoped and reset on Restart; XP/Level/Class become **Account progression** and no longer grant in-Run stat upgrades on level-up. "Done" means a build session could implement this directly with no open design questions left.
+
+## Notes
+
+- Vocabulary is settled in [CONTEXT.md](../../CONTEXT.md): **Weapon tier ladder**, **Gold**, **Shop**, **Upgrade**, **Run**, **Account progression**. Read it before resolving any ticket. [ADR-0006](../../docs/adr/0006-gold-shop-run-progression-xp-account-progression.md) records the XP/Gold progression-axis split and what Restart now resets. [ADR-0007](../../docs/adr/0007-upgrade-stacks-recomputed-not-mutated.md) records how purchased Upgrade stacks apply to the equipped weapon and what persists across app quit/Restart.
+- This map builds on, and does not reopen, mechanism already locked by the prior `weapon-types` wayfinder map (cleared from `.scratch/` after implementation, preserved at commit `45d63de` and its ticket-resolution history): the Shop is an on-demand panel (not level-up-gated); the Weapon tier ladder is a fixed sequential per-Class order; buying the next tier immediately equips it and discards the old weapon outright; Gold is a `Pickup_Kind.Gold` drop via the existing pickup-roll machinery; the starting weapon is `class_weapon_kinds[chosen][0]`, already assigned on `Class_Select` confirm ([main.odin](../../main.odin)/[hud.odin](../../hud.odin), commit `5365566`). See [ADR-0002](../../docs/adr/0002-class-locked-weapon-acquisition.md) for why acquisition is Class-locked.
+- Pause mechanism: mirror the existing `leveling_up`/`game_over` boolean-gate idiom in `update_game_state` ([main.odin:264-266](../../main.odin)) — add an equivalent `game.shopping` (or similarly-named) flag that early-returns simulation the same way, rather than introducing a new `ProgramMode`. This follows established precedent directly and isn't reopened as a ticket.
+- This map is a **spec to hand off**, not execution — tickets decide, they don't implement. Default wayfinder behavior applies, not overridden.
+- Grilling tickets: call the Skill tool twice, for "grilling" and "domain-modeling" (any new stat/Upgrade vocabulary should land in CONTEXT.md as it's coined). The prototype ticket: call the Skill tool for "prototype".
+
+## Decisions so far
+
+- [Naming the destination + mapping the frontier](map.md): Shop sells both Weapon tier purchases (mechanism carried over from the old weapon-types map) and repeatable Upgrades; Upgrades are a unified table-driven catalog (kind → base price, price growth, per-purchase effect, max stack cap, applicable Class or "any"); Upgrade purchase prices rise per stack bought, each Upgrade has a hard max stack cap; purchased Upgrade stacks persist through a Weapon tier purchase (only a Restart clears them) — this is what makes saving for a tier jump versus spending incrementally a real tradeoff; the level-up popup keeps its Continue button only, dropping "Upgrade Weapon"/"Refill Ammo"; Restart now resets Gold/weapon/Upgrade-stacks to their Run-start values but still leaves Class and XP/Level (Account progression) untouched. See [ADR-0006](../../docs/adr/0006-gold-shop-run-progression-xp-account-progression.md) and [CONTEXT.md](../../CONTEXT.md)'s Gold/Shop/Upgrade/Run/Account progression entries for the full settled vocabulary.
+- [Upgrade catalog contents](issues/01-upgrade-catalog-contents.md): 4 general Upgrades (Move Speed, Max Health, Damage, Action Rate — the latter two absorbing what the retired `upgrade_weapon` used to grant free) plus 1 Class-specific Upgrade each (Ranged: Clip Size, Melee: Arc Width, Magic: Range). Max Health purchases heal by the same amount they raise the cap. Exact prices/growth/caps stay placeholder content-authoring.
+- [Run-scoped data model & Restart](issues/02-run-scoped-data-model-and-restart.md): `Player.upgrade_stacks` is the source of truth, reapplied onto a freshly-created `Weapon` via `apply_upgrades` (not mutated in place); each Upgrade kind is `Multiplicative` or `Additive`; new `gold`/`move_speed`/`max_health` fields persist through save/quit exactly like `weapon`/`xp`/`level` do today, with only `Restart` zeroing the Run-scoped ones. See [ADR-0007](../../docs/adr/0007-upgrade-stacks-recomputed-not-mutated.md).
+- [Shop UI/UX](issues/03-shop-ui-and-ux.md): two-column layout (Weapon tier ladder left, Upgrades right, both visible at once) — validated against three variants in [prototypes/03-shop-panel.html](prototypes/03-shop-panel.html). Opens/closes on a dedicated key (exact key a build-session pick). Level-up popup keeps Level number + XP bar alongside its Continue button. **Last open ticket — the map's route is clear.**
+
+## Not yet specified
+
+- Exact Gold prices, per-Upgrade price-growth curves, and max stack caps for the now-fixed 5-item catalog (see [Upgrade catalog contents](issues/01-upgrade-catalog-contents.md)) — balance/content-authoring, not a design branch.
+- The exact key that opens/closes the Shop (a dedicated key is decided — see [Shop UI/UX](issues/03-shop-ui-and-ux.md) — the literal key is build-session polish).
+- Whether the existing dev-only LEFT/RIGHT weapon-kind-cycle hotkey ([weapon.odin](../../weapon.odin)) is retired now that a real Shop exists to buy tiers with.
+- Sound design / juice for Shop purchases and the Upgrade-maxed/tier-maxed states.
+- Concrete named Melee tier-ladder content and Magic tier-ladder numeric stats — still-standing gaps carried from the old weapon-types map, unrelated to this redraw.
+
+## Out of scope
+
+- Designing what Account progression (XP/Level) eventually unlocks — raised only as the reason in-Run weapon upgrades are moving off XP, not a feature this map ships. Would return as its own effort once there's a concrete unlock to design toward.
+- Reopening the Weapon tier ladder mechanism, the Gold-pickup mechanism, Class-lock, or the "no inventory / discard old weapon outright" rule — already locked by the prior weapon-types map and ADR-0002; this map builds on them.
+- A mana/stamina resource economy, multi-weapon inventory, or random cross-type weapon pickups — standing out-of-scope calls from the old weapon-types map, unaffected by this redraw.

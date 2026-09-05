@@ -1,0 +1,582 @@
+<title>Weapon Effects Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131826;
+    --panel-border: #232b3c;
+    --grid: #1a2030;
+    --text: #e7ebf5;
+    --text-muted: #8a93ac;
+    --accent-enhanced: #f2a93b;
+    --accent-enhanced-dim: #7a5a22;
+    --accent-basic: #5b6b85;
+    --weapon: #c7d0e0;
+    --weapon-dim: #6c7893;
+    --grounded-red: #d9534f;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    padding: 32px clamp(16px, 4vw, 48px) 64px;
+  }
+
+  .bench-header {
+    max-width: 920px;
+    margin: 0 0 36px;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-enhanced);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: clamp(24px, 3.2vw, 32px);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 14px;
+  }
+
+  .bench-header p {
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    max-width: 65ch;
+    margin: 0 0 8px;
+  }
+
+  .bench-header code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.92em;
+    color: var(--weapon);
+  }
+
+  .lanes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+    max-width: 1180px;
+  }
+
+  .lane {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .lane-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 16px 18px 12px;
+    gap: 8px;
+  }
+
+  .lane-head h2 {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .family-chip {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border: 1px solid var(--panel-border);
+    border-radius: 999px;
+    padding: 3px 8px;
+    white-space: nowrap;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 200px;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 25px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 25px 100%,
+      var(--bg);
+    border-top: 1px solid var(--panel-border);
+    border-bottom: 1px solid var(--panel-border);
+  }
+
+  .lane-controls {
+    padding: 12px 18px;
+  }
+
+  .switch {
+    display: inline-flex;
+    border: 1px solid var(--panel-border);
+    border-radius: 7px;
+    overflow: hidden;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+  }
+
+  .switch button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .switch button:hover { color: var(--text); }
+
+  .switch button.active.basic {
+    background: color-mix(in srgb, var(--accent-basic) 28%, transparent);
+    color: var(--text);
+  }
+
+  .switch button.active.enhanced {
+    background: color-mix(in srgb, var(--accent-enhanced) 22%, transparent);
+    color: var(--accent-enhanced);
+  }
+
+  .switch button:focus-visible {
+    outline: 2px solid var(--accent-enhanced);
+    outline-offset: -2px;
+  }
+
+  .stats {
+    display: flex;
+    gap: 16px;
+    padding: 0 18px 16px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stats b { color: var(--weapon); font-weight: 500; }
+
+  .legend {
+    max-width: 920px;
+    margin-top: 28px;
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .legend b { color: var(--text); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .switch button { transition: none; }
+  }
+</style>
+
+<div class="bench-header">
+  <p class="eyebrow">Art revamp &middot; ticket 02 prototype</p>
+  <h1>Does a shapes-only weapon read with any punch?</h1>
+  <p>
+    Weapon-action-feel already tested plain icon-transform (pivot / angle / scale, no new art) on all eight
+    weapons and rejected it three times: <em>&ldquo;sells the mechanic but not the punch.&rdquo;</em> This bench
+    tests something that was never actually tried &mdash; the same transform, plus an <b style="color:var(--accent-enhanced)">enhanced</b>
+    shape-based effects layer (streaks, rotation, non-linear fade &mdash; none of which exist in <code>particle.odin</code> today)
+    &mdash; against today&rsquo;s <b style="color:var(--accent-basic)">basic</b> dot-burst particles, one representative
+    weapon per family. Timing values are the real resolved numbers from that map&rsquo;s prototype tickets.
+  </p>
+</div>
+
+<div class="lanes">
+  <div class="lane" data-weapon="pistol">
+    <div class="lane-head">
+      <h2>Pistol</h2>
+      <span class="family-chip">Ranged</span>
+    </div>
+    <canvas width="520" height="400"></canvas>
+    <div class="lane-controls">
+      <div class="switch" role="group" aria-label="Effect mode">
+        <button class="basic" data-mode="basic">Basic dots</button>
+        <button class="enhanced active" data-mode="enhanced">Enhanced shapes</button>
+      </div>
+    </div>
+    <div class="stats"><span>cycle <b>333ms</b></span><span>windup <b>80ms</b> (0.24)</span></div>
+  </div>
+
+  <div class="lane" data-weapon="sword">
+    <div class="lane-head">
+      <h2>Sword</h2>
+      <span class="family-chip">Melee</span>
+    </div>
+    <canvas width="520" height="400"></canvas>
+    <div class="lane-controls">
+      <div class="switch" role="group" aria-label="Effect mode">
+        <button class="basic" data-mode="basic">Basic dots</button>
+        <button class="enhanced active" data-mode="enhanced">Enhanced shapes</button>
+      </div>
+    </div>
+    <div class="stats"><span>cycle <b>556ms</b></span><span>windup <b>206ms</b> (0.37)</span></div>
+  </div>
+
+  <div class="lane" data-weapon="firewand">
+    <div class="lane-head">
+      <h2>Fire Wand</h2>
+      <span class="family-chip">Magic</span>
+    </div>
+    <canvas width="520" height="400"></canvas>
+    <div class="lane-controls">
+      <div class="switch" role="group" aria-label="Effect mode">
+        <button class="basic" data-mode="basic">Basic dots</button>
+        <button class="enhanced active" data-mode="enhanced">Enhanced shapes</button>
+      </div>
+    </div>
+    <div class="stats"><span>cycle <b>833ms</b></span><span>windup <b>175ms</b> (0.21)</span></div>
+  </div>
+</div>
+
+<p class="legend">
+  Each lane loops Trigger &rarr; Windup &rarr; Resolve continuously at the real cycle length above.
+  <b>Basic dots</b> mirrors today&rsquo;s <code>spawn_particle_burst</code> exactly: a flat-color radial fan of
+  circles, linear fade. <b>Enhanced shapes</b> adds streak-shaped particles (elongated, oriented to their travel
+  direction &mdash; nothing in <code>particle.odin</code> draws anything but a circle today), a brightening/expanding
+  ring on impact, and ease-out fades instead of linear ones. The weapon body itself is the same silhouette and
+  the same <code>draw_weapon</code>-style pivot/angle/scale motion in both modes &mdash; only the effect layer changes.
+</p>
+
+<script>
+(() => {
+  "use strict";
+
+  const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+  const easeInCubic = t => t * t * t;
+  const clamp01 = t => Math.max(0, Math.min(1, t));
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  class ParticleField {
+    constructor() { this.items = []; }
+    spawnDot(x, y, angle, speed, life, radius, color) {
+      this.items.push({ kind: "dot", x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, born: performance.now(), life, radius, color });
+    }
+    spawnStreak(x, y, angle, speed, life, len, color) {
+      this.items.push({ kind: "streak", x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, born: performance.now(), life, len, angle, color });
+    }
+    spawnRing(x, y, life, maxRadius, color) {
+      this.items.push({ kind: "ring", x, y, born: performance.now(), life, maxRadius, color });
+    }
+    spawnFlash(x, y, life, maxRadius) {
+      this.items.push({ kind: "flash", x, y, vx: 0, vy: 0, born: performance.now(), life, maxRadius });
+    }
+    update(now) {
+      this.items = this.items.filter(p => (now - p.born) / p.life < 1);
+      for (const p of this.items) {
+        if (p.kind !== "ring") { p.x += p.vx * (1 / 60); p.y += p.vy * (1 / 60); }
+      }
+    }
+    draw(ctx, now, enhanced) {
+      for (const p of this.items) {
+        const t = clamp01((now - p.born) / p.life);
+        if (p.kind === "dot") {
+          const fade = enhanced ? 1 - easeOutCubic(t) : 1 - t;
+          const r = p.radius * (enhanced ? 1 - easeInCubic(t) * 0.6 : 1 - t * 0.4);
+          ctx.globalAlpha = Math.max(0, fade);
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(0.4, r), 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.kind === "streak") {
+          const fade = 1 - easeOutCubic(t);
+          const len = p.len * (1 - t * 0.3);
+          ctx.globalAlpha = Math.max(0, fade);
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x - Math.cos(p.angle) * len, p.y - Math.sin(p.angle) * len);
+          ctx.stroke();
+        } else if (p.kind === "ring") {
+          const fade = 1 - easeOutCubic(t);
+          const r = p.maxRadius * easeOutCubic(t);
+          ctx.globalAlpha = Math.max(0, fade) * 0.8;
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(1, r), 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (p.kind === "flash") {
+          // a single bright, fast-decaying radial glow - reads as the
+          // "impact" a plain particle burst alone doesn't sell
+          const fade = 1 - easeOutCubic(t);
+          const r = p.maxRadius * (1 - easeInCubic(t) * 0.3);
+          ctx.globalAlpha = Math.max(0, fade);
+          const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+          grad.addColorStop(0, "#fff6e0");
+          grad.addColorStop(1, "rgba(255,246,224,0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function makeLane(root, spec) {
+    const canvas = root.querySelector("canvas");
+    const ctx = canvas.getContext("2d");
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cssW = canvas.clientWidth || canvas.width;
+    const cssH = canvas.clientHeight || canvas.height;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    ctx.scale(dpr, dpr);
+
+    let mode = "enhanced";
+    const buttons = root.querySelectorAll(".switch button");
+    buttons.forEach(btn => btn.addEventListener("click", () => {
+      mode = btn.dataset.mode;
+      buttons.forEach(b => b.classList.toggle("active", b === btn));
+    }));
+
+    const field = new ParticleField();
+    const originX = cssW / 2;
+    const originY = cssH * 0.62;
+    let lastBasicSpawn = -1;
+    let lastEnhancedSpawn = -1;
+    let firedThisCycle = false;
+
+    function phase(tCycle) {
+      if (tCycle < spec.windupMs) return { name: "windup", p: tCycle / spec.windupMs };
+      const since = tCycle - spec.windupMs;
+      if (since < spec.resolveMs) return { name: "resolve", p: since / spec.resolveMs, since };
+      return { name: "idle", p: 1, since };
+    }
+
+    function frame(now) {
+      const tCycle = now % spec.cycleMs;
+      if (tCycle < 8) firedThisCycle = false;
+      const ph = phase(tCycle);
+
+      ctx.clearRect(0, 0, cssW, cssH);
+      field.update(now);
+
+      spec.draw(ctx, { originX, originY, phase: ph, mode, field, now, fire: () => {
+        if (!firedThisCycle) { firedThisCycle = true; return true; }
+        return false;
+      } });
+
+      field.draw(ctx, now, mode === "enhanced");
+
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---- Pistol: rod, windup pullback, resolve = muzzle flash + recoil kick ----
+  function drawPistol(ctx, { originX, originY, phase: ph, mode, field, fire }) {
+    const aimAngle = -Math.PI / 2; // pointing "up" the lane
+    let pullback = 0;
+    let kick = 0;
+
+    if (ph.name === "windup") {
+      pullback = 16 * ph.p;
+    } else if (ph.name === "resolve") {
+      if (fire()) {
+        const tipX = originX + Math.cos(aimAngle) * 46;
+        const tipY = originY + Math.sin(aimAngle) * 46;
+        if (mode === "basic") {
+          for (let i = 0; i < 9; i++) {
+            const a = aimAngle + (Math.random() - 0.5) * 1.6;
+            field.spawnDot(tipX, tipY, a, 70 + Math.random() * 120, 180, 2.6 + Math.random() * 1.6, "#e08a2e");
+          }
+        } else {
+          for (let i = 0; i < 9; i++) {
+            const a = aimAngle + (i - 4) * 0.16 + (Math.random() - 0.5) * 0.06;
+            field.spawnStreak(tipX, tipY, a, 340, 140, 24 + Math.random() * 14, "#ffd27a");
+          }
+          field.spawnRing(tipX, tipY, 190, 34, "#f2a93b");
+          field.spawnFlash(tipX, tipY, 90, 16);
+        }
+      }
+      kick = 20 * (1 - easeOutCubic(ph.p));
+    }
+
+    ctx.save();
+    ctx.translate(originX, originY);
+    ctx.rotate(aimAngle + Math.PI / 2);
+    ctx.translate(0, pullback - kick);
+    ctx.fillStyle = "#c7d0e0";
+    ctx.beginPath();
+    ctx.roundRect(-4, -46, 8, 46, 3);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ---- Sword: wedge, windup drawback, resolve = two-phase eased swing ----
+  function drawSword(ctx, { originX, originY, phase: ph, mode, field, fire }) {
+    const arc = Math.PI / 2.4; // ~75deg
+    const base = -Math.PI / 2;
+    let angle = base;
+    const outMs = 70, retMs = 110;
+
+    if (ph.name === "windup") {
+      angle = base - (arc / 2) * ph.p;
+    } else if (ph.name === "resolve") {
+      const since = ph.since;
+      const drawBack = base - arc / 2;
+      const extreme = base + arc / 2;
+      if (since < outMs) {
+        angle = lerp(drawBack, extreme, easeOutCubic(since / outMs));
+      } else {
+        angle = lerp(extreme, base, easeOutCubic(clamp01((since - outMs) / retMs)));
+      }
+      if (mode === "enhanced" && since < outMs + retMs) {
+        // motion-trail echoes sampled a few times per frame - vx/vy pinned to
+        // 0 explicitly, since ParticleField.update() applies them to every
+        // non-ring item and an unset field reads as undefined -> NaN position
+        if (Math.random() < 0.9) {
+          field.items.push({ kind: "echo", x: originX, y: originY, vx: 0, vy: 0, angle, born: performance.now(), life: 90, color: "#ffd27a" });
+        }
+      }
+      // single-shot at the swing's extreme, not a narrow time-window check -
+      // a window this size (was +-4ms) can miss entirely depending on frame
+      // timing, same class of bug the pistol's muzzle flash had
+      if (since >= outMs && fire()) {
+        const tipX = originX + Math.cos(extreme) * 44;
+        const tipY = originY + Math.sin(extreme) * 44;
+        if (mode === "basic") {
+          for (let i = 0; i < 5; i++) {
+            field.spawnDot(tipX, tipY, Math.random() * Math.PI * 2, 40 + Math.random() * 60, 180, 2 + Math.random(), "#e08a2e");
+          }
+        } else {
+          for (let i = 0; i < 8; i++) {
+            const a = extreme + (Math.random() - 0.5) * 1.4;
+            field.spawnStreak(tipX, tipY, a, 200, 150, 20, "#ffd27a");
+          }
+          field.spawnRing(tipX, tipY, 170, 28, "#f2a93b");
+          field.spawnFlash(tipX, tipY, 100, 18);
+        }
+      }
+    }
+
+    // draw echo trail (enhanced only)
+    if (mode === "enhanced") {
+      const now = performance.now();
+      field.items = field.items.filter(p => p.kind !== "echo" || (now - p.born) < p.life);
+      for (const p of field.items) {
+        if (p.kind !== "echo") continue;
+        const t = clamp01((now - p.born) / p.life);
+        ctx.save();
+        ctx.globalAlpha = (1 - t) * 0.35;
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle + Math.PI / 2);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(0, -46); ctx.lineTo(7, 6); ctx.lineTo(-7, 6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.save();
+    ctx.translate(originX, originY);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.fillStyle = "#c7d0e0";
+    ctx.beginPath();
+    ctx.moveTo(0, -46); ctx.lineTo(7, 6); ctx.lineTo(-7, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ---- Fire Wand: rod + orb, windup charge (converging), resolve = launch burst ----
+  function drawFireWand(ctx, { originX, originY, phase: ph, mode, field, fire, now }) {
+    const aimAngle = -Math.PI / 2;
+    const tipX = originX + Math.cos(aimAngle) * 50;
+    const tipY = originY + Math.sin(aimAngle) * 50;
+    let glow = 0;
+
+    if (ph.name === "windup") {
+      glow = mode === "enhanced" ? easeInCubic(ph.p) : ph.p;
+      if (Math.random() < (mode === "enhanced" ? 0.55 : 0.35)) {
+        const spread = 30 * (1 - ph.p);
+        const a = Math.random() * Math.PI * 2;
+        const dist = spread + Math.random() * 10;
+        const sx = tipX + Math.cos(a) * dist;
+        const sy = tipY + Math.sin(a) * dist;
+        if (mode === "basic") {
+          field.spawnDot(sx, sy, a + Math.PI, 30, 260, 1.6, "#7fd1ff");
+        } else {
+          field.spawnStreak(sx, sy, a + Math.PI, 70, 220, 10, "#9fe3ff");
+        }
+      }
+    } else if (ph.name === "resolve") {
+      glow = 1 - clamp01(ph.since / 120);
+      if (fire()) {
+        if (mode === "basic") {
+          for (let i = 0; i < 8; i++) {
+            field.spawnDot(tipX, tipY, Math.random() * Math.PI * 2, 50 + Math.random() * 90, 220, 2 + Math.random(), "#7fd1ff");
+          }
+        } else {
+          for (let i = 0; i < 10; i++) {
+            const a = Math.random() * Math.PI * 2;
+            field.spawnStreak(tipX, tipY, a, 200 + Math.random() * 80, 180, 18, "#c9f2ff");
+          }
+          field.spawnRing(tipX, tipY, 200, 30, "#9fe3ff");
+          field.spawnFlash(tipX, tipY, 110, 24);
+        }
+      }
+    }
+
+    ctx.save();
+    ctx.translate(originX, originY);
+    ctx.rotate(aimAngle + Math.PI / 2);
+    ctx.fillStyle = "#c7d0e0";
+    ctx.beginPath();
+    ctx.roundRect(-3, -44, 6, 44, 2);
+    ctx.fill();
+    ctx.restore();
+
+    if (glow > 0.02) {
+      ctx.save();
+      ctx.globalAlpha = glow * 0.9;
+      const grad = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, 14 + glow * 10);
+      grad.addColorStop(0, "#eafcff");
+      grad.addColorStop(1, "rgba(159,227,255,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(tipX, tipY, 14 + glow * 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = `rgba(199,208,224,${0.5 + glow * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 3.5 + glow * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  makeLane(document.querySelector('[data-weapon="pistol"]'), { cycleMs: 333, windupMs: 80, resolveMs: 253, draw: drawPistol });
+  makeLane(document.querySelector('[data-weapon="sword"]'), { cycleMs: 556, windupMs: 206, resolveMs: 350, draw: drawSword });
+  makeLane(document.querySelector('[data-weapon="firewand"]'), { cycleMs: 833, windupMs: 175, resolveMs: 658, draw: drawFireWand });
+})();
+</script>

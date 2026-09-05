@@ -126,16 +126,18 @@ test_damage_player_normal_mode_still_applies_damage :: proc(t: ^testing.T) {
 // single frame (e.g. two Melee enemies whose attack_timers both expire that
 // frame - enemy.odin's update_enemies calls damage_player once per attacker)
 // - without a re-entrancy guard, every hit after the killing one would
-// re-enter the health <= 0 branch and grant this Run's XP again
+// re-enter the health <= 0 branch and bank this Run's Gold again
 @(test)
-test_damage_player_does_not_double_grant_xp_on_repeated_hits_after_death :: proc(t: ^testing.T) {
+test_damage_player_does_not_double_bank_gold_on_repeated_hits_after_death :: proc(t: ^testing.T) {
 	previous_god_mode := game.debug.god_mode
 	previous_health := game.player.health
 	previous_particles := game.particles
 	previous_trauma := game.screen_shake_trauma
 	previous_run_ended := game.run_ended
-	previous_unspent := game.player.unspent_xp
-	previous_xp := game.player.xp
+	previous_transition := game.menu_transition
+	previous_gold := game.player.gold
+	previous_run_start_gold := game.player.run_start_gold
+	previous_banked := game.player.banked_progress
 	previous_level := game.player.level
 	previous_kills := game.player.kills
 	previous_survival := game.player.survival_seconds
@@ -146,8 +148,10 @@ test_damage_player_does_not_double_grant_xp_on_repeated_hits_after_death :: proc
 		game.particles = previous_particles
 		game.screen_shake_trauma = previous_trauma
 		game.run_ended = previous_run_ended
-		game.player.unspent_xp = previous_unspent
-		game.player.xp = previous_xp
+		game.menu_transition = previous_transition
+		game.player.gold = previous_gold
+		game.player.run_start_gold = previous_run_start_gold
+		game.player.banked_progress = previous_banked
 		game.player.level = previous_level
 		game.player.kills = previous_kills
 		game.player.survival_seconds = previous_survival
@@ -158,30 +162,36 @@ test_damage_player_does_not_double_grant_xp_on_repeated_hits_after_death :: proc
 	game.particles = {}
 	game.screen_shake_trauma = 0
 	game.run_ended = false
-	game.player.unspent_xp = 0
-	game.player.xp = 0
+	// run_ended itself only flips once update_menu_transition applies the
+	// pending change (hud.odin's apply_screen_kind), which nothing pumps in
+	// a unit test - so this asserts on the pending request instead, which is
+	// also exactly what end_run's own re-entrancy guard reads.
+	game.menu_transition = {}
+	game.player.run_start_gold = 0
+	game.player.gold = 300
+	game.player.gold_earned = 300
+	game.player.banked_progress = 0
 	game.player.level = 1
 	game.player.kills = {}
 	game.player.kills[.Basic] = 1
 	game.player.survival_seconds = 0
-	game.player.gold_earned = 0
 
 	// the killing hit, then a second hit landing the same "frame" - as if two
 	// attackers both connected before update_game_state's next-frame
 	// run_ended guard could take effect
 	game.player.health = 5
 	damage_player(10)
-	xp_after_first_hit := game.player.unspent_xp
+	banked_after_first_hit := game.player.banked_progress
 
 	damage_player(10)
 
-	testing.expect(t, game.run_ended, "sanity check: the first hit should have ended the Run")
+	testing.expect(t, screen_change_pending_to(.Run_End), "sanity check: the first hit should have ended the Run")
 	testing.expectf(
 		t,
-		game.player.unspent_xp == xp_after_first_hit,
-		"a second hit landing after death should not grant XP again, got %v then %v",
-		xp_after_first_hit,
-		game.player.unspent_xp,
+		game.player.banked_progress == banked_after_first_hit,
+		"a second hit landing after death should not bank the Run again, got %v then %v",
+		banked_after_first_hit,
+		game.player.banked_progress,
 	)
 
 	clear(&game.particles)

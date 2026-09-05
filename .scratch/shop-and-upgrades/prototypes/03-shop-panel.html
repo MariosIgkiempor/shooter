@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE — Shop panel layout (throwaway)</title>
+<style>
+  :root {
+    --bg: #12141a;
+    --panel: #1c1f27;
+    --panel-2: #232733;
+    --border: #333850;
+    --text: #e8e9ee;
+    --dim: #8b90a3;
+    --gold: #e8c25a;
+    --accent: #5a8fe8;
+    --ok: #4caf6e;
+    --disabled: #4a4d58;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #05060a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .prototype-banner {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    background: #7a2020;
+    color: #fff;
+    text-align: center;
+    font-size: 12px;
+    padding: 4px;
+    z-index: 100;
+    letter-spacing: 0.5px;
+  }
+  .game-frame {
+    width: 960px;
+    height: 640px;
+    background: #0d1220;
+    border: 2px solid #000;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  .game-backdrop {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(45deg, #10131c, #10131c 20px, #0c0f17 20px, #0c0f17 40px);
+    opacity: 0.6;
+  }
+
+  /* ---- Shop panel shell ---- */
+  .shop-panel {
+    position: absolute;
+    top: 40px; left: 50%;
+    transform: translateX(-50%);
+    width: 820px;
+    height: 540px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .shop-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .shop-title { font-size: 18px; font-weight: 600; }
+  .shop-meta { display: flex; gap: 16px; align-items: center; font-size: 14px; color: var(--dim); }
+  .gold-chip {
+    background: #2a2410;
+    color: var(--gold);
+    border: 1px solid #4a3f1a;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+  .close-btn {
+    background: none; border: 1px solid var(--border); color: var(--dim);
+    width: 26px; height: 26px; border-radius: 4px; cursor: pointer;
+  }
+  .shop-body { flex: 1; padding: 16px; overflow: auto; }
+
+  .section-heading {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dim);
+    margin: 18px 0 8px;
+  }
+  .section-heading:first-child { margin-top: 0; }
+
+  .weapon-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .weapon-icon {
+    width: 44px; height: 44px; border-radius: 4px;
+    background: linear-gradient(135deg, #3a4160, #23273a);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .weapon-info { flex: 1; }
+  .weapon-name { font-weight: 600; }
+  .weapon-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .buy-btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .buy-btn:disabled, .buy-btn.maxed {
+    background: var(--disabled);
+    color: var(--dim);
+    cursor: default;
+  }
+
+  .upgrade-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-2);
+    margin-bottom: 8px;
+  }
+  .upgrade-info { flex: 1; }
+  .upgrade-name { font-weight: 600; font-size: 14px; }
+  .upgrade-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .stack-dots { display: flex; gap: 3px; margin-top: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--disabled); }
+  .dot.filled { background: var(--ok); }
+
+  /* Variant A: tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab-btn {
+    background: none; border: none; color: var(--dim);
+    padding: 8px 16px; font-size: 14px; cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* Variant B: two column */
+  .cols { display: flex; gap: 18px; }
+  .col { flex: 1; min-width: 0; }
+
+  /* switcher bar */
+  .switcher {
+    position: fixed;
+    bottom: 18px; left: 50%;
+    transform: translateX(-50%);
+    background: #000;
+    border: 1px solid #444;
+    border-radius: 999px;
+    padding: 8px 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .switcher button {
+    background: #222; color: #fff; border: 1px solid #555;
+    border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: 16px;
+  }
+  .switcher .label { font-size: 13px; padding: 0 8px; min-width: 220px; text-align: center; }
+
+  .side-controls {
+    position: fixed;
+    top: 30px; right: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 200;
+  }
+  .side-controls button {
+    background: #222; color: #fff; border: 1px solid #555;
+    border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+  }
+
+  .levelup-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.65);
+    display: none;
+    align-items: center; justify-content: center;
+  }
+  .levelup-overlay.shown { display: flex; }
+  .levelup-card {
+    width: 320px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    text-align: center;
+  }
+  .levelup-card h2 { margin: 0 0 6px; }
+  .levelup-card .xp-bar {
+    height: 8px; background: var(--panel-2); border-radius: 4px; margin: 14px 0; overflow: hidden;
+  }
+  .levelup-card .xp-fill { height: 100%; width: 62%; background: var(--accent); }
+  .continue-btn {
+    margin-top: 10px; background: var(--accent); color: #fff; border: none;
+    padding: 10px 24px; border-radius: 4px; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div class="prototype-banner">PROTOTYPE — Shop panel layout, throwaway (ticket: shop-and-upgrades/03-shop-ui-and-ux). Not game code.</div>
+
+<div class="game-frame">
+  <div class="game-backdrop"></div>
+
+  <div class="shop-panel" id="shopPanel">
+    <div class="shop-topbar">
+      <div class="shop-title">Shop</div>
+      <div class="shop-meta">
+        <span>Class: Ranged</span>
+        <span class="gold-chip">💰 340g</span>
+      </div>
+      <button class="close-btn">✕</button>
+    </div>
+    <div class="shop-body" id="shopBody"><!-- variant renders here --></div>
+  </div>
+
+  <div class="levelup-overlay" id="levelupOverlay">
+    <div class="levelup-card">
+      <h2>Level 7</h2>
+      <div style="color:var(--dim); font-size:13px;">Account progression — Class and weapon are unaffected.</div>
+      <div class="xp-bar"><div class="xp-fill"></div></div>
+      <button class="continue-btn" onclick="document.getElementById('levelupOverlay').classList.remove('shown')">Continue</button>
+    </div>
+  </div>
+</div>
+
+<div class="side-controls">
+  <button onclick="document.getElementById('levelupOverlay').classList.add('shown')">Preview: level-up popup</button>
+  <button id="maxToggle" onclick="toggleMaxed()">Preview: weapon maxed state</button>
+</div>
+
+<div class="switcher">
+  <button onclick="cycle(-1)">◀</button>
+  <div class="label" id="variantLabel"></div>
+  <button onclick="cycle(1)">▶</button>
+</div>
+
+<script>
+const GENERAL_UPGRADES = [
+  { name: 'Move Speed', sub: '+5% per stack', stack: 2, cap: 10, price: 80 },
+  { name: 'Max Health', sub: '+20 HP per stack (heals on buy)', stack: 0, cap: 10, price: 60 },
+  { name: 'Damage', sub: '+15% per stack', stack: 4, cap: 10, price: 140 },
+  { name: 'Action Rate', sub: '+10% per stack', stack: 10, cap: 10, price: null },
+];
+const CLASS_UPGRADES = [
+  { name: 'Clip Size', sub: '+2 rounds per stack (Ranged only)', stack: 3, cap: 10, price: 90 },
+];
+
+let maxed = false;
+
+function toggleMaxed() {
+  maxed = !maxed;
+  document.getElementById('maxToggle').textContent = maxed
+    ? 'Preview: weapon un-maxed state'
+    : 'Preview: weapon maxed state';
+  render();
+}
+
+function weaponCardHTML() {
+  if (maxed) {
+    return `
+      <div class="weapon-card">
+        <div class="weapon-icon">🔫</div>
+        <div class="weapon-info">
+          <div class="weapon-name">Shotgun <span style="color:var(--dim); font-weight:400;">— Tier 3/3</span></div>
+          <div class="weapon-sub">Ranged weapon ladder</div>
+        </div>
+        <button class="buy-btn maxed" disabled>Fully Upgraded</button>
+      </div>`;
+  }
+  return `
+    <div class="weapon-card">
+      <div class="weapon-icon">🔫</div>
+      <div class="weapon-info">
+        <div class="weapon-name">SMG <span style="color:var(--dim); font-weight:400;">— Tier 2/3</span></div>
+        <div class="weapon-sub">Next: Shotgun</div>
+      </div>
+      <button class="buy-btn">Buy Shotgun — 250g</button>
+    </div>`;
+}
+
+function upgradeRowHTML(u) {
+  const dots = Array.from({length: u.cap}, (_, i) =>
+    `<div class="dot ${i < u.stack ? 'filled' : ''}"></div>`).join('');
+  const capped = u.stack >= u.cap;
+  return `
+    <div class="upgrade-row">
+      <div class="upgrade-info">
+        <div class="upgrade-name">${u.name}</div>
+        <div class="upgrade-sub">${u.sub}</div>
+        <div class="stack-dots">${dots}</div>
+      </div>
+      <button class="buy-btn ${capped ? 'maxed' : ''}" ${capped ? 'disabled' : ''}>
+        ${capped ? 'MAXED' : 'Buy — ' + u.price + 'g'}
+      </button>
+    </div>`;
+}
+
+function variantA() {
+  // Tabbed: Weapons | Upgrades (general + class-specific stacked within one pane)
+  return `
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab(this,'w')">Weapons</button>
+      <button class="tab-btn" onclick="switchTab(this,'u')">Upgrades</button>
+    </div>
+    <div class="tab-pane active" data-pane="w">
+      ${weaponCardHTML()}
+    </div>
+    <div class="tab-pane" data-pane="u">
+      <div class="section-heading">General</div>
+      ${GENERAL_UPGRADES.map(upgradeRowHTML).join('')}
+      <div class="section-heading">Ranged</div>
+      ${CLASS_UPGRADES.map(upgradeRowHTML).join('')}
+    </div>`;
+}
+
+function variantB() {
+  // Two column: weapon ladder left, upgrades right
+  return `
+    <div class="cols">
+      <div class="col">
+        <div class="section-heading">Weapon Ladder</div>
+        ${weaponCardHTML()}
+      </div>
+      <div class="col">
+        <div class="section-heading">General</div>
+        ${GENERAL_UPGRADES.map(upgradeRowHTML).join('')}
+        <div class="section-heading">Ranged</div>
+        ${CLASS_UPGRADES.map(upgradeRowHTML).join('')}
+      </div>
+    </div>`;
+}
+
+function variantC() {
+  // Single scrolling list, no tabs/columns
+  return `
+    <div class="section-heading">Weapon Ladder</div>
+    ${weaponCardHTML()}
+    <div class="section-heading">General Upgrades</div>
+    ${GENERAL_UPGRADES.map(upgradeRowHTML).join('')}
+    <div class="section-heading">Ranged Upgrades</div>
+    ${CLASS_UPGRADES.map(upgradeRowHTML).join('')}
+  `;
+}
+
+function switchTab(btn, which) {
+  const tabs = btn.parentElement.parentElement;
+  tabs.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  tabs.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  tabs.querySelector(`[data-pane="${which}"]`).classList.add('active');
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'Tabbed (Weapons / Upgrades)', render: variantA },
+  { key: 'B', name: 'Two-column (ladder left, upgrades right)', render: variantB },
+  { key: 'C', name: 'Single scrolling list', render: variantC },
+];
+let current = 0;
+
+function render() {
+  const v = VARIANTS[current];
+  document.getElementById('shopBody').innerHTML = v.render();
+  document.getElementById('variantLabel').textContent = `${v.key} — ${v.name}`;
+}
+
+function cycle(delta) {
+  current = (current + delta + VARIANTS.length) % VARIANTS.length;
+  render();
+}
+
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+
+render();
+</script>
+</body>
+</html>

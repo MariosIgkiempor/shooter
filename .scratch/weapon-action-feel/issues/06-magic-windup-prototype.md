@@ -23,3 +23,5 @@ Built an interactive HTML/canvas prototype (Fire_Wand, Poison_Staff, Flame_Staff
 **Art call: all three need real new art**, same as every other weapon-kind across this map — consistent with Ranged and Melee's findings, and expected here even more given Magic currently has zero art of its own (every kind reuses the Pistol icon placeholder).
 
 **Prototype captured as a primary source**: committed to the throwaway branch `prototype/magic-windup` (commit `b258db7`), out of main.
+
+**Amendment (Art revamp map)**: the "all three need real new art" call above is superseded — see [Weapon shape and reconcile weapon-action-feel](../../art-revamp/issues/02-weapon-shape-and-reconcile-weapon-action-feel.md). Fire_Wand's shape+enhanced-particle-effects treatment (converging charge streaks, an impact flash/ring, non-linear fades) was confirmed sufficient, live-tested; expected to generalize to Poison_Staff/Flame_Staff.

@@ -27,3 +27,5 @@ Takeaway for whoever implements this: `draw_weapon()`'s Sword rendering needs a 
 **Art call: both need real new art**, same as every Ranged weapon in the prior ticket — transform-only motion sells the mechanic, not the punch.
 
 **Prototype captured as a primary source**: committed to the throwaway branch `prototype/melee-windup` (commit `1731104`), out of main.
+
+**Amendment (Art revamp map)**: the "both need real new art" call above is superseded — see [Weapon shape and reconcile weapon-action-feel](../../art-revamp/issues/02-weapon-shape-and-reconcile-weapon-action-feel.md). Sword's shape+enhanced-particle-effects treatment (a motion-trail of echoed blade shapes, an impact flash/ring, non-linear fades) was confirmed sufficient, live-tested; expected to generalize to Dagger.

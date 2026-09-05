@@ -60,11 +60,15 @@ draw_debug_panel_ui :: proc() {
 				}
 			}
 
-			// deliberately bumps `gold` only, not gold_earned - a dev cheat
-			// feeding compute_run_xp's Run-end formula would let testing
-			// inflate real Account progression (account_progression.odin)
+			// bumps run_start_gold by the same amount, and leaves gold_earned
+			// alone - now that Gold is the single currency (ADR-0016), what
+			// banks at Run end is the wallet's delta against run_start_gold,
+			// so granting Gold without also moving that baseline would let a
+			// dev cheat inflate real Account progression. Raising both hands
+			// the tester spendable Gold that settles as exactly zero.
 			if ui.button(fmt.tprintf("Add {} Gold", DEBUG_GOLD_GRANT), {panel = true}) {
 				game.player.gold += DEBUG_GOLD_GRANT
+				game.player.run_start_gold += DEBUG_GOLD_GRANT
 			}
 
 			god_mode_label := fmt.tprintf("God Mode: {}", game.debug.god_mode ? "ON" : "OFF")

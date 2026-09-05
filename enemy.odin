@@ -11,10 +11,10 @@ MAX_ENEMIES :: 24
 ENEMY_SIZE: i32 = 12
 ENEMY_MAX_HEALTH :: 50
 
-// which per-kind XP payout (enemy_xp_presets, account_progression.odin) an
+// which per-kind Gold payout (enemy_gold_presets, account_progression.odin) an
 // Enemy grants on death - a single placeholder member today, but the lookup
 // is kept extensible for enemy variety that doesn't exist yet (see the
-// Account Progression Rework map's XP formula ticket)
+// Gold payout ticket)
 Enemy_Kind :: enum {
 	Basic,
 }

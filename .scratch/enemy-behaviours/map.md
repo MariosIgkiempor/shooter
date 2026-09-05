@@ -19,6 +19,7 @@ Layered on top: a same-Movement-Style **Separation** steering force so enemies d
 - Consult `docs/adr/0001-weapon-wrapper-struct.md` before the data-structure ticket — it's the existing precedent for "bare union vs wrapper struct" polymorphism in this codebase, but Enemy now needs to hold *two* independent axis values at once, which neither existing shape directly covers.
 - Prototype/grilling tickets in this map should call the Skill tool per the wayfinder skill's Ticket Types section (prototype → "prototype"; grilling → "grilling" + "domain-modeling").
 - Existing Melee/Ranged enemies are not required to keep exact current behavior through this split — some drift (e.g. picking up Separation by default) is acceptable.
+- Sprite/animation assets for Floater and Swarmer (formerly listed as fog below) are now specified by the [Art revamp](../art-revamp/map.md) map's [actor shape and movement transform](../art-revamp/issues/01-actor-shape-and-movement-transform.md) ticket: Floater renders as a circle, Swarmer as a triangle, both sharing the same continuous-squash movement transform as every other actor.
 
 ## Decisions so far
 
@@ -31,7 +32,6 @@ Layered on top: a same-Movement-Style **Separation** steering force so enemies d
 
 ## Not yet specified
 
-- Sprite/animation assets for Floater and Swarmer — visual identity beyond movement behaviour.
 - Spawner content authoring — which levels/spawners actually place Floater and Swarmer enemies, and in what mix (parallel to how the weapon-types map deferred weapon tier-ladder content authoring).
 
 ## Out of scope
