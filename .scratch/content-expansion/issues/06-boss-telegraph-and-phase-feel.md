@@ -19,4 +19,6 @@ To answer:
 
 Build it cheap and throwaway on a `prototype/` branch, link it from this ticket, and judge it at real gameplay zoom in motion — the standard [Art revamp](../../art-revamp/map.md) set for every visual decision in this codebase.
 
+The stage is already decided: [Map ladder shape](03-map-ladder-shape.md) made rung 5's arena deliberately legible — open, simple, few obstructions — precisely so telegraphs can be read. Prototype against that, not against a cluttered arena; if a telegraph only works in open ground, that is the answer working as intended rather than a limitation to design around.
+
 Blocked by [Boss model](05-boss-model.md).

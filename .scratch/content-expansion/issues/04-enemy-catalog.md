@@ -1,7 +1,7 @@
 # Enemy catalog
 
 Type: grilling
-Blocked by: 01, 10
+Blocked by: 01, 03, 10
 Status: open
 
 ## Question
@@ -13,7 +13,7 @@ Not "how are enemies represented" but "which ones exist, and why each earns its 
 - **What it does to the player** — the pressure it applies that no existing enemy applies. A roster where three entries all mean "walk at you and touch you" is one enemy with three colours.
 - **Its axis composition or preset values** — movement, attack, health, speed, size, colour, in whatever shape ticket 01 decided.
 - **Its Gold payout.** This graduates [Account progression](../../account-progression/map.md)'s standing fog item: `enemy_gold_presets` holds a single `.Basic = {base_gold = 30, gold_multiplier = 1.0}` marked "placeholder, content-authoring". Payout should track the pressure the enemy applies, and note that Fortune scales Gold gain on top.
-- **Where it enters the ladder** — which rung it first appears on, feeding [Map ladder shape](03-map-ladder-shape.md)'s escalation curve.
+- **Where it enters the ladder** — which rung it first appears on. [Map ladder shape](03-map-ladder-shape.md) has settled the ladder and written a per-rung brief stating the **pressure** each rung's mix must exert in Movement × Attack terms, deliberately without naming kinds. This ticket fills those slots, so the briefs are the specification the roster is written against, not a downstream consumer of it: rung 1 slow grounded melee with a light ranged accent, rung 2 melee arriving from unseen bearings, rung 3 sustained ranged chip with a melee escort, rung 4 swarm density (many cheap fast bodies), rung 5 the boss plus adds thin enough to leave it slots.
 
 Constraints to design against:
 
