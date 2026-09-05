@@ -34,7 +34,7 @@ reset_bullets :: proc() {
 // around aim_dir (a single bullet straight down aim_dir when pellet_count is
 // 1, e.g. pistol/SMG). damage comes from the weapon header since it applies
 // generically across all weapon types, not just Gun.
-fire_pellets :: proc(weapon: Weapon, gun: Gun, origin, aim_dir: Vec2) {
+fire_pellets :: proc(weapon: Weapon, gun: Gun, muzzle, aim_dir: Vec2) {
 	pellets := max(gun.pellet_count, 1)
 	base_angle := math.atan2(aim_dir.y, aim_dir.x)
 
@@ -51,7 +51,7 @@ fire_pellets :: proc(weapon: Weapon, gun: Gun, origin, aim_dir: Vec2) {
 		append(
 			&game.bullets,
 			Bullet {
-				position = origin,
+				position = muzzle,
 				velocity = direction * gun.projectile_speed,
 				damage = weapon.damage,
 				lifetime = gun.bullet_lifetime,
@@ -66,11 +66,11 @@ fire_pellets :: proc(weapon: Weapon, gun: Gun, origin, aim_dir: Vec2) {
 // sweep instead of a single-target hit. Reaching max lifetime without a hit
 // despawns it silently below, same as any other bullet - a miss fizzles
 // with no explosion (ticket 11).
-cast_fireball :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2) {
+cast_fireball :: proc(magic: Magic, damage: f32, muzzle, aim_dir: Vec2) {
 	append(
 		&game.bullets,
 		Bullet {
-			position = origin,
+			position = muzzle,
 			velocity = aim_dir * magic.projectile_speed,
 			damage = damage,
 			lifetime = magic.bullet_lifetime,

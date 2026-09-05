@@ -1210,7 +1210,9 @@ draw_game :: proc() {
 	draw_weapon :: proc(player: Player) {
 		weapon := player.weapon
 
-		pivot := Vec2{player.x, player.y - ACTOR_SIZE.y / 2}
+		// same grip point weapon_muzzle_position measures from (weapon.odin),
+		// so the drawn shape and the effects spawned off it stay in step
+		pivot := weapon_pivot_position(Vec2{player.x, player.y})
 		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
 		pulse_scale: f32 = 1
 

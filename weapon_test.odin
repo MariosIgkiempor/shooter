@@ -1,5 +1,6 @@
 package shooter
 
+import "core:math/linalg"
 import "core:testing"
 
 // Every test drives try_use_weapon/update_weapon/resolve_weapon_action
@@ -282,4 +283,96 @@ test_flamethrower_uses_this_ticks_live_aim :: proc(t: ^testing.T) {
 	weapon.cooldown_timer = 0 // force-ready so the second Trigger below can act again
 	try_use_weapon(&weapon, TEST_ORIGIN, Vec2{0, 1}, TEST_MOUSE, game.enemies[:])
 	testing.expect(t, game.enemies[1].health < 100, "switching aim_dir on the next tick should hit the newly-aimed-at enemy")
+}
+
+// -- muzzle position (the bug: effects spawned at the player's feet) --------
+//
+// `origin` threaded through try_use_weapon is the player's bottom-center
+// anchor (see actor_collision_rect's note, main.odin), which is where the
+// player *stands*, not where the weapon *points from*. Bullets and muzzle
+// effects belong at the far end of the drawn weapon shape - these lock that
+// down at the observable-side-effect seam (a spawned Bullet / Particle)
+// rather than against draw_weapon's rendering math.
+
+// where TEST_ORIGIN/TEST_AIM put `kind`'s business end, re-derived from the
+// glyph tables (weapon_visuals/weapon_icon_reach) rather than by calling
+// weapon_muzzle_position, which would assert nothing about itself
+test_expected_muzzle :: proc(kind: Weapon_Kind) -> Vec2 {
+	reach := weapon_visuals[kind].length * weapon_visual_scale * weapon_icon_reach[kind]
+	return TEST_ORIGIN + Vec2{0, -ACTOR_SIZE.y / 2} + TEST_AIM * reach
+}
+
+@(test)
+test_gun_bullets_spawn_at_the_muzzle_not_the_player_anchor :: proc(t: ^testing.T) {
+	clear(&game.bullets)
+	defer clear(&game.bullets)
+	clear(&game.particles)
+	defer clear(&game.particles)
+
+	weapon := weapon_create(.SMG) // Automatic - resolves immediately on Trigger
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+	testing.expect(t, len(game.bullets) == 1, "sanity check: SMG should have fired one bullet")
+
+	expected := test_expected_muzzle(.SMG)
+	testing.expectf(
+		t,
+		linalg.length(game.bullets[0].position - expected) < 0.01,
+		"bullet should spawn at the gun's muzzle %v, got %v",
+		expected,
+		game.bullets[0].position,
+	)
+}
+
+@(test)
+test_gun_muzzle_flash_spawns_at_the_muzzle_not_the_player_anchor :: proc(t: ^testing.T) {
+	clear(&game.bullets)
+	defer clear(&game.bullets)
+	clear(&game.particles)
+	defer clear(&game.particles)
+
+	weapon := weapon_create(.SMG)
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+	expected := test_expected_muzzle(.SMG)
+
+	flash_found := false
+	for particle in game.particles {
+		if _, is_flash := particle.visual.(Particle_Flash); !is_flash {
+			continue
+		}
+		flash_found = true
+		testing.expectf(
+			t,
+			linalg.length(particle.position - expected) < 0.01,
+			"muzzle flash should spawn at the gun's muzzle %v, got %v",
+			expected,
+			particle.position,
+		)
+	}
+	testing.expect(t, flash_found, "sanity check: firing should have spawned a muzzle flash")
+}
+
+@(test)
+test_fireball_spawns_at_the_magic_orb_not_the_player_anchor :: proc(t: ^testing.T) {
+	clear(&game.bullets)
+	defer clear(&game.bullets)
+	clear(&game.particles)
+	defer clear(&game.particles)
+
+	weapon := weapon_create(.Fire_Wand) // Semi_Automatic - resolves on Windup completion
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	windup_duration := weapon.windup_fraction / weapon.action_rate
+	update_weapon(&weapon, windup_duration + 0.01, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+	testing.expect(t, len(game.bullets) == 1, "sanity check: Fire_Wand should have cast one fireball")
+
+	expected := test_expected_muzzle(.Fire_Wand)
+	testing.expectf(
+		t,
+		linalg.length(game.bullets[0].position - expected) < 0.01,
+		"fireball should spawn at the wand's orb %v, got %v",
+		expected,
+		game.bullets[0].position,
+	)
 }

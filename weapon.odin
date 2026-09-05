@@ -546,9 +546,15 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enem
 // Melee_Weapon, Fireball, Flamethrower) keeps tracking live, so a Resolve may
 // whiff if the target moved or died since Trigger.
 resolve_weapon_action :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) -> bool {
+	// projectiles and muzzle effects come out of the weapon's far end, not
+	// the player's feet anchor - see weapon_muzzle_position. Hit-checks below
+	// (melee arc, flamethrower cone, Poison_Cloud range) keep using `origin`,
+	// so reach is unchanged.
+	muzzle := weapon_muzzle_position(weapon^, origin, aim_dir)
+
 	switch &v in weapon.variant {
 	case Gun:
-		return try_fire_gun(weapon, &v, origin, aim_dir)
+		return try_fire_gun(weapon, &v, muzzle, aim_dir)
 	case Melee_Weapon:
 		return try_swing_melee(&v, weapon.damage, origin, aim_dir, enemies)
 	case Magic:
@@ -556,7 +562,7 @@ resolve_weapon_action :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec
 		if v.spell_kind == .Poison_Cloud {
 			target = v.locked_target
 		}
-		return try_cast_magic(&v, weapon_visuals[weapon.kind], weapon.damage, origin, aim_dir, target, enemies)
+		return try_cast_magic(&v, weapon_visuals[weapon.kind], weapon.damage, origin, aim_dir, muzzle, target, enemies)
 	}
 	return false
 }
@@ -598,7 +604,41 @@ weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
 	return clamp(1 - weapon.windup_timer / windup_duration, 0, 1)
 }
 
-MAGIC_MUZZLE_OFFSET :: 14.0 // px along aim_dir that Fire_Wand's charge/Flame_Staff's tick burst spawn from
+// -- muzzle geometry -------------------------------------------------------
+//
+// The `origin` threaded through try_use_weapon/update_weapon is the player's
+// bottom-center anchor - where they *stand* (see actor_collision_rect's note,
+// main.odin), not where the weapon *points from*. Anything that visually comes
+// out of the weapon (bullets, fireballs, muzzle flash/streaks, cast particles)
+// must spawn at the far end of the drawn shape instead, or it reads as firing
+// out of the player's feet. Gameplay hit-checks (melee/flamethrower arcs,
+// Poison_Cloud range clamping) deliberately keep using `origin`, so moving the
+// visuals never quietly changes reach.
+//
+// Deliberately animation-free: draw_weapon's Windup pullback and
+// Follow-through recoil displace the drawn pivot on top of this, but both are
+// zero at the instant a weapon Resolves, and the recoil that starts right
+// after reads correctly as the gun kicking back away from where the shot left.
+
+WEAPON_PIVOT_HEIGHT :: ACTOR_SIZE.y / 2 // px above the player's feet anchor (main.odin) - roughly chest height
+
+// the weapon's grip point: chest height on the player's feet anchor. Shared
+// with draw_weapon (main.odin) so the shape the player sees and the point its
+// effects spawn from can never drift apart.
+weapon_pivot_position :: proc(origin: Vec2) -> Vec2 {
+	return origin + Vec2{0, -WEAPON_PIVOT_HEIGHT}
+}
+
+// the far end of the weapon along aim_dir: a Gun's barrel tip, a Magic rod's
+// orb, a Melee blade's tip. Reuses the pair that already answers this for
+// drawing - weapon_world_frame_size for how big the glyph is in the world,
+// weapon_icon_reach for how far along it that kind's business end sits - so a
+// per-kind silhouette retune (ADR-0018) moves the effects with the shape
+// automatically, including through the F8 weapon_visual_scale slider.
+weapon_muzzle_position :: proc(weapon: Weapon, origin, aim_dir: Vec2) -> Vec2 {
+	reach := weapon_world_frame_size(weapon) * weapon_icon_reach[weapon.kind]
+	return weapon_pivot_position(origin) + aim_dir * reach
+}
 
 // spawns this frame's Magic windup/cast particles (ticket 06's confirmed
 // "all three need real new art" finding) - called once per frame from
@@ -620,7 +660,7 @@ update_magic_cast_particles :: proc(weapon: Weapon, origin, aim_dir: Vec2, mouse
 			return
 		}
 		progress := weapon_windup_progress(weapon)
-		spawn_fire_wand_charge_particle(origin + aim_dir * MAGIC_MUZZLE_OFFSET, progress)
+		spawn_fire_wand_charge_particle(weapon_muzzle_position(weapon, origin, aim_dir), progress)
 	case .Poison_Cloud:
 		if weapon.windup_timer <= 0 {
 			return
@@ -642,7 +682,7 @@ gun_can_fire :: proc(gun: Gun) -> bool {
 	return gun.reload_timer <= 0 && gun.ammo_in_clip > 0
 }
 
-try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool {
+try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, muzzle, aim_dir: Vec2) -> bool {
 	if !gun_can_fire(gun^) {
 		start_reload(weapon)
 		return false
@@ -650,13 +690,13 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, origin, aim_dir: Vec2) -> bool 
 
 	gun.ammo_in_clip -= 1
 
-	fire_pellets(weapon^, gun^, origin, aim_dir)
+	fire_pellets(weapon^, gun^, muzzle, aim_dir)
 	// muzzle effect (art-revamp ticket 02) - the enhanced particle layer
 	// (streak burst + flash) confirmed to supply the "punch" plain
 	// icon-transform lacked
 	visual := weapon_visuals[weapon.kind]
-	spawn_streak_burst(origin, aim_dir, visual.muzzle_streak_count, visual.muzzle_spread_degrees, WEAPON_GUN_COLOR)
-	spawn_muzzle_flash(origin, rl.Fade(rl.WHITE, 0.8), visual.muzzle_flash_radius)
+	spawn_streak_burst(muzzle, aim_dir, visual.muzzle_streak_count, visual.muzzle_spread_degrees, WEAPON_GUN_COLOR)
+	spawn_muzzle_flash(muzzle, rl.Fade(rl.WHITE, 0.8), visual.muzzle_flash_radius)
 
 	if gun.ammo_in_clip <= 0 {
 		start_reload(weapon)
@@ -721,15 +761,15 @@ try_cast_magic :: proc(
 	magic: ^Magic,
 	visual: Weapon_Visual,
 	damage: f32,
-	origin, aim_dir, target: Vec2,
+	origin, aim_dir, muzzle, target: Vec2,
 	enemies: []Enemy,
 ) -> bool {
 	switch magic.spell_kind {
 	case .Fireball:
-		cast_fireball(magic^, damage, origin, aim_dir)
-		spawn_muzzle_flash(origin, WEAPON_MAGIC_ORB_COLOR, visual.muzzle_flash_radius) // art-revamp ticket 02
+		cast_fireball(magic^, damage, muzzle, aim_dir)
+		spawn_muzzle_flash(muzzle, WEAPON_MAGIC_ORB_COLOR, visual.muzzle_flash_radius) // art-revamp ticket 02
 	case .Flamethrower:
-		cast_flamethrower_tick(magic^, damage, origin, aim_dir, enemies)
+		cast_flamethrower_tick(magic^, damage, origin, aim_dir, muzzle, enemies)
 	case .Poison_Cloud:
 		cast_poison_cloud(magic^, damage, target)
 		// the flash is the Magic family's own cast primitive, and
@@ -748,7 +788,7 @@ try_cast_magic :: proc(
 // single-target cap). Also fires a cosmetic per-tick particle burst (ticket
 // 06's confirmed finding - see spawn_flame_tick_burst) whether or not it hit
 // anything, same as the always-on flamethrower cone draw.
-cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2, enemies: []Enemy) {
+cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir, muzzle: Vec2, enemies: []Enemy) {
 	cone := Melee_Weapon{range = magic.range, arc_degrees = magic.arc_degrees}
 
 	#reverse for enemy, i in enemies {
@@ -756,7 +796,7 @@ cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir: Vec2,
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
 
-	spawn_flame_tick_burst(origin + aim_dir * MAGIC_MUZZLE_OFFSET)
+	spawn_flame_tick_burst(muzzle)
 }
 
 // clamps `target` to at most `max_range` from `origin`, preserving direction -
