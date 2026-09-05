@@ -68,8 +68,11 @@ caller-multiplied, so one panel can scroll faster than another.
   into the window's slack, so Tiles and Collisions mode lay out exactly as
   before. The Debug window and the Spawn Trigger list are deliberately left
   alone.
-- `update_editor_camera` skips wheel pan/zoom when `layout.scroll_consumed()`
+- `update_editor_camera` skips wheel pan/zoom when `layout.scroll_captured()`
   was true, matching the existing one-frame-stale `editor.ui_hovered` pattern.
+  Capture is decided by where the pointer is, not by a delta having arrived:
+  a trackpad reports nothing on some frames mid-gesture, and a delta-driven
+  flag dropped on those frames, letting the camera pan in the gaps.
 
 ### Landing
 

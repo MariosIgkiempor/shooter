@@ -120,12 +120,13 @@ update_editor_camera :: proc() {
 	camera := &editor.camera
 	wheel := get_mouse_wheel_move()
 
-	// a notch the editor's ui already scrolled must not also pan or zoom the
-	// world. One frame stale, like editor.ui_hovered below: the ui is declared
-	// during the draw phase, so the newest answer available here is the one
-	// last frame's layout produced - and the pointer was over the same panel
-	// then, which is what makes that good enough
-	if layout.scroll_consumed() {
+	// a gesture the editor's ui owns must not also pan or zoom the world. One
+	// frame stale, like editor.ui_hovered below: the ui is declared during the
+	// draw phase, so the newest answer available here is the one last frame's
+	// layout produced - and it's about where the pointer is, not about a delta
+	// having arrived, so it holds steady across a trackpad gesture's gaps
+	// rather than letting the camera drift between them
+	if layout.scroll_captured() {
 		wheel = {}
 	}
 
