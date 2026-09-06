@@ -1,7 +1,7 @@
 # Per-map theming and ambient effects
 
 Type: prototype
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -66,3 +66,28 @@ Vignette and light wash draw **after `end_using_camera`**, so they stay lens eff
 3. **Which ambient effect earns its keep**, and whether stacking (F11) reads as atmosphere or as mud.
 4. **Do the floor patches reopen the locked "no per-tile colour noise" rule**, or are they a distinct decal layer?
 5. **Does the Map Selection swatch have to be authored separately**, or can it just be the wall colour? The corner square shows the derived answer beside the world.
+
+## Answer
+
+**A Map authors a floor colour, a wall colour, and the set of ambient effects it runs — on the Map itself, not in a table beside it.** `map_icon_colors` is deleted and the Map Selection swatch derives from the wall colour. Judged in motion at gameplay zoom on `prototype/map-theming` (commit `e02f899`). [ADR-0024](../../../docs/adr/0024-a-map-owns-its-visual-identity.md).
+
+### Settled
+
+- **Two authored colours: floor and wall.** The bevel is mixed between them; the ambient accent is pushed off the wall toward white. One authored colour was rejected — everything then hangs off a single hue ramp including the floor, which is most of the screen. A fuller ramp with an independently authored accent was rejected as two more sliders and two more ways to author a Map ugly, for a capability (an ambient colour appearing nowhere in the tiles) that nothing asked for.
+- **The palette is promoted onto `Map`**, riding through `data/maps/*.json` and the bake beside `player_start`, `time_limit`, `victory_multiplier` and `rung`. The `map_icon_colors` comment argued against exactly this, and both halves of its argument are now stale: the editor is growing a map-level panel regardless ([Map layout authoring model](02-map-layout-authoring-model.md), [Map ladder shape](03-map-ladder-shape.md)), and "a colour picker" is really six `ui.slider` rows — the widget `tuning_row` already drives for every `^f32` tunable. What actually decided it is the alternative's failure mode: a code-side `[Map_Name]Theme` table is a partial array literal over an enum `map_builder` generates from a filename listing, so a sixth map file gets a fully transparent floor and wall with nothing to catch it.
+- **The Map Selection swatch derives from the wall colour**; it is not separately authored. A separate field is a second source of truth for "what colour is this place", free to disagree with the world it advertises — which is the exact failure this ticket named. Deriving makes it unrepresentable. `map_icon_colors` and `icon_swatch`'s "placeholder vocabulary, worth replacing at map two" note both resolve here.
+- **Three ambient effects: motes, floor patches, light wash.** Drifting motes in the air above the actors; large off-grid patches on the floor beneath them; a directional screen-space gradient.
+- **No vignette.** Built and rejected. The screen edges are where enemies enter, so darkening them trades legibility for atmosphere in the one place a twin-stick game cannot afford it. The general rule it establishes: an ambient effect carries no information and must never occlude any.
+- **The ambient set is authored per Map, not fixed.** A fixed set tinted per Map needs no authoring and cannot be authored wrong — and is just palette variation with an extra step. Colour alone does not carry five Maps: with one footprint and one tile vocabulary across rungs 1–4, five hues read as five palettes rather than five places, so the variation has to be in the ambience or it is not there at all. Floor patches on a clean stone hall are the case that makes it concrete.
+- **Floor patches do not reopen the locked per-tile-colour-noise rule.** They are a decal layer with no relationship to the tile grid. What that rule protects is the instant floor-vs-wall read, and it is attacked by *adjacent tiles differing*, not by a blotch spanning several of them.
+- **Tile rendering is untouched**, as the ticket promised: flat fill, `Tile.collides`, the darker inset bevel, no grid lines. A theme chooses the colours those rules use.
+- **Ambient effects keep their own fixed budget, separate from `game.particles`.** That pool is unbounded, event-driven, cleared by `reset_particles` at a Run boundary, and drawn in one fixed z-slot. Ambience is steady-state, outlives nothing in particular, and needs two z-slots — motes in front of actors, patches behind them — so one pool could not express it even if the lifecycle matched.
+
+### Not decided here
+
+- **The actual five palettes.** The bench's Desert / Warren / Hall / Ring / Keep colours are legible stand-ins picked to separate the extremes, not authored content — the same deferral every other ticket on this map made for its numerics. Authoring them belongs with the maps themselves.
+- **Which effects each rung runs.** Same reason: it is authoring, and it is authored in the editor beside the palette.
+
+### Follow-on
+
+- **[Content-scale integration sweep](09-content-scale-integration-sweep.md)** takes the `Map` format growth, the two new draw layers, the unculled tilemap loop, and the light wash's interaction with the blurred backdrop.
