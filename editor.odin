@@ -49,9 +49,6 @@ editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
 	selected_tile: Vec2i,
-	// whether the pointer was over an editor window last frame; world
-	// painting is suppressed while true
-	ui_hovered:    bool,
 	// palette cell nodes declared this frame, so tiles can be drawn over
 	// them after the ui render commands; allocated once, rebuilt each frame
 	palette_cells: [dynamic]Palette_Cell,
@@ -121,11 +118,12 @@ update_editor_camera :: proc() {
 	wheel := get_mouse_wheel_move()
 
 	// a gesture the editor's ui owns must not also pan or zoom the world. One
-	// frame stale, like editor.ui_hovered below: the ui is declared during the
-	// draw phase, so the newest answer available here is the one last frame's
-	// layout produced - and it's about where the pointer is, not about a delta
-	// having arrived, so it holds steady across a trackpad gesture's gaps
-	// rather than letting the camera drift between them
+	// frame stale, like the shared ui_hovered it sits beside (hud.odin): the
+	// ui is declared during the draw phase, so the newest answer available
+	// here is the one last frame's layout produced - and it's about where the
+	// pointer is, not about a delta having arrived, so it holds steady across
+	// a trackpad gesture's gaps rather than letting the camera drift between
+	// them
 	if layout.scroll_captured() {
 		wheel = {}
 	}
@@ -198,7 +196,7 @@ update_editor :: proc() {
 		return
 	}
 
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -219,7 +217,7 @@ update_editor :: proc() {
 // left-drag marks tiles as colliding, right-drag clears them. only existing
 // tiles can collide: painting over an empty spot does nothing
 update_collisions_mode :: proc(hovered_coord: Vec2i) {
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -243,7 +241,7 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 // one there is blocked
 update_rectangle_tool :: proc(hovered_coord: Vec2i) {
 	if !editor.dragging {
-		if editor.ui_hovered {
+		if ui_hovered {
 			return
 		}
 
@@ -339,7 +337,7 @@ draw_editor_world_overlay :: proc() {
 			}
 		}
 
-		if !editor.ui_hovered {
+		if !ui_hovered {
 			draw_rectangle_lines(tile_world_rect(hovered_tile_coords(), tile_size), rl.ORANGE, 1)
 		}
 
@@ -359,7 +357,7 @@ draw_editor_world_overlay :: proc() {
 		return
 	}
 
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -371,7 +369,9 @@ draw_editor_world_overlay :: proc() {
 
 draw_editor :: proc() {
 	clear(&editor.palette_cells)
-	editor.ui_hovered = false
+	// cleared before the ui is declared, re-recorded by record_ui_hover from
+	// inside the window below
+	ui_hovered = false
 
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT), get_mouse_wheel_move())
 	ui.begin_frame(game.window_width, game.window_height)
@@ -1189,16 +1189,5 @@ palette_cell :: proc(x, y: int) {
 				coords = {i32(x), i32(y)},
 			},
 		)
-	}
-}
-
-// called just inside ui.begin: the current open node is the window content,
-// whose parent is the window itself (title bar included)
-record_ui_hover :: proc() {
-	content := layout.get_node(layout.current_open_node())
-	window := layout.get_node(content.parent)
-
-	if layout.is_node_with_id_hovered(window.id) {
-		editor.ui_hovered = true
 	}
 }

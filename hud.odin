@@ -88,6 +88,35 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 	}
 }
 
+// whether the pointer was over one of the two vendor/ui surfaces last frame.
+// A gesture a ui surface owns must not also act on the world: the editor
+// suppresses tile painting and camera panning while true (editor.odin), and
+// the F8 panel suppresses weapon firing (main.odin), so a click that presses
+// a panel button never also fires the equipped weapon.
+//
+// One shared flag rather than one per surface, because the two are mutually
+// exclusive - F8 requires .Playing and the editor only draws in .Editing, so
+// at most one of them is live in any frame. Each surface clears it before its
+// own begin_frame and records into it from inside its window.
+//
+// One frame stale by construction: the ui is declared during the draw phase,
+// so the newest answer available to an update is the one last frame's layout
+// produced - and it's about where the pointer *is*, not about an event having
+// arrived, so it holds steady across a trackpad gesture's gaps rather than
+// flickering between them.
+ui_hovered: bool
+
+// called just inside ui.begin: the current open node is the window content,
+// whose parent is the window itself (title bar included)
+record_ui_hover :: proc() {
+	content := layout.get_node(layout.current_open_node())
+	window := layout.get_node(content.parent)
+
+	if layout.is_node_with_id_hovered(window.id) {
+		ui_hovered = true
+	}
+}
+
 // -- Screens & Reveal/Dismiss transitions (ADR-0014) -------------------------
 // See CONTEXT.md's Screen / Menu element / Reveal / Dismiss / Reveal delay
 // entries for the vocabulary below, and .scratch/menu-ui-polish/issues/
