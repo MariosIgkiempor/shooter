@@ -35,3 +35,15 @@ An affix has nowhere to show itself. Every identity channel an enemy has is alre
 A widened `Spawn_Composition_Entry` was the only place an affix could have been authored, and narrowing that entry to `{kind, count}` is what this decision is. So the rule generalises: **nothing modifies an enemy after the stamp** — not an affix, not per-rung scaling, not an aura, not a Run-wide multiplier. A harder enemy is a different kind, authored and named.
 
 What the elite tier was wanted for is real and survives without it. `MAX_ENEMIES :: 24` caps the field, and the ladder's fourth rung is authored at peak concurrency, so past that point pressure can only come from heavier bodies rather than more of them. Those are ordinary roster entries. They carry one authoring constraint that comes from the code rather than from taste: `update_enemies` builds a single shared `build_inflated_collision_map(tilemap, 1)` for every enemy, and the boss's own second map is affordable only because there is exactly one boss. A heavy kind therefore stays inside that one-tile envelope — at or below the 48px that `ENEMY_SIZE_MAX` held before the boss raised it, which the size derivation puts at roughly 136 health.
+
+## Amendment: the kind persists by name, not by ordinal
+
+Found while resolving the content-expansion map's *Enemy catalog* ticket, which authored the first roster larger than one entry.
+
+This decision removed a union-guessing persistence hazard and introduced an ordinal one in the same move. The phrase above is "with a plain enum there" — but an enum marshals as its **ordinal**, and `Spawn_Composition_Entry` is persisted in every `data/maps/*.json`. Before this decision `Enemy_Kind` never rode through a file at all; after it, inserting a kind mid-enum silently renumbers every composition entry in every map, and Grunts become Wraiths. The failure is invisible until the wrong enemies spawn.
+
+The same problem was solved elsewhere in the codebase before it arrived here: `Map_Name` is generated in filename-sorted order, so a new map file renumbers every case after it, and `active_map_pointer` therefore stores `map_identity_string(name)` rather than the enum value. ADR-0022 made that the rule for the Account's cleared set for the same reason.
+
+**A composition entry persists its kind by name.** The alternative — a convention that kinds are only ever appended to the enum — has no enforcement and a silent failure mode, and a nine-entry roster expected to grow makes mid-enum insertion a certainty rather than a risk. Persisting by name also frees `Enemy_Kind` to be ordered readably, by ladder rung, instead of in append-only historical order.
+
+The narrowing this ADR makes is unchanged: a composition still authors `(kind, count)` and cannot tune an enemy. Only the wire form of the kind changes.

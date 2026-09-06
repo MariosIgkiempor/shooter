@@ -34,7 +34,6 @@ Layered on top: a same-Movement-Style **Separation** steering force so enemies d
 
 ## Not yet specified
 
-- Spawner content authoring — which levels/spawners actually place Floater and Swarmer enemies, and in what mix (parallel to how the weapon-types map deferred weapon tier-ladder content authoring).
 
 ## Out of scope
 

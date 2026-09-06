@@ -24,7 +24,7 @@ An implementation-ready design spec for retiring the permanent Class lock. Any w
 
 ## Not yet specified
 
-- Exact numeric values — `base_xp`/`xp_multiplier` for the one `Enemy_Kind` today, the relative weights of the three XP-formula terms, and `Account_Stat` `base_price`/`price_growth` — balance/content-authoring, not a design branch. Left for the implementation session, same as the equivalent gap in `.scratch/shop-and-upgrades/`.
+- Exact numeric values — the relative weights of the three XP-formula terms and `Account_Stat` `base_price`/`price_growth` — balance/content-authoring, not a design branch. Left for the implementation session, same as the equivalent gap in `.scratch/shop-and-upgrades/`. **The per-`Enemy_Kind` payout half of this graduated out**: [Content expansion](../content-expansion/map.md)'s [Enemy catalog](../content-expansion/issues/04-enemy-catalog.md) authored a nine-kind roster with Gold anchored at 0.6 x `max_health`, and collapsed `base_gold`/`gold_multiplier` into a single field, since only their product was ever read.
 
 ## Out of scope
 
