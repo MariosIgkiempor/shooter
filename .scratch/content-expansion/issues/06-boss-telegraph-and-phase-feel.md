@@ -1,7 +1,7 @@
 # Boss telegraph and phase feel
 
 Type: prototype
-Status: claimed
+Status: resolved
 
 ## Question
 
@@ -71,4 +71,36 @@ Rotations are `{Slam, Volley}` / `{Slam, Lunge, Volley}` / `{Lunge, Slam, Lunge}
 3. Whether the Resource indicator crossing a threshold is a legible phase transition **by itself** (F11 at its default), and if not, what the minimum addition is.
 4. Whether the volley's Tell is information or noise.
 5. Whether a boss earns screen shake where ordinary enemies do not. Note `damage_player` already shakes proportional to damage taken, so F12 is specifically about shaking on *resolve* regardless of whether the attack connected.
+
+## Answer
+
+**A Tell is the claimed ground plus a body flash, 0.55s for a committed area attack, resolving with screen shake — and a phase change is legible on the Resource indicator alone.** Judged in motion at gameplay zoom on `prototype/boss-tell` (commits `aa6b349`, `bca142d`).
+
+### Settled
+
+- **Form: the ground zone and the body flash together**, not either alone. The floor carries *where*, the body carries *when*, and the ticket's four candidates split cleanly along that line — the body-only forms (flash, scale swell, pull-back) all announce timing without saying where to stand, and at 55px of escape that is not actionable. The combination was added to the bench as a fifth form and confirmed rather than inferred from seeing the two separately.
+- **The zone draws at full extent from the Tell's first frame and fills as the Tell runs.** Extent immediately, timing progressively — a zone that grows into its final shape withholds the half of the information the player needs first. Inherited from `spawn_poison_windup_puff`, which already grows an area under the player's own Magic Windup.
+- **0.55 seconds** for a committed area attack, as the reference the catalog tunes around. At `PLAYER_BASE_MOVE_SPEED` (100 px/s) that buys 55px of escape against a 90px slam radius — tight, and deliberately so: 0.35s was unreadable when caught adjacent and 1.20s was tedious by the third repetition.
+- **Duration is authored per attack, not per Enemy Kind.** What makes a duration fair is how far the player must travel to leave *that* attack's area, and that differs between attacks on the same enemy. The Tell-carrying **Attack Style** variant therefore holds a rotation of *(attack, tell seconds)* pairs rather than a single duration field.
+- **A Tell belongs to committed *area* attacks only.** Ordinary `Ranged` fire stays untelegraphed exactly as it is today: enemy bullets travel at 190 px/s against the player's 100 and are readable on sight, so a lane drawn before them restates what the bullets say a moment later. The volley was built into the bench as the control for precisely this, and it read as noise. This narrows the reopened `Attack_Style` slot from "a telegraphed attack" to "an attack that claims ground".
+- **The area locks its bearing at the Tell's start** and does not track the player through it. This closes the per-attack question [ADR-0023](../../../docs/adr/0023-enemy-tells-are-absolute-durations.md) explicitly deferred to [ADR-0005](../../../docs/adr/0005-ground-targeted-casts-lock-at-trigger.md)'s split: an area that follows the player cannot be escaped by moving, which makes its own Tell decorative.
+- **The enemy plants for the whole Tell.** Committing visibly means committing in place; a Tell that chases while it winds up spends its own warning.
+- **Screen shake fires on resolve**, whether or not the attack connected. `damage_player` already shakes in proportion to damage taken, so this is additive and lands only on Tell-resolving attacks — which is what makes it a boss's shake rather than every enemy's.
+- **Phase transitions are legible on the world-space Resource indicator alone.** No palette shift, no freeze, no burst. Both richer cues were built and both were judged unnecessary.
+
+### Why bar-only works, which this ticket did not anticipate
+
+[Boss model](05-boss-model.md) ruled out movement and adds as transition cues and concluded that this made phase legibility *harder*. It missed a third cue that comes free: **pacing**. A phase changes the rotation *and its recovery* — 1.50s → 1.15s → 0.80s between attacks in the bench — so the boss visibly gets busier at exactly the moment the bar crosses a threshold. The bar says a threshold was crossed; the pacing says something changed. Neither alone would carry it, and neither had to be designed.
+
+The consequence is that **recovery is authored per phase, not per Enemy Kind** — it is load-bearing for legibility, not just for difficulty.
+
+### Not decided here
+
+- **Every number in the bench is a prototype value**, not authored content: 600 health, 84px, 46 px/s, slam radius 90, lunge 260x70, the volley spread, and the per-phase recovery figures. [Enemy catalog](04-enemy-catalog.md) authors the real ones; only 0.55s carries forward, and as a reference rather than a constant.
+- **Whether each committed area attack needs a visually distinct zone shape** (disc for a slam, lane for a lunge) or whether one shape with different extents suffices. The bench used distinct shapes and nothing argued against them, but nothing tested a roster large enough to make them collide either.
+
+### Follow-on
+
+- **[Enemy catalog](04-enemy-catalog.md)** takes a narrower brief for its spent `Attack_Style` slot, plus the 0.55s reference and per-attack durations.
+- **[Content-scale integration sweep](09-content-scale-integration-sweep.md)** takes the floor draw layer, the per-attack Tell state, and per-phase recovery.
 

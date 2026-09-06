@@ -15,3 +15,13 @@ What does carry over from ADR-0004 is the rule that makes a telegraph honest: **
 The Tell is not boss-only. It lives on a new **Attack Style** variant available to any **Enemy Kind**, on the bar [ADR-0020](0020-enemy-kind-is-the-authored-unit.md)'s effort set for reopening that axis: a variant must buy a new *player response*, not a stat. A telegraphed committed attack is the first enemy action a player can react to rather than only keep away from, and sharing one piece of machinery means the `Charger` Movement Style's committed dash and the boss's attacks read as the same vocabulary — and that the ladder can teach the read on a lower rung before its top rung demands it.
 
 We considered giving the boss its own bespoke telegraph path outside the axes, since there is exactly one boss. Rejected: it would make the boss's attacks a different animal from every other enemy's for no gain, and it forfeits teaching the read early. We also considered leaving enemy attacks untelegraphed and building the boss's difficulty from volume and health instead — rejected as the thing that makes a boss a big-statted ordinary enemy, which is precisely what the boss was scoped not to be.
+
+## Amendments
+
+**Amended by [Boss telegraph and phase feel](../../.scratch/content-expansion/issues/06-boss-telegraph-and-phase-feel.md)** (prototype `prototype/boss-tell`), which judged the machinery in motion and narrowed it in two ways this ADR left open:
+
+- **A Tell attaches to a committed *area* attack, not to every enemy attack.** Ordinary `Ranged` fire keeps no Tell: enemy bullets travel at roughly twice the player's move speed and are readable on sight, so a telegraph drawn before them restates what the bullets themselves say a moment later. The reopened Attack Style slot is therefore narrower than "a telegraphed attack" — it is "an attack that claims ground".
+- **A Tell's duration is authored per attack, not per Enemy Kind.** The reaction budget is set by how far the player must travel to leave *that* attack's area, which differs between attacks on the same enemy, so a single per-kind duration would over-serve one and under-serve another. The variant therefore carries a rotation of attack-and-duration pairs rather than one duration field.
+
+It also closed the per-attack question this ADR explicitly deferred — whether an attack tracks the player through the Tell or locks its target at the start ([ADR-0005](0005-ground-targeted-casts-lock-at-trigger.md)'s split). For a committed area attack the answer is **lock at Tell start**: an area that tracks the player cannot be escaped by moving, which makes its Tell decorative.
+
