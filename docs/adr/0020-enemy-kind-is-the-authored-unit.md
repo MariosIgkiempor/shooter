@@ -25,3 +25,13 @@ A reader finding those mirrors gone should look here rather than assume they wer
 A Map can no longer author a one-off tuned enemy, and numeric tuning moves out of the level editor into source: `enemy_presets` is a table in `enemy.odin`, tuned by editing it and rebuilding, exactly as `weapon_presets` has always been. The editor's composition UI collapses to a kind selector and a count.
 
 Both were accepted deliberately. A variation worth authoring is worth naming, and a `data/enemies.json` would reintroduce a persisted file of union-shaped content — the precise hazard this decision removes.
+
+## Amendment: the elite/affix tier, considered and rejected
+
+A later ticket asked whether an **elite** tier belongs between ordinary enemies and the boss, and specifically whether an elite should be an affix applied to a preset at spawn rather than a kind of its own. It should not, and the reason is stronger than the stamp rule above.
+
+An affix has nowhere to show itself. Every identity channel an enemy has is already spoken for: colour is a per-kind preset field, size is *derived* from `max_health` and deliberately not authorable, and opacity is the remaining-health fade. So an affix must either take a fourth channel that does not exist, or borrow one that already means something else. Borrowing size is worst of all, because a health affix does not merely fail to mark itself — it makes the body physically grow, so its own cue contradicts the base kind's silhouette. The player sees a different enemy, which is exactly the outcome the paragraph above rejects.
+
+A widened `Spawn_Composition_Entry` was the only place an affix could have been authored, and narrowing that entry to `{kind, count}` is what this decision is. So the rule generalises: **nothing modifies an enemy after the stamp** — not an affix, not per-rung scaling, not an aura, not a Run-wide multiplier. A harder enemy is a different kind, authored and named.
+
+What the elite tier was wanted for is real and survives without it. `MAX_ENEMIES :: 24` caps the field, and the ladder's fourth rung is authored at peak concurrency, so past that point pressure can only come from heavier bodies rather than more of them. Those are ordinary roster entries. They carry one authoring constraint that comes from the code rather than from taste: `update_enemies` builds a single shared `build_inflated_collision_map(tilemap, 1)` for every enemy, and the boss's own second map is affordable only because there is exactly one boss. A heavy kind therefore stays inside that one-tile envelope — at or below the 48px that `ENEMY_SIZE_MAX` held before the boss raised it, which the size derivation puts at roughly 136 health.

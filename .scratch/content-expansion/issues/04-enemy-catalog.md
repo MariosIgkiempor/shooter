@@ -1,7 +1,6 @@
 # Enemy catalog
 
 Type: grilling
-Blocked by: 01, 03, 10
 Status: open
 
 ## Question
@@ -27,3 +26,14 @@ Constraints to design against:
 - Existing coverage: today the only authored composition is Grounded/Floater/Swarmer crossed with Melee/Ranged/none. The catalog should say which of those nine cells are actually worth shipping, not assume all of them are.
 
 This also graduates [Enemy behaviours](../../enemy-behaviours/map.md)'s fog item "Spawner content authoring — which levels/spawners actually place Floater and Swarmer enemies, and in what mix". Clear it from that map when this resolves.
+
+Unblocked: [Enemy variety model](01-enemy-variety-model.md), [Map ladder shape](03-map-ladder-shape.md) and [Elite and affix tier](10-elite-and-affix-tier.md) are all resolved.
+
+[Elite and affix tier](10-elite-and-affix-tier.md) settled that there is **no elite tier and no affix layer** — a heavy enemy is an ordinary roster entry authored here — and hands this ticket four constraints:
+
+- **Heavy kinds cap at roughly 136 health (~48px)**, about 2.7x a 50-health basic. Not taste: `update_enemies` builds one shared `build_inflated_collision_map(tilemap, 1)` for every enemy ([enemy.odin:708](../../../enemy.odin)), and a body past that one-tile envelope needs its own collision map — affordable for exactly one boss, not for a kind that appears several at a time. `ENEMY_SIZE_MAX` rises for the boss, so this ceiling is an authoring rule rather than something the clamp enforces.
+- **No kind below the boss breaks the hue convention.** [Enemy variety model](01-enemy-variety-model.md) left it breakable for "a boss or elite"; that licence is the boss's alone, since a heavy appears in crowds where hue is how the player reads what a body does. Relatedness between a heavy and its light cousin comes free — same hue, bigger square.
+- **Price a heavy at roughly the bodies it replaces**, and give it no guaranteed drop. `maybe_spawn_pickup` pays Gold about one kill in twelve ([pickup.odin:60](../../../pickup.odin)), so a heavy quadruples payout variance for flat expected income — accepted, because Gold is Account-scoped.
+- **Nothing scales an enemy after the stamp.** No per-rung health, no aura, no Run-wide multiplier. A harder enemy is a different named kind, and the rung briefs are filled with kinds and counts only.
+
+Heavy kinds are also what rung 4 needs: `fire_spawn_composition` returns outright at `MAX_ENEMIES :: 24` ([enemy.odin:601](../../../enemy.odin)), and rung 4 is authored at peak concurrency, so past that point pressure comes from heavier bodies rather than more of them. A Tell-carrier is the other case — it plants for its whole Tell, which needs a body that survives standing still.
