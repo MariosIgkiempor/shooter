@@ -96,8 +96,11 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 //
 // One shared flag rather than one per surface, because the two are mutually
 // exclusive - F8 requires .Playing and the editor only draws in .Editing, so
-// at most one of them is live in any frame. Each surface clears it before its
-// own begin_frame and records into it from inside its window.
+// at most one of them is live in any frame. Cleared once at the top of
+// draw_game (main.odin) rather than by each surface, since a surface that
+// isn't drawn can't clear anything: a panel closed while the pointer sat over
+// it would otherwise leave this stuck true. Whichever surface does draw
+// re-records into it via record_ui_hover.
 //
 // One frame stale by construction: the ui is declared during the draw phase,
 // so the newest answer available to an update is the one last frame's layout
@@ -240,7 +243,8 @@ update_menu_transition :: proc() {
 }
 
 // the mirror image of current_screen's mapping - the one place that
-// actually writes program_mode/run_ended/shopping for a Screen change.
+// actually writes program_mode/run_ended/shopping for a Screen change, and
+// the one place that closes the debug panel a Screen opens over.
 // Always rewrites run_ended/shopping together (rather than e.g. only ever
 // setting `shopping = true` for .Shop) so they can never drift out of the
 // mutual exclusivity current_screen already assumes.
@@ -249,6 +253,14 @@ apply_screen_kind :: proc(to: Maybe(Screen_Kind)) {
 
 	game.run_ended = has_screen && screen == .Run_End
 	game.shopping = has_screen && screen == .Shop
+
+	// the debug panel doesn't pause and so can still be open when a Screen
+	// opens over it (ADR-0021) - closed here rather than at the Run End and
+	// Shop call sites for the same reason this proc exists at all: one writer,
+	// so a Screen added later can't forget
+	if has_screen {
+		game.debug.panel_open = false
+	}
 
 	if !has_screen {
 		if game.menu_transition.current == .Map_Selection {

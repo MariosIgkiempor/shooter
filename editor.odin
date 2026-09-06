@@ -369,9 +369,6 @@ draw_editor_world_overlay :: proc() {
 
 draw_editor :: proc() {
 	clear(&editor.palette_cells)
-	// cleared before the ui is declared, re-recorded by record_ui_hover from
-	// inside the window below
-	ui_hovered = false
 
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT), get_mouse_wheel_move())
 	ui.begin_frame(game.window_width, game.window_height)

@@ -1,0 +1,19 @@
+# The F8 debug panel is non-modal while the Shop and Run End pause
+
+Status: accepted
+
+`game.run_ended` and `game.shopping` both stop `update_game_state` dead, and until now `game.debug.panel_open` did too — the F8 panel was modelled on `draw_shop_ui`'s panel/pause pattern. That made the panel useless for the one job it exists to do. Every visualizer on it (Colliders, Weapon Area, Attack Ranges, Movement Styles, Pathfinding) describes something in *motion*: enemy steering, Separation, the BFS path, a weapon's hit area during a Follow-through. Judging whether a toggle shows what you need meant toggling, closing, resuming, watching, and reopening, reconstructing across the pause boundary from memory.
+
+The panel is now a non-modal overlay: opening it leaves the simulation running, and it is anchored bottom-left rather than centred so it sits clear of both the player and `draw_hud_counters`' top-right row. The Shop and the Run End modal keep pausing — they are Screens the player is *in*, where the game standing still is the point; the debug panel is a dev instrument held *over* a running game.
+
+Two consequences fall out of unpausing, and both are load-bearing.
+
+**A click the panel owns must not also reach the world.** With the game live, the left click that presses a toggle also satisfies `update_game_state`'s fire input: an Automatic weapon sprays for as long as the pointer rests on the panel, a Semi_Automatic one burns a Windup per toggle. The Tilemap Editor already solved exactly this for tile painting, so its `ui_hovered` flag and `record_ui_hover` were hoisted into `hud.odin` and both surfaces now share one implementation — clearing it once at the top of `draw_game` rather than per-surface, since a surface that isn't drawn this frame cannot clear anything and the flag would otherwise stick true after the panel closes. The accepted cost is that the panel's own corner is a dead zone for shooting while it is open.
+
+**A Screen can now open over the panel.** A Run can end, or the Shop can be opened, while the panel is still up — impossible before, since the panel's pause prevented it. Two vendor/ui surfaces in one frame cannot both register a click (the library tracks click state in package globals via a single `set_pointer_state` per frame, so whichever draws second always sees its own just-written mouse-down state as "already down"), so `apply_screen_kind` closes the panel for any Screen it applies. That is the same one-writer argument the proc already makes for `run_ended`/`shopping`: a Screen added later cannot forget.
+
+Deliberately unchanged: F8 still requires `.Playing` and still refuses during the Shop or the Run End modal, the Shop key still refuses while the panel is open, and F1 into the editor *hides* the panel rather than closing it.
+
+Considered Options: keeping the pause and adding keyboard toggles for the visualizers instead (rejected — it addresses the mouse trip, not the actual cost, which is losing the live scene you were watching); suppressing input only on the panel's interactive widgets rather than its whole rect, to shrink the dead zone (rejected — a new hover concept in the vendor library for a problem only a developer hits); giving the debug panel and the Shop a shared ui frame so they need no mutual exclusion at all (rejected here as a change to how every panel is driven, not to this one — the mutual exclusion stands); pausing only *part* of the simulation, e.g. leaving the player invulnerable while the panel is open (rejected — God Mode already sits on that very panel, and a second implicit invulnerability rule would be a hidden duplicate of it).
+
+See [Non-modal debug panel](../../.scratch/debug-panel-non-modal/spec.md) for the spec this settles.

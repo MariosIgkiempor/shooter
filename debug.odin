@@ -36,10 +36,12 @@ Debug_State :: struct {
 
 DEBUG_GOLD_GRANT: int = 500 // gold added to the player per click of the panel's Add Gold button
 
-// F8 opens/closes this panel (main.odin's update_game). Mirrors
-// draw_shop_ui's panel/pause pattern (hud.odin) - game.debug.panel_open
-// pauses update_game_state the same way game.shopping does, so clicking a
-// toggle here never also fires the equipped weapon or moves the player.
+// F8 opens/closes this panel (main.odin's update_game). Unlike draw_shop_ui
+// and the Run End modal, it does not pause update_game_state (ADR-0021): the
+// simulation runs underneath it so a visualizer can be toggled against a live
+// scene. What keeps a click on a toggle from also firing the equipped weapon
+// is the shared ui_hovered flag (hud.odin) instead, the same one the Tilemap
+// Editor uses to keep a click on its chrome from painting a tile.
 //
 // Scope: dev *views and cheats* only. Every balance/feel number lives in the
 // editor's Tuning mode instead (tuning.odin) - one surface per knob, so the
@@ -62,6 +64,8 @@ draw_debug_panel_ui :: proc() {
 		{size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Left, .Bottom}, padding = 12},
 	) {
 		if ui.begin("Debug") {
+			record_ui_hover()
+
 			for visualizer in Debug_Visualizer {
 				on := game.debug.visualizers[visualizer]
 				label := fmt.tprintf("{}: {}", visualizer_display_name[visualizer], on ? "ON" : "OFF")

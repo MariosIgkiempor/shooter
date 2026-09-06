@@ -397,7 +397,12 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.run_ended || game.shopping || game.debug.panel_open {
+		// the debug panel is deliberately absent here: it's a non-modal
+		// overlay and the simulation keeps running underneath it (ADR-0021),
+		// which is the whole point of it - toggling a visualizer has to act on
+		// a live scene to be worth anything. Nothing compensates for the extra
+		// danger that brings; God Mode already sits on that very panel.
+		if game.run_ended || game.shopping {
 			return
 		}
 
@@ -462,8 +467,19 @@ update_game :: proc() {
 			game.enemies[:],
 		)
 
-		fire_pressed :=
+		// a click the debug panel owns must not also fire the weapon, now that
+		// the panel leaves the game running (ADR-0021): without this an
+		// Automatic weapon sprays for as long as the pointer rests on the
+		// panel, and a Semi_Automatic one burns a Windup per toggle. Gating
+		// the held input rather than just the press covers both, and the same
+		// flag also holds the cast particles back so the telegraph doesn't
+		// play for an action that never happens. The cost is that the panel's
+		// own corner is a dead zone for shooting while it's open - accepted,
+		// since it's a dev surface opened deliberately, in the emptiest corner
+		// of the screen.
+		fire_input :=
 			game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
+		fire_pressed := fire_input && !ui_hovered
 
 		if fire_pressed {
 			try_use_weapon(
@@ -479,7 +495,7 @@ update_game :: proc() {
 			game.player.weapon,
 			player_pos,
 			game.player.aim_dir,
-			is_mouse_button_down(.LEFT),
+			is_mouse_button_down(.LEFT) && !ui_hovered,
 		)
 
 		update_bullets(rl.GetFrameTime())
@@ -912,6 +928,15 @@ ease_out_cubic :: proc(t: f32) -> f32 {
 
 draw_game :: proc() {
 	begin_drawing()
+
+	// cleared once here, at the top of the draw phase, rather than by each
+	// vendor/ui surface as it draws: a surface that isn't drawn this frame
+	// can't clear anything, so a panel closed (or an editor left) while the
+	// pointer sat over it would otherwise leave the flag stuck true and
+	// suppress firing forever. Whichever surface does draw re-records into it
+	// below via record_ui_hover; update reads last frame's answer, which is
+	// the one-frame staleness the flag is documented for (hud.odin).
+	ui_hovered = false
 
 	// in editor mode the camera is driven by update_editor_camera instead
 	if game.program_mode == .Playing {
