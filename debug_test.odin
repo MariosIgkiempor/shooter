@@ -198,12 +198,12 @@ test_damage_player_does_not_double_bank_gold_on_repeated_hits_after_death :: pro
 }
 
 // The panel no longer pauses the simulation (ADR-0021), so a Run can end or
-// the Shop can open while it's still up - and two vendor/ui surfaces in one
-// frame can't both register a click (see draw_debug_panel_ui). apply_screen_kind
-// is the one place that writes run_ended/shopping for a Screen change, so it's
-// also where the panel is closed; tested there directly for the same reason
-// hud_test.odin tests it there - it's a plain proc over global state with no
-// rendering and none of request_screen_change's Dismiss-window wait.
+// the Shop can open while it's still up, and a dev panel sitting on top of the
+// Run End modal would obscure it. apply_screen_kind is the one place that
+// writes run_ended/shopping for a Screen change, so it's also where the panel
+// is closed; tested there directly for the same reason hud_test.odin tests it
+// there - it's a plain proc over global state with no rendering and none of
+// request_screen_change's Dismiss-window wait.
 
 @(test)
 test_apply_screen_kind_run_end_closes_the_debug_panel :: proc(t: ^testing.T) {

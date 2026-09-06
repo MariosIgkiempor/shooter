@@ -96,11 +96,11 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 //
 // One shared flag rather than one per surface, because the two are mutually
 // exclusive - F8 requires .Playing and the editor only draws in .Editing, so
-// at most one of them is live in any frame. Cleared once at the top of
-// draw_game (main.odin) rather than by each surface, since a surface that
-// isn't drawn can't clear anything: a panel closed while the pointer sat over
-// it would otherwise leave this stuck true. Whichever surface does draw
-// re-records into it via record_ui_hover.
+// at most one of them is live in any frame. Cleared once in draw_game
+// (main.odin) rather than by each surface, since a surface that isn't drawn
+// can't clear anything: a panel closed while the pointer sat over it would
+// otherwise leave this stuck true. Whichever surface does draw re-records
+// into it via record_ui_hover.
 //
 // One frame stale by construction: the ui is declared during the draw phase,
 // so the newest answer available to an update is the one last frame's layout

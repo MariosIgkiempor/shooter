@@ -929,15 +929,6 @@ ease_out_cubic :: proc(t: f32) -> f32 {
 draw_game :: proc() {
 	begin_drawing()
 
-	// cleared once here, at the top of the draw phase, rather than by each
-	// vendor/ui surface as it draws: a surface that isn't drawn this frame
-	// can't clear anything, so a panel closed (or an editor left) while the
-	// pointer sat over it would otherwise leave the flag stuck true and
-	// suppress firing forever. Whichever surface does draw re-records into it
-	// below via record_ui_hover; update reads last frame's answer, which is
-	// the one-frame staleness the flag is documented for (hud.odin).
-	ui_hovered = false
-
 	// in editor mode the camera is driven by update_editor_camera instead
 	if game.program_mode == .Playing {
 		update_camera_center_smooth_follow(
@@ -1000,6 +991,18 @@ draw_game :: proc() {
 		}
 	}
 	end_using_camera()
+
+	// cleared here rather than inside each surface's own draw: a surface that
+	// isn't drawn this frame can't clear anything, so a panel closed (or an
+	// editor left) while the pointer sat over it would otherwise leave the
+	// flag stuck true and suppress firing forever. It has to sit *after*
+	// draw_world_contents above, since draw_editor_world_overlay reads the
+	// flag to hide the hovered-tile outline under an editor window - and
+	// *before* the two surfaces below, which re-record into it. Everything
+	// reading it outside this window (update_game_state, update_editor) sees
+	// last frame's answer, which is the one-frame staleness it's documented
+	// for (hud.odin).
+	ui_hovered = false
 
 	if game.program_mode == .Editing {
 		draw_editor()
