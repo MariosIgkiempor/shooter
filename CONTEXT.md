@@ -9,7 +9,7 @@ The player's single currently-equipped combat tool. Common state (kind, fire mod
 _Avoid_: Loadout, armament
 
 **Gun** / **Melee_Weapon** / **Magic**:
-The three concrete `Weapon` variants. Gun keeps the clip/reserve/reload ranged-firing mechanic; Melee_Weapon and Magic are cooldown-only (no stamina/mana economy). Which `Weapon_Kind`s belong to which Weapon family is a separate lookup table — see **Weapon family**.
+The three concrete `Weapon` variants. Gun keeps the clip-and-reload ranged-firing mechanic; Melee_Weapon and Magic are cooldown-only (no stamina/mana economy). A Gun's *reserve* is retired as a design lever — reserve ammo does not deplete, so a reload is the only interruption a Gun imposes, and scarcity of ammunition is deliberately not a mechanic this game has. Which `Weapon_Kind`s belong to which Weapon family is a separate lookup table — see **Weapon family**.
 
 **Action rate**:
 The generic "actions per second" cadence shared by all weapon types — firing (Gun), swinging (Melee_Weapon), casting (Magic). Gates how often `cooldown_timer` lets a weapon act again. **Windup** (when present) is carved out of the front of this same cycle as a proportional slice, not added on top — Action rate stays the true pace of a weapon regardless of whether it Windups, and regardless of how much `action_rate` has grown from upgrades.
@@ -31,6 +31,10 @@ The instant a weapon's actual effect executes — the bullet spawns, the hit-che
 **Follow-through**:
 The visible cosmetic phase an `Automatic` weapon shows after Resolve, timed by the common `Weapon.follow_through_time`/`follow_through_timer` fields — the generalized, Weapon-level successor to Melee_Weapon's old `swing_time`/`swing_timer` (which drove only Dagger/Sword's post-hit sweep). Purely cosmetic: never gates re-triggering (`cooldown_timer` already does that) or the hit-check (already resolved by the time Follow-through plays). Mutually exclusive per weapon with **Windup** — see there for the split.
 _Avoid_: Flourish (used while this was still being named; Follow-through is the settled term), swing_time/swing_timer (retired name, now Weapon-level and not Melee-specific)
+
+**Hit volume**:
+The region a weapon's action actually damages: for anything that swings or emits, *the weapon itself*, so a body is hit only when the weapon touches it. Derived from the weapon's kind at the moment it acts, exactly as its silhouette is derived at draw time and for the same reason ([ADR-0018](docs/adr/0018-weapon-visual-identity-is-per-kind-not-per-family.md)) — never stored, so it can never disagree with what the player is watching. This replaces the retired cone-from-the-player's-centre test, under which a blade damaged ground it visibly never crossed.
+_Avoid_: Hitbox (names a body's collision rect, which is a different thing), arc/cone (the retired test, not the concept), swing range
 
 **Weapon readiness**:
 The three mutually-exclusive states a `Weapon` cycles through between actions: **Ready** (`cooldown_timer <= 0`, can Trigger), **Winding Up** (`windup_timer > 0`, Triggered but not yet Resolved), and **Recovering** (`cooldown_timer > 0` but `windup_timer` already 0 — Resolved, or Follow-through playing, but not yet Ready again). A weapon showing Follow-through is always Recovering; a weapon in Winding Up is never Recovering, and vice versa.
@@ -74,7 +78,7 @@ The single heaviest **Enemy Kind** on the roster, occupying the top rung of the 
 _Avoid_: Elite (no such tier exists — an elite/affix layer between ordinary enemies and the Boss was considered and rejected, so a heavy enemy is simply an ordinary **Enemy Kind** with more health), Miniboss, Boss fight (the encounter is the rung, not a mode)
 
 **Weapon family**:
-Which group (`Ranged`, `Melee`, `Magic`) a given `Weapon_Kind` belongs to. `Weapon_Kind` stays the single flat enum from [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md); a separate lookup table buckets its members by family. Purely descriptive of the *currently equipped weapon*, not a persistent player choice — the player picks any weapon fresh at the start of every Run (see **Run**), and family is derived from whichever weapon that is; nothing on `Player` stores it directly. Still drives the Weapon tier ladder and family-specific Upgrade slots exactly as before — only the permanence is gone. See [ADR-0008](docs/adr/0008-weapon-family-is-run-scoped.md).
+Which group (`Ranged`, `Melee`, `Magic`) a given `Weapon_Kind` belongs to. `Weapon_Kind` stays the single flat enum from [ADR-0001](docs/adr/0001-weapon-wrapper-struct.md); a separate lookup table buckets its members by family. Purely descriptive of the *currently equipped weapon*, not a persistent player choice — the player picks a family fresh at the start of every Run (see **Run**) by picking its tier-0 weapon, and family is derived from whichever weapon that is; nothing on `Player` stores it directly. Still drives the Weapon tier ladder and family-specific Upgrade slots exactly as before — only the permanence is gone. See [ADR-0008](docs/adr/0008-weapon-family-is-run-scoped.md).
 _Avoid_: Class (retired name — implied a permanent, once-ever player choice, which is no longer true), Loadout, role, archetype
 
 **Gold**:
@@ -86,7 +90,7 @@ The on-demand UI panel where the player spends Gold, pausing the game while open
 _Avoid_: Store, market
 
 **Weapon tier ladder**:
-The fixed, sequential order of `Weapon_Kind`s within a Weapon family, progressed through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back. Purchased Upgrade stacks are tracked separately from the equipped weapon and are unaffected by a tier purchase — see **Upgrade**.
+The fixed, sequential order of `Weapon_Kind`s within a Weapon family, progressed through via Shop purchases (e.g. Ranged: Pistol → SMG → Shotgun → Rifle). Buying the next tier immediately equips it and discards the previous weapon outright — no unlocking a set of owned kinds, no switching back. **Only tier 0 is ever free**: it is what picking a family at the start of a Run equips, and every tier above it is bought. Climbing a tier buys a **different style, not a bigger number** — each family's top tier answers what its lower tiers cannot, so a tier purchase is a decision about how you want to fight rather than a strict improvement. Purchased Upgrade stacks are tracked separately from the equipped weapon and are unaffected by a tier purchase — see **Upgrade**.
 _Avoid_: Rank (Level already names the separate Account-progression concept)
 
 **Upgrade**:
