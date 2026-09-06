@@ -53,10 +53,15 @@ draw_debug_panel_ui :: proc() {
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
 	ui.begin_frame(game.window_width, game.window_height)
 
-	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
+	// anchored to the bottom-left corner rather than offset into it: the
+	// top-right is already taken by draw_hud_counters (hud.odin), and an
+	// offset would couple this panel's position to that row's height. The
+	// only other bottom-anchored surface is the Confirm New Run dialog, which
+	// is Main Menu only and so can never coexist with this panel.
+	if ui.row(
+		{size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Left, .Bottom}, padding = 12},
+	) {
 		if ui.begin("Debug") {
-			ui.text("Gold: {}", game.player.gold)
-
 			for visualizer in Debug_Visualizer {
 				on := game.debug.visualizers[visualizer]
 				label := fmt.tprintf("{}: {}", visualizer_display_name[visualizer], on ? "ON" : "OFF")
