@@ -1,0 +1,718 @@
+<!-- PROTOTYPE - throwaway. Bench for the content-expansion ticket
+     "Weapon hit volumes". Double-click to run; no build, no server, no
+     persistence. Numbers are lifted from weapon.odin / icon.odin / main.odin
+     as of this branch; Spear and Greatsword are proposals from the
+     "Weapon catalog expansion" ticket and have no code yet. -->
+<meta charset="utf-8">
+<title>Weapon hit volumes prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f28;
+    --border: #2c3040;
+    --text: #e8eaf0;
+    --dim: #8b90a3;
+    --accent: #ffd166;
+    --hit: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); overflow: hidden;
+  }
+  /* position:fixed, not flex+height:100vh - the earlier prototypes on this
+     repo hit a silent 0x0/NaN canvas doing it the other way. */
+  #sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 360px;
+    padding: 18px; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--border);
+  }
+  #stage-wrap { position: fixed; top: 0; right: 0; bottom: 0; left: 360px; display: flex; flex-direction: column; }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .question { font-size: 12.5px; color: var(--dim); line-height: 1.5; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+  .question b { color: var(--text); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 18px 0 8px; }
+  label { display: block; font-size: 13px; margin-bottom: 4px; }
+  .row { margin-bottom: 12px; }
+  .row output { color: var(--accent); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  select { width: 100%; padding: 6px; background: #262a36; color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; margin-bottom: 8px; }
+  .toggle.disabled { opacity: .4; pointer-events: none; }
+  button { background: #262a36; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 11px; font-size: 12.5px; cursor: pointer; margin: 0 6px 6px 0; }
+  button:hover { background: #2f3442; }
+  button.active { background: var(--accent); color: #1a1200; border-color: var(--accent); }
+  #tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  #scenario-desc { font-size: 12.5px; color: var(--dim); line-height: 1.5; background: #171a22; border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 10px; min-height: 46px; }
+  #scenario-desc b { color: var(--text); }
+  #topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--dim); flex: 0 0 auto; }
+  #topbar b { color: var(--text); }
+  #topbar .k { color: var(--accent); font-weight: 600; }
+  canvas { display: block; background: #181818; flex: 1; width: 100%; min-height: 0; cursor: crosshair; }
+  #log { font-size: 11.5px; line-height: 1.45; color: var(--dim); background: #171a22; border: 1px solid var(--border); border-radius: 6px; padding: 8px; height: 132px; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; }
+  #log .n { color: var(--accent); }
+  #log .bad { color: var(--hit); }
+  code { background: #262a36; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .hint { font-size: 11.5px; color: var(--dim); line-height: 1.5; margin-top: 6px; }
+</style>
+
+<div id="sidebar">
+  <h1>Weapon hit volumes</h1>
+  <div class="question">
+    Ticket: <b>Weapon hit volumes</b> on the Content expansion map.
+    Today a Sword hits everything inside 60px and 110&deg; of the <i>player's feet</i>, resolved in one
+    instant, while the blade is drawn sweeping somewhere else entirely. This bench runs the live cone
+    test against two collider models, so the question &mdash; does hitting only what the blade
+    <i>touches</i> feel better &mdash; can be looked at instead of argued.
+  </div>
+
+  <h2>Guided scenarios</h2>
+  <div id="tabs"></div>
+  <div id="scenario-desc"></div>
+
+  <h2>Weapon</h2>
+  <div class="row"><select id="weapon"></select></div>
+
+  <h2>Hit model</h2>
+  <div class="row">
+    <select id="model">
+      <option value="cone">Cone from the player's feet (today)</option>
+      <option value="swept">Swept blade, resolved once</option>
+      <option value="continuous">Blade, re-tested every frame</option>
+    </select>
+  </div>
+  <div class="toggle" id="onceWrap"><input type="checkbox" id="once" checked><span>One hit per body per swing</span></div>
+  <div class="row">
+    <label>Collider shape</label>
+    <select id="collider">
+      <option value="capsule">Capsule along the blade</option>
+      <option value="triangle">The drawn blade triangle</option>
+    </select>
+  </div>
+
+  <h2>Show</h2>
+  <div class="toggle"><input type="checkbox" id="showVol" checked><span>The hit volume</span></div>
+  <div class="toggle"><input type="checkbox" id="showPose" checked><span>Where the blade was when damage landed</span></div>
+  <div class="toggle"><input type="checkbox" id="showOrigin" checked><span>Feet origin vs. weapon pivot</span></div>
+
+  <h2>Crowd</h2>
+  <div class="row">
+    <label>Enemy <output id="out-count"></output></label>
+    <select id="kind"></select>
+  </div>
+  <div class="row"><input type="range" id="count" min="0" max="120" value="12" step="1"></div>
+  <div class="toggle"><input type="checkbox" id="advance" checked><span>They walk at you</span></div>
+  <div class="row">
+    <label>Time scale <output id="out-slow"></output></label>
+    <input type="range" id="slow" min="10" max="100" value="100" step="5">
+  </div>
+  <button id="reset">Reset crowd</button>
+  <button id="clearlog">Clear log</button>
+
+  <h2>Swing log</h2>
+  <div id="log"></div>
+  <div class="hint">WASD to move &middot; mouse to aim &middot; hold left mouse to attack.</div>
+</div>
+
+<div id="stage-wrap">
+  <div id="topbar">
+    <span><b id="t-weapon"></b></span>
+    <span>phase <b id="t-phase">idle</b></span>
+    <span>blade <b id="t-angle">0&deg;</b> off aim</span>
+    <span>hits this swing <span class="k" id="t-hits">0</span></span>
+    <span>alive <span class="k" id="t-alive">0</span></span>
+    <span>dmg/sec <span class="k" id="t-dps">0</span></span>
+  </div>
+  <canvas id="stage"></canvas>
+</div>
+
+<script>
+"use strict";
+
+// ---- constants lifted from the game ---------------------------------------
+const ACTOR = 24;                 // ACTOR_SIZE, main.odin
+const PIVOT_H = ACTOR / 2;        // WEAPON_PIVOT_HEIGHT - chest height above the feet anchor
+const PLAYER_SPEED = 100;         // PLAYER_BASE_MOVE_SPEED
+const SWING_OUT = 0.07;           // SWORD_SWING_OUT_TIME
+const SWING_RETURN = 0.11;        // SWORD_SWING_RETURN_TIME
+const ENEMY_SIZE_MIN = 10, ENEMY_SIZE_MAX = 48, ENEMY_SIZE_PER_HP = 0.28;
+
+const easeOutCubic = t => { const u = 1 - Math.min(Math.max(t, 0), 1); return 1 - u*u*u; };
+const bodySize = hp => Math.min(Math.max(ENEMY_SIZE_MIN + hp * ENEMY_SIZE_PER_HP, ENEMY_SIZE_MIN), ENEMY_SIZE_MAX);
+
+// blade geometry is icon_blade's unit space (icon.odin): the glyph is drawn
+// into a unit square whose u axis runs along aim and whose v=0.5 line passes
+// through the grip pivot. tip_x/guard_x/blade_h are the same numbers
+// icon_dagger and icon_sword pass. weapon_world_frame_size scales the square
+// so tip_x lands exactly on `range`.
+const WEAPONS = {
+  Dagger: {
+    name: "Dagger", live: true, mode: "auto", damage: 15, rate: 4,
+    followThrough: 0.15, windup: 0, range: 40, arc: 70,
+    reach: 0.80, tip: 0.80, guard: 0.44, bladeH: 0.22,
+    note: "Tier 0 Melee, live in the game today."
+  },
+  Sword: {
+    name: "Sword", live: true, mode: "semi", damage: 30, rate: 1.8,
+    followThrough: 0, windup: 0.37, range: 60, arc: 110,
+    reach: 0.92, tip: 0.92, guard: 0.28, bladeH: 0.24,
+    note: "Tier 1 Melee, live in the game today."
+  },
+  Spear: {
+    name: "Spear (proposed)", live: false, mode: "semi", damage: 34, rate: 1.5,
+    followThrough: 0, windup: 0.40, range: 110, arc: 30,
+    reach: 0.95, tip: 0.95, guard: 0.68, bladeH: 0.11,
+    note: "Tier 2. Long haft, short head. Maximum standoff on one bearing - punches into a crowd without entering it."
+  },
+  Greatsword: {
+    name: "Greatsword (proposed)", live: false, mode: "semi", damage: 48, rate: 1.1,
+    followThrough: 0, windup: 0.45, range: 85, arc: 145,
+    reach: 0.94, tip: 0.94, guard: 0.20, bladeH: 0.46,
+    note: "Tier 3. Double-width blade at moderate standoff. Melee's crowd answer is space, not targets."
+  },
+  Flame_Staff: {
+    name: "Flame Staff", live: true, mode: "auto", damage: 6, rate: 10,
+    followThrough: 0.08, windup: 0, range: 50, arc: 50,
+    reach: 0.86, tip: 0.86, guard: 0.30, bladeH: 0.30, flame: true,
+    note: "Magic, but its hit-check is literally melee's: cast_flamethrower_tick builds a Melee_Weapon from its own range/arc and calls enemy_in_melee_arc."
+  },
+};
+
+const KINDS = {
+  Mite:    { hp: 20,  speed: 65, color: "#e8d44d" },
+  Grunt:   { hp: 50,  speed: 40, color: "#5fbf6a" },
+  Wraith:  { hp: 55,  speed: 45, color: "#a06fd0" },
+  Breaker: { hp: 130, speed: 30, color: "#2f8f4a" },
+};
+
+// ---- state ----------------------------------------------------------------
+const S = {
+  weapon: "Sword", model: "cone", collider: "capsule",
+  once: true, showVol: true, showPose: true, showOrigin: true,
+  kind: "Grunt", count: 12, advance: true, slow: 1,
+  player: { x: 0, y: 0 },
+  aim: { x: 1, y: 0 },
+  mouse: { x: 0, y: 0 },
+  held: false, pressed: false, keys: {},
+  cooldown: 0, windupTimer: 0, followTimer: 0,
+  swingT: -1,                 // seconds into the visible swing, -1 = not swinging
+  swingId: 0,
+  hitsThisSwing: 0,
+  pose: null,                 // { angle, t } - blade pose at the instant damage landed
+  poseAge: 99,
+  enemies: [],
+  damageWindow: [],           // [t, amount] for the rolling dmg/sec readout
+  now: 0,
+};
+
+const el = id => document.getElementById(id);
+const canvas = el("stage"), ctx = canvas.getContext("2d");
+
+function log(html, bad) {
+  const d = document.createElement("div");
+  if (bad) d.className = "bad";
+  d.innerHTML = html;
+  const box = el("log");
+  box.appendChild(d);
+  while (box.children.length > 60) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ---- geometry -------------------------------------------------------------
+// weapon_world_frame_size: for melee the frame is sized so tip_x * size == range
+const frameSize = w => w.range / w.reach;
+
+// unit-space (u, v) through the pivot frame: origin = pivot - y*0.5,
+// x_axis = aim * size, y_axis = perp(aim) * size  (icon_frame_pivot)
+function unitToWorld(pivot, angleRad, size, u, v) {
+  const c = Math.cos(angleRad), s = Math.sin(angleRad);
+  return {
+    x: pivot.x + c * size * u + (-s) * size * (v - 0.5),
+    y: pivot.y + s * size * u + ( c) * size * (v - 0.5),
+  };
+}
+
+// the blade as the game draws it: guard-end shoulders and a tip.
+function bladePoly(pivot, angleRad, w) {
+  const size = frameSize(w);
+  return [
+    unitToWorld(pivot, angleRad, size, w.guard, 0.5 - w.bladeH / 2),
+    unitToWorld(pivot, angleRad, size, w.tip,   0.5),
+    unitToWorld(pivot, angleRad, size, w.guard, 0.5 + w.bladeH / 2),
+  ];
+}
+
+// the capsule proxy: the blade's spine, thickened by half its drawn width.
+function bladeCapsule(pivot, angleRad, w) {
+  const size = frameSize(w);
+  return {
+    a: unitToWorld(pivot, angleRad, size, w.guard, 0.5),
+    b: unitToWorld(pivot, angleRad, size, w.tip, 0.5),
+    r: (w.bladeH / 2) * size,
+  };
+}
+
+function segCircleHit(a, b, c, r) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx*dx + dy*dy;
+  let t = len2 === 0 ? 0 : ((c.x - a.x) * dx + (c.y - a.y) * dy) / len2;
+  t = Math.min(Math.max(t, 0), 1);
+  const px = a.x + dx * t, py = a.y + dy * t;
+  const ex = c.x - px, ey = c.y - py;
+  return ex*ex + ey*ey <= r*r;
+}
+
+function polyCircleHit(poly, c, r) {
+  // inside?
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i], pj = poly[j];
+    if ((pi.y > c.y) !== (pj.y > c.y) &&
+        c.x < (pj.x - pi.x) * (c.y - pi.y) / (pj.y - pi.y) + pi.x) inside = !inside;
+  }
+  if (inside) return true;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    if (segCircleHit(poly[j], poly[i], c, r)) return true;
+  }
+  return false;
+}
+
+function bladeHitsEnemy(pivot, angleRad, w, e) {
+  const c = { x: e.x, y: e.y }, r = e.size / 2;
+  if (S.collider === "triangle") return polyCircleHit(bladePoly(pivot, angleRad, w), c, r);
+  const cap = bladeCapsule(pivot, angleRad, w);
+  return segCircleHit(cap.a, cap.b, c, r + cap.r);
+}
+
+// enemy_in_melee_arc, weapon.odin - measured from `origin`, the player's FEET
+function coneHitsEnemy(origin, aimAngle, w, e) {
+  const er = e.size / 2;
+  const dx = e.x - origin.x, dy = e.y - origin.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > w.range + er) return false;
+  if (dist === 0) return true;
+  const a = Math.atan2(dy, dx);
+  let d = Math.abs(((a - aimAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  return d * 180 / Math.PI <= w.arc / 2;
+}
+
+// draw_weapon's swing curve (main.odin's sword_swing_offset), in degrees off aim
+function swingOffsetDeg(w, t) {
+  if (w.mode === "auto") {
+    const ft = w.followThrough;
+    if (t < 0 || t > ft || ft <= 0) return 0;
+    return ((t / ft) - 0.5) * w.arc;
+  }
+  const drawBack = -w.arc / 2, extreme = w.arc / 2;
+  if (t < 0) return 0;
+  if (t < SWING_OUT) return drawBack + (extreme - drawBack) * easeOutCubic(t / SWING_OUT);
+  const u = easeOutCubic((t - SWING_OUT) / SWING_RETURN);
+  return extreme - extreme * u;
+}
+const swingTotal = w => w.mode === "auto" ? w.followThrough : SWING_OUT + SWING_RETURN;
+
+// ---- the three hit models -------------------------------------------------
+const SWEEP_SAMPLES = 24;
+
+function applyDamage(e, dmg) {
+  e.hp -= dmg;
+  e.flash = 0.12;
+  S.damageWindow.push([S.now, dmg]);
+  S.hitsThisSwing++;
+}
+
+function pivotOf() { return { x: S.player.x, y: S.player.y - PIVOT_H }; }
+
+// resolve: the instant damage is applied for the once-per-swing models
+function resolveSwing(w) {
+  const aimAngle = Math.atan2(S.aim.y, S.aim.x);
+  const pivot = pivotOf();
+  const origin = { x: S.player.x, y: S.player.y };
+  S.hitsThisSwing = 0;
+  S.swingId++;
+  S.swingT = 0;
+
+  // whatever the model, this is the pose the player is looking at on the
+  // frame the damage lands
+  S.pose = { angle: aimAngle + swingOffsetDeg(w, 0) * Math.PI / 180 };
+  S.poseAge = 0;
+
+  if (S.model === "continuous") return; // damage happens in update, not here
+
+  for (const e of S.enemies) {
+    if (e.hp <= 0) continue;
+    let hit = false;
+    if (S.model === "cone") {
+      hit = coneHitsEnemy(origin, aimAngle, w, e);
+    } else {
+      for (let i = 0; i <= SWEEP_SAMPLES; i++) {
+        const t = (i / SWEEP_SAMPLES) * swingTotal(w);
+        const a = aimAngle + swingOffsetDeg(w, t) * Math.PI / 180;
+        if (bladeHitsEnemy(pivot, a, w, e)) { hit = true; break; }
+      }
+    }
+    if (hit) applyDamage(e, w.damage);
+  }
+  reportSwing(w);
+}
+
+function reportSwing(w) {
+  const label = { cone: "cone", swept: "swept blade", continuous: "live blade" }[S.model];
+  const n = S.hitsThisSwing;
+  log(`<span class="n">${w.name}</span> ${label}: ${n} hit${n === 1 ? "" : "s"}, ${(n * w.damage)} damage`);
+}
+
+// continuous: re-test the blade at this frame's animated pose
+function continuousTick(w) {
+  if (S.swingT < 0 || S.swingT > swingTotal(w)) return;
+  const aimAngle = Math.atan2(S.aim.y, S.aim.x);
+  const a = aimAngle + swingOffsetDeg(w, S.swingT) * Math.PI / 180;
+  const pivot = pivotOf();
+  for (const e of S.enemies) {
+    if (e.hp <= 0) continue;
+    if (S.once && e.lastSwing === S.swingId) continue;
+    if (bladeHitsEnemy(pivot, a, w, e)) {
+      e.lastSwing = S.swingId;
+      applyDamage(e, w.damage);
+    }
+  }
+}
+
+// ---- crowd ----------------------------------------------------------------
+function spawnCrowd() {
+  const k = KINDS[S.kind];
+  S.enemies = [];
+  const R = 190;
+  for (let i = 0; i < S.count; i++) {
+    const a = (i / Math.max(S.count, 1)) * Math.PI * 2 + Math.random() * 0.3;
+    const r = R + (Math.random() - 0.5) * 90;
+    S.enemies.push({
+      x: S.player.x + Math.cos(a) * r,
+      y: S.player.y + Math.sin(a) * r,
+      hp: k.hp, maxHp: k.hp, size: bodySize(k.hp), speed: k.speed,
+      color: k.color, flash: 0, lastSwing: -1,
+    });
+  }
+}
+
+function updateCrowd(dt) {
+  for (const e of S.enemies) {
+    if (e.flash > 0) e.flash -= dt;
+    if (!S.advance) continue;
+    const dx = S.player.x - e.x, dy = S.player.y - e.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const stop = (e.size + ACTOR) / 2 - 2;
+    if (d > stop) { e.x += (dx / d) * e.speed * dt; e.y += (dy / d) * e.speed * dt; }
+    // a cheap separation so bodies don't perfectly stack (the game's own
+    // Separation force, radius 40 / strength 3, roughly)
+    for (const o of S.enemies) {
+      if (o === e || o.hp <= 0) continue;
+      const ox = e.x - o.x, oy = e.y - o.y;
+      const od = Math.hypot(ox, oy);
+      if (od > 0 && od < 40) { e.x += (ox / od) * 3 * 20 * dt; e.y += (oy / od) * 3 * 20 * dt; }
+    }
+  }
+  const before = S.enemies.length;
+  S.enemies = S.enemies.filter(e => e.hp > 0);
+  if (S.enemies.length !== before && S.enemies.length === 0) log("crowd cleared", false);
+}
+
+// ---- weapon cycle ---------------------------------------------------------
+function updateWeapon(dt) {
+  const w = WEAPONS[S.weapon];
+  if (S.cooldown > 0) S.cooldown -= dt;
+  if (S.swingT >= 0) S.swingT += dt;
+  if (S.poseAge < 90) S.poseAge += dt;
+
+  if (S.windupTimer > 0) {
+    S.windupTimer -= dt;
+    if (S.windupTimer <= 0) resolveSwing(w);
+  }
+
+  if (S.model === "continuous") continuousTick(w);
+
+  // S.pressed latches a click that started and ended inside one frame, so a
+  // single tap still swings; holding the button keeps S.held true.
+  const wants = S.held || S.pressed;
+  S.pressed = false;
+  if (!wants || S.cooldown > 0) return;
+
+  if (w.mode === "semi") {
+    S.cooldown = 1 / w.rate;
+    S.windupTimer = w.windup / w.rate;
+    if (S.windupTimer <= 0) resolveSwing(w);
+  } else {
+    S.cooldown = 1 / w.rate;
+    resolveSwing(w);
+  }
+}
+
+// ---- render ---------------------------------------------------------------
+function cam() { return { x: canvas.width / 2 - S.player.x, y: canvas.height / 2 - S.player.y }; }
+
+function drawPolyPath(p, c) {
+  ctx.beginPath();
+  ctx.moveTo(p[0].x + c.x, p[0].y + c.y);
+  for (let i = 1; i < p.length; i++) ctx.lineTo(p[i].x + c.x, p[i].y + c.y);
+  ctx.closePath();
+}
+
+function drawBlade(pivot, angle, w, c, fill, stroke) {
+  if (w.flame) {
+    const size = frameSize(w);
+    ctx.beginPath();
+    ctx.moveTo(pivot.x + c.x, pivot.y + c.y);
+    ctx.arc(pivot.x + c.x, pivot.y + c.y, w.range, angle - w.arc * Math.PI / 360, angle + w.arc * Math.PI / 360);
+    ctx.closePath();
+  } else {
+    drawPolyPath(bladePoly(pivot, angle, w), c);
+  }
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+
+function render() {
+  const c = cam(), w = WEAPONS[S.weapon];
+  canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+  ctx.fillStyle = "#181818"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // grid, for a sense of scale (one cell = one 16px tile)
+  ctx.strokeStyle = "#20232b"; ctx.lineWidth = 1;
+  const g = 16;
+  for (let x = (c.x % g); x < canvas.width; x += g) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+  for (let y = (c.y % g); y < canvas.height; y += g) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+
+  const aimAngle = Math.atan2(S.aim.y, S.aim.x);
+  const pivot = pivotOf();
+  const origin = { x: S.player.x, y: S.player.y };
+
+  // the hit volume, drawn under everything so bodies read on top of it
+  if (S.showVol) {
+    if (S.model === "cone") {
+      ctx.beginPath();
+      ctx.moveTo(origin.x + c.x, origin.y + c.y);
+      ctx.arc(origin.x + c.x, origin.y + c.y, w.range, aimAngle - w.arc * Math.PI / 360, aimAngle + w.arc * Math.PI / 360);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,209,102,0.10)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,209,102,0.45)"; ctx.lineWidth = 1; ctx.stroke();
+    } else if (S.model === "swept") {
+      for (let i = 0; i <= SWEEP_SAMPLES; i++) {
+        const t = (i / SWEEP_SAMPLES) * swingTotal(w);
+        const a = aimAngle + swingOffsetDeg(w, t) * Math.PI / 180;
+        drawBlade(pivot, a, w, c, "rgba(255,209,102,0.055)", null);
+      }
+      drawBlade(pivot, aimAngle + swingOffsetDeg(w, 0) * Math.PI / 180, w, c, null, "rgba(255,209,102,0.5)");
+      drawBlade(pivot, aimAngle + swingOffsetDeg(w, SWING_OUT) * Math.PI / 180, w, c, null, "rgba(255,209,102,0.5)");
+    } else {
+      const t = (S.swingT >= 0 && S.swingT <= swingTotal(w)) ? S.swingT : 0;
+      const a = aimAngle + swingOffsetDeg(w, t) * Math.PI / 180;
+      const live = S.swingT >= 0 && S.swingT <= swingTotal(w);
+      drawBlade(pivot, a, w, c, live ? "rgba(255,93,93,0.22)" : "rgba(255,209,102,0.07)", live ? "rgba(255,93,93,0.7)" : "rgba(255,209,102,0.3)");
+    }
+  }
+
+  // where the blade actually was on the frame damage landed
+  if (S.showPose && S.pose && S.poseAge < 0.55) {
+    const fade = 1 - S.poseAge / 0.55;
+    drawBlade(pivot, S.pose.angle, w, c, `rgba(255,93,93,${0.30 * fade})`, `rgba(255,93,93,${0.9 * fade})`);
+  }
+
+  // enemies
+  for (const e of S.enemies) {
+    const half = e.size / 2;
+    const alpha = 0.35 + 0.65 * Math.max(e.hp / e.maxHp, 0);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = e.flash > 0 ? "#ffffff" : e.color;
+    ctx.fillRect(e.x - half + c.x, e.y - half + c.y, e.size, e.size);
+    ctx.globalAlpha = 1;
+  }
+
+  // player
+  ctx.fillStyle = "#dfe3ee";
+  ctx.fillRect(S.player.x - ACTOR / 2 + c.x, S.player.y - ACTOR + c.y, ACTOR, ACTOR);
+
+  // the live blade, at this frame's animated pose
+  const liveOff = (S.swingT >= 0 && S.swingT <= swingTotal(w)) ? swingOffsetDeg(w, S.swingT) : 0;
+  const liveAngle = aimAngle + liveOff * Math.PI / 180;
+  drawBlade(pivot, liveAngle, w, c, "#cfd6e6", "#8b90a3");
+
+  // the two points the game measures from: they are 12px apart, and the cone
+  // uses the lower one while the blade is drawn from the upper one
+  if (S.showOrigin) {
+    ctx.fillStyle = "#ff5d5d";
+    ctx.beginPath(); ctx.arc(origin.x + c.x, origin.y + c.y, 3, 0, 7); ctx.fill();
+    ctx.fillStyle = "#66d9ef";
+    ctx.beginPath(); ctx.arc(pivot.x + c.x, pivot.y + c.y, 3, 0, 7); ctx.fill();
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillStyle = "#ff5d5d"; ctx.fillText("origin (cone measures here)", origin.x + c.x + 7, origin.y + c.y + 11);
+    ctx.fillStyle = "#66d9ef"; ctx.fillText("pivot (blade draws here)", pivot.x + c.x + 7, pivot.y + c.y - 5);
+  }
+}
+
+// ---- loop -----------------------------------------------------------------
+let last = performance.now();
+function frame(now) {
+  let dt = Math.min((now - last) / 1000, 0.05) * S.slow;
+  last = now; S.now += dt;
+
+  const sp = PLAYER_SPEED * dt;
+  if (S.keys.w) S.player.y -= sp;
+  if (S.keys.s) S.player.y += sp;
+  if (S.keys.a) S.player.x -= sp;
+  if (S.keys.d) S.player.x += sp;
+
+  const c = cam();
+  const mx = S.mouse.x - c.x, my = S.mouse.y - c.y;
+  const p = pivotOf();
+  const ax = mx - p.x, ay = my - p.y, al = Math.hypot(ax, ay) || 1;
+  S.aim = { x: ax / al, y: ay / al };
+
+  updateWeapon(dt);
+  updateCrowd(dt);
+  render();
+
+  // readouts
+  const w = WEAPONS[S.weapon];
+  el("t-weapon").textContent = w.name;
+  const phase = S.windupTimer > 0 ? "winding up"
+    : (S.swingT >= 0 && S.swingT <= swingTotal(w)) ? "swinging"
+    : S.cooldown > 0 ? "cooling down" : "idle";
+  el("t-phase").textContent = phase;
+  const swinging = S.swingT >= 0 && S.swingT <= swingTotal(w);
+  const offs = swinging ? swingOffsetDeg(w, S.swingT) : 0;
+  el("t-angle").textContent = offs.toFixed(0) + "°";
+  el("t-hits").textContent = S.hitsThisSwing;
+  el("t-alive").textContent = S.enemies.length;
+  S.damageWindow = S.damageWindow.filter(d => S.now - d[0] < 1);
+  el("t-dps").textContent = Math.round(S.damageWindow.reduce((a, d) => a + d[1], 0));
+
+  requestAnimationFrame(frame);
+}
+
+// ---- scenarios ------------------------------------------------------------
+const SCENARIOS = [
+  {
+    name: "Free play",
+    desc: "Move, aim, hold to swing. Everything below is yours.",
+    apply: () => {}
+  },
+  {
+    name: "1. The blade is not the hit",
+    desc: "<b>Sword, cone model, twelve Grunts, quarter speed.</b> Watch the red ghost: that is where the blade is drawn on the exact frame the damage lands. It is fully drawn back on one side while the cone has already killed everything on the other. The sweep the player is watching is entirely <i>after</i> the hit.",
+    apply: () => set({ weapon: "Sword", model: "cone", kind: "Grunt", count: 12, slow: 0.25, advance: false, showPose: true, showVol: true })
+  },
+  {
+    name: "2. Feet, not hands",
+    desc: "<b>Origin markers on, crowd off.</b> The cone measures from the red dot &mdash; the player's feet anchor, <code>origin</code>. The blade is drawn from the blue dot, 12px up at chest height. Aim straight up and down and watch the cone's reach and the blade's tip disagree by that offset.",
+    apply: () => set({ weapon: "Sword", model: "cone", count: 0, slow: 1, showOrigin: true, showVol: true })
+  },
+  {
+    name: "3. Swept vs. cone",
+    desc: "<b>Sword, swept blade.</b> Same swing, resolved once, but against the volume the blade actually passes through. Toggle the model back to cone with the crowd frozen and compare which bodies light up: the corners of the cone that the blade never reaches, and the enemies just past the guard that it does.",
+    apply: () => set({ weapon: "Sword", model: "swept", kind: "Grunt", count: 16, slow: 0.4, advance: false, showVol: true })
+  },
+  {
+    name: "4. Twice in one swing",
+    desc: "<b>Sword, live blade, one-hit-per-body off.</b> Re-testing every frame means a body the blade lingers on takes the hit again and again &mdash; look at dmg/sec. Turn the checkbox on and it resolves once per body per swing, the same shape the piercing Rifle uses (<code>Bullet.id</code> vs <code>Enemy.last_hit_bullet_id</code>).",
+    apply: () => set({ weapon: "Sword", model: "continuous", once: false, kind: "Grunt", count: 10, slow: 0.5, advance: false })
+  },
+  {
+    name: "5. Standing in the crowd",
+    desc: "<b>Greatsword against 90 Mites, live blade.</b> This is rung 4. The whole argument for the Greatsword is that its sweep buys space; if the collider is thin, it does not. Switch to Sword, then to Spear, and see which of the three you can survive standing still with.",
+    apply: () => set({ weapon: "Greatsword", model: "continuous", once: true, kind: "Mite", count: 90, slow: 1, advance: true })
+  },
+  {
+    name: "6. Spear or Greatsword",
+    desc: "<b>Spear against a Breaker wall.</b> Two shapes, not two numbers: the Spear reaches 110px on one bearing and hits one or two bodies; the Greatsword reaches 85px across 145&deg; and hits everything in front. Under the old cone test these would have been the same weapon with different sliders.",
+    apply: () => set({ weapon: "Spear", model: "swept", kind: "Breaker", count: 14, slow: 1, advance: true })
+  },
+  {
+    name: "7. The flame is not a blade",
+    desc: "<b>Flame Staff.</b> Its hit-check builds a <code>Melee_Weapon</code> out of its own range/arc and calls the same <code>enemy_in_melee_arc</code>. If melee stops being a cone, this is the one weapon whose cone is honest &mdash; the emitted flame really is a spreading wedge. Toggle the model and watch it get worse, not better.",
+    apply: () => set({ weapon: "Flame_Staff", model: "cone", kind: "Mite", count: 40, slow: 1, advance: true })
+  },
+];
+
+function set(patch) {
+  Object.assign(S, patch);
+  syncControls();
+  if ("count" in patch || "kind" in patch) spawnCrowd();
+}
+
+// ---- wiring ---------------------------------------------------------------
+function syncControls() {
+  el("weapon").value = S.weapon;
+  el("model").value = S.model;
+  el("collider").value = S.collider;
+  el("kind").value = S.kind;
+  el("count").value = S.count;
+  el("once").checked = S.once;
+  el("showVol").checked = S.showVol;
+  el("showPose").checked = S.showPose;
+  el("showOrigin").checked = S.showOrigin;
+  el("advance").checked = S.advance;
+  el("slow").value = Math.round(S.slow * 100);
+  el("out-count").textContent = S.count;
+  el("out-slow").textContent = Math.round(S.slow * 100) + "%";
+  el("onceWrap").className = "toggle" + (S.model === "continuous" ? "" : " disabled");
+}
+
+for (const k in WEAPONS) {
+  const o = document.createElement("option");
+  o.value = k; o.textContent = WEAPONS[k].name;
+  el("weapon").appendChild(o);
+}
+for (const k in KINDS) {
+  const o = document.createElement("option");
+  o.value = k; o.textContent = `${k} (${KINDS[k].hp} hp, ${Math.round(bodySize(KINDS[k].hp))}px)`;
+  el("kind").appendChild(o);
+}
+
+SCENARIOS.forEach((sc, i) => {
+  const b = document.createElement("button");
+  b.textContent = sc.name;
+  b.onclick = () => {
+    [...el("tabs").children].forEach(c => c.classList.remove("active"));
+    b.classList.add("active");
+    sc.apply();
+    el("scenario-desc").innerHTML = sc.desc;
+    log(`--- ${sc.name}`);
+  };
+  el("tabs").appendChild(b);
+});
+
+el("weapon").onchange = e => { S.weapon = e.target.value; log(WEAPONS[S.weapon].note); };
+el("model").onchange = e => { S.model = e.target.value; syncControls(); };
+el("collider").onchange = e => { S.collider = e.target.value; };
+el("kind").onchange = e => { S.kind = e.target.value; spawnCrowd(); syncControls(); };
+el("count").oninput = e => { S.count = +e.target.value; spawnCrowd(); syncControls(); };
+el("slow").oninput = e => { S.slow = +e.target.value / 100; syncControls(); };
+el("once").onchange = e => { S.once = e.target.checked; };
+el("showVol").onchange = e => { S.showVol = e.target.checked; };
+el("showPose").onchange = e => { S.showPose = e.target.checked; };
+el("showOrigin").onchange = e => { S.showOrigin = e.target.checked; };
+el("advance").onchange = e => { S.advance = e.target.checked; };
+el("reset").onclick = () => spawnCrowd();
+el("clearlog").onclick = () => { el("log").innerHTML = ""; };
+
+canvas.addEventListener("mousemove", e => {
+  const r = canvas.getBoundingClientRect();
+  S.mouse.x = e.clientX - r.left; S.mouse.y = e.clientY - r.top;
+});
+canvas.addEventListener("mousedown", e => {
+  S.held = true; S.pressed = true;
+  const r = canvas.getBoundingClientRect();
+  S.mouse.x = e.clientX - r.left; S.mouse.y = e.clientY - r.top;
+});
+window.addEventListener("mouseup", () => { S.held = false; });
+window.addEventListener("keydown", e => { S.keys[e.key.toLowerCase()] = true; });
+window.addEventListener("keyup", e => { S.keys[e.key.toLowerCase()] = false; });
+
+S.mouse = { x: 700, y: 300 };
+syncControls();
+spawnCrowd();
+el("tabs").children[1].click();
+requestAnimationFrame(frame);
+</script>
