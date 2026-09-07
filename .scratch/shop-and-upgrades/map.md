@@ -25,7 +25,7 @@ An implementation-ready spec for the Shop: an on-demand UI panel, pausing the ga
 
 - Exact Gold prices, per-Upgrade price-growth curves, and max stack caps for the now-fixed 5-item catalog (see [Upgrade catalog contents](issues/01-upgrade-catalog-contents.md)) — balance/content-authoring, not a design branch.
 - The exact key that opens/closes the Shop (a dedicated key is decided — see [Shop UI/UX](issues/03-shop-ui-and-ux.md) — the literal key is build-session polish).
-- Whether the existing dev-only LEFT/RIGHT weapon-kind-cycle hotkey ([weapon.odin](../../weapon.odin)) is retired now that a real Shop exists to buy tiers with.
+- ~~Whether the existing dev-only LEFT/RIGHT weapon-kind-cycle hotkey ([weapon.odin](../../weapon.odin)) is retired now that a real Shop exists to buy tiers with.~~ **Resolved by [Content-scale integration sweep](../content-expansion/issues/09-content-scale-integration-sweep.md): retired.** At twelve weapons it is the only way to skip the entire priced ladder, which makes the Shop untestable by the tool meant to test it — and with Run_Start reduced to tier 0 it was also the sole free route to a non-tier-0 weapon. Retiring it removes `weapon_family_kinds`' second reader, so that table stops being read two ways at the same time. `debug.odin` is where a deliberate cheat belongs if it is ever wanted back, alongside god mode and Add Gold.
 - Sound design / juice for Shop purchases and the Upgrade-maxed/tier-maxed states.
 
 ## Out of scope

@@ -30,7 +30,7 @@ A spec for replacing all sprite-based art in the game world — player, enemies,
 ## Not yet specified
 
 - Whether the movement-transform pattern extends beyond movement-start to other actor states (damage flash, death, firing) — not sharp yet, may still be worth a look during implementation but doesn't block it.
-- Per-frame transform-math performance at scale (many enemies, or many weapon-effect particles now that bursts are bigger) — not raised as a real concern, just unmeasured.
+- ~~Per-frame transform-math performance at scale (many enemies, or many weapon-effect particles now that bursts are bigger) — not raised as a real concern, just unmeasured.~~ **Measured and closed by [Content expansion](../content-expansion/map.md).** It was a real concern, and not where this map expected: [Enemy pathing at swarm scale](../content-expansion/issues/11-enemy-pathing-at-swarm-scale.md) found `move_actor` scanning every tile twice per actor per frame — 852,000 rect checks a frame at 250 enemies, larger than the pathfinding it survives — and [Content-scale integration sweep](../content-expansion/issues/09-content-scale-integration-sweep.md) found `draw_tilemap` drawing all 1704 tiles against ~225 visible, twice over whenever a menu is open. Both are fixed by cell-indexed lookups the flow field already needs. Particles and per-enemy draw, the two things this item actually suspected, turn out to be small.
 
 ## Out of scope
 
