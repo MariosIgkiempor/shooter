@@ -804,8 +804,12 @@ gold_required_for_level :: proc(level: int) -> int {
 	return int(f32(LEVEL_BASE) * math.pow(f32(LEVEL_GROWTH), f32(level - 1)))
 }
 
+// A tile carries no art identity: the tilemap draws as flat fill, so where the
+// cell sits and whether it blocks movement is the whole of it. The atlas
+// coordinate that used to ride along here went unread by every draw path after
+// the art revamp, and kept the editor tied to a tileset palette it no longer
+// needed.
 Tile :: struct {
-	atlas_coords: Vec2i,
 	world_coords: Vec2i,
 	collides:     bool,
 }
@@ -1103,14 +1107,25 @@ draw_game :: proc() {
 
 	// flat fill for both floor and wall, walls get a darker inset bevel
 	// border for thickness (art-revamp ticket 04) - Tile.collides is the only
-	// signal used, atlas_coords/Map/persistence are untouched
+	// signal used.
+	//
+	// Culled to the camera's visible rect: a ladder rung's map runs to tens of
+	// thousands of tiles, of which a few hundred are ever on screen, and this
+	// runs twice per frame once draw_blurred_world is compositing. Both paths
+	// draw through game.camera, so one bounds query serves them.
 	draw_tilemap :: proc(tilemap: ^Tilemap) {
+		visible := camera_visible_world_rect(game.camera)
+
 		for tile in tilemap.tiles {
 			world_rect := Rect {
 				f32(tile.world_coords.x) * tilemap.tile_size.x,
 				f32(tile.world_coords.y) * tilemap.tile_size.y,
 				tilemap.tile_size.x,
 				tilemap.tile_size.y,
+			}
+
+			if !world_rect_overlaps_bounds(world_rect, visible) {
+				continue
 			}
 
 			color := TILEMAP_WALL_COLOR if tile.collides else TILEMAP_FLOOR_COLOR

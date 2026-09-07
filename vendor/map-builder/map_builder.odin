@@ -266,8 +266,7 @@ write_tilemap_literal :: proc(f: ^os.File, t: Tilemap) {
 	for tile in t.tiles {
 		fmt.fprintf(
 			f,
-			"\t\tTile{{atlas_coords = {{%v, %v}}, world_coords = {{%v, %v}}, collides = %v}},\n",
-			tile.atlas_coords.x, tile.atlas_coords.y,
+			"\t\tTile{{world_coords = {{%v, %v}}, collides = %v}},\n",
 			tile.world_coords.x, tile.world_coords.y,
 			tile.collides,
 		)

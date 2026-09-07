@@ -11,9 +11,9 @@ import layout "vendor/ui"
 import ui "vendor/ui/ui"
 
 // The ui package handles the editor chrome: a window with tool buttons, the
-// tile palette grid, and actions. It only emits rectangle/text render
-// commands, so the atlas tiles inside the palette are overlaid afterwards
-// using the rects the layout resolved this frame (layout.element_rects).
+// Spawn Trigger list, and actions. It only emits rectangle/text render
+// commands, which is all the editor needs now that tiles are authored by
+// blocking out rectangles rather than picked from a tileset palette.
 
 // what the editor is editing: tiles themselves, or their collision flags.
 // Spawn Trigger authoring has no dedicated mode - there's no map position to
@@ -31,25 +31,12 @@ EditorTool :: enum {
 	Erase,
 }
 
-TILESET_COLS :: len(tileset_normal)
-TILESET_ROWS :: len(tileset_normal[0])
-PALETTE_CELL_SIZE :: 20
-
-Palette_Cell :: struct {
-	node_id: u32,
-	coords:  Vec2i,
-}
-
 editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
-	selected_tile: Vec2i,
 	// whether the pointer was over an editor window last frame; world
 	// painting is suppressed while true
 	ui_hovered:    bool,
-	// palette cell nodes declared this frame, so tiles can be drawn over
-	// them after the ui render commands; allocated once, rebuilt each frame
-	palette_cells: [dynamic]Palette_Cell,
 	// rectangle tool drag, from mouse press to release
 	dragging:      bool,
 	drag_erasing:  bool,
@@ -75,9 +62,6 @@ initialize_editor :: proc() {
 	// the layout engine assumes each wrapped line advances exactly font_size
 	rl.SetTextLineSpacing(0)
 	ui.set_measure_text_proc(editor_measure_text)
-
-	// heap, not temp: the array outlives the per-frame free_all
-	editor.palette_cells = make([dynamic]Palette_Cell, 0, TILESET_COLS * TILESET_ROWS)
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
@@ -185,7 +169,7 @@ update_editor :: proc() {
 	if is_mouse_button_down(.LEFT) {
 		switch editor.tool {
 		case .Pencil:
-			tilemap_place_tile(&game.editing_map.tilemap, hovered_coord, editor.selected_tile)
+			tilemap_place_tile(&game.editing_map.tilemap, hovered_coord)
 		case .Erase:
 			tilemap_remove_tile(&game.editing_map.tilemap, hovered_coord)
 		case .Rectangle:
@@ -248,7 +232,7 @@ update_rectangle_tool :: proc(hovered_coord: Vec2i) {
 			if editor.drag_erasing {
 				tilemap_remove_tile(&game.editing_map.tilemap, {x, y})
 			} else {
-				tilemap_place_tile(&game.editing_map.tilemap, {x, y}, editor.selected_tile)
+				tilemap_place_tile(&game.editing_map.tilemap, {x, y})
 			}
 		}
 	}
@@ -269,15 +253,19 @@ hovered_tile_coords :: proc() -> Vec2i {
 	return {i32(cel.x), i32(cel.y)}
 }
 
-tilemap_place_tile :: proc(tilemap: ^Tilemap, world_coords, atlas_coords: Vec2i) {
-	for &tile in tilemap.tiles {
+// a tile is either there or it isn't - with no art identity left to repaint,
+// placing over an occupied cell is a no-op rather than an overwrite, so
+// dragging the pencil back over ground already covered changes nothing.
+// Collides is deliberately preserved: it's authored in Collisions mode, and
+// re-drawing a floor tile shouldn't silently clear a wall.
+tilemap_place_tile :: proc(tilemap: ^Tilemap, world_coords: Vec2i) {
+	for tile in tilemap.tiles {
 		if tile.world_coords == world_coords {
-			tile.atlas_coords = atlas_coords
 			return
 		}
 	}
 
-	append(&tilemap.tiles, Tile{atlas_coords = atlas_coords, world_coords = world_coords})
+	append(&tilemap.tiles, Tile{world_coords = world_coords})
 }
 
 tilemap_remove_tile :: proc(tilemap: ^Tilemap, world_coords: Vec2i) {
@@ -350,7 +338,6 @@ draw_editor_world_overlay :: proc() {
 // -- editor windows ----------------------------------------------------------
 
 draw_editor :: proc() {
-	clear(&editor.palette_cells)
 	editor.ui_hovered = false
 
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
@@ -375,21 +362,6 @@ draw_editor :: proc() {
 				0,
 				rl.Color(cmd.color),
 			)
-		}
-	}
-
-	// atlas tiles over the palette cells, plus the selection outline
-	for cell in editor.palette_cells {
-		rect, ok := layout.element_rects[cell.node_id]
-		if !ok {
-			continue
-		}
-
-		dest := Rect{rect.x, rect.y, rect.width, rect.height}
-		draw_atlas_tile(tileset_normal[cell.coords.x][cell.coords.y], dest, 0)
-
-		if cell.coords == editor.selected_tile {
-			rl.DrawRectangleLinesEx(dest, 2, rl.YELLOW)
 		}
 	}
 }
@@ -472,23 +444,13 @@ switch_editing_map :: proc(name: Map_Name) {
 	clear(&editor.expanded_spawn_triggers)
 }
 
+// blocking out a map is placing and erasing rectangles - there's nothing to
+// pick, so the mode is its three tools and nothing else.
 tiles_mode_ui :: proc() {
 	if ui.row({gap = ui.theme.gap}) {
 		tool_button("Pencil", .Pencil)
 		tool_button("Rect", .Rectangle)
 		tool_button("Erase", .Erase)
-		ui.spacer()
-		ui.text("Tile [{}, {}]", editor.selected_tile.x, editor.selected_tile.y)
-	}
-
-	if ui.column({gap = 1}) {
-		for y in 0 ..< TILESET_ROWS {
-			if ui.row({gap = 1}) {
-				for x in 0 ..< TILESET_COLS {
-					palette_cell(x, y)
-				}
-			}
-		}
 	}
 }
 
@@ -995,37 +957,6 @@ mode_button :: proc(label: string, mode: EditorMode) {
 tool_button :: proc(label: string, tool: EditorTool) {
 	if selectable_button(label, label, editor.tool == tool) {
 		editor.tool = tool
-	}
-}
-
-palette_cell :: proc(x, y: int) {
-	key := fmt.tprintf("cell_{}_{}", x, y)
-
-	if layout.node(
-		{
-			key = key,
-			size_info = {layout.fixed(PALETTE_CELL_SIZE), layout.fixed(PALETTE_CELL_SIZE)},
-			background_color = {0, 0, 0, 255},
-		},
-	) {
-		_, _, clicked := layout.get_node_mouse_state()
-
-		if clicked {
-			editor.selected_tile = {i32(x), i32(y)}
-
-			// picking a tile implies drawing, but keep pencil vs rectangle
-			if editor.tool == .Erase {
-				editor.tool = .Pencil
-			}
-		}
-
-		append(
-			&editor.palette_cells,
-			Palette_Cell {
-				node_id = layout.get_node(layout.current_open_node()).id,
-				coords = {i32(x), i32(y)},
-			},
-		)
 	}
 }
 

@@ -153,6 +153,16 @@ point_in_world_bounds :: proc(point: Vec2, bounds: World_Bounds) -> bool {
 	return point.x >= bounds.min_x && point.x <= bounds.max_x && point.y >= bounds.min_y && point.y <= bounds.max_y
 }
 
+// inclusive on every edge, so a rect merely touching the bounds still counts:
+// culling one tile row too few at the screen edge costs nothing, culling one
+// too many would show as a seam flickering along the edge as the camera moves.
+world_rect_overlaps_bounds :: proc(rect: Rect, bounds: World_Bounds) -> bool {
+	if rect.x + rect.width < bounds.min_x || rect.x > bounds.max_x {
+		return false
+	}
+	return rect.y + rect.height >= bounds.min_y && rect.y <= bounds.max_y
+}
+
 // the world-space rect currently visible through camera, derived from
 // target/zoom/screen size - raylib's Camera2D treats offset as screen-center
 // (see update_camera_center_smooth_follow), so this is a plain half-extent
