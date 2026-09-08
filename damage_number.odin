@@ -4,9 +4,9 @@ import "core:fmt"
 import "core:strings"
 import rl "vendor:raylib"
 
-DAMAGE_NUMBER_LIFETIME :: 0.6
-DAMAGE_NUMBER_RISE_SPEED :: 40.0 // px/s, world-space upward drift
-DAMAGE_NUMBER_FONT_SIZE :: 10
+DAMAGE_NUMBER_LIFETIME: f32 = 0.6
+DAMAGE_NUMBER_RISE_SPEED: f32 = 40.0 // px/s, world-space upward drift
+DAMAGE_NUMBER_FONT_SIZE: f32 = 10
 
 Damage_Number :: struct {
 	position:     Vec2,

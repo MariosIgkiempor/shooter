@@ -7,63 +7,28 @@ import rl "vendor:raylib"
 import layout "vendor/ui"
 import ui "vendor/ui/ui"
 
-// -- legacy nine-slice/vendor-ui support -------------------------------------
-// ADR-0014 moved every real Screen below off vendor/ui and nine-slice panels
-// onto the flat-rect Menu component set (see "Screens & Reveal/Dismiss
-// transitions" further down). This block is all that's left of the old
-// approach, kept alive solely because debug.odin's F8 panel (out of scope
-// for ADR-0014 - it's not one of the six Screens, see CONTEXT.md's Screen
-// entry) still draws through it.
+// -- shared vendor/ui render backend -----------------------------------------
+// ADR-0014 moved every real Screen below off vendor/ui onto the flat-rect
+// Menu component set (see "Screens & Reveal/Dismiss transitions" further
+// down). What survives here is the small backend the two remaining vendor/ui
+// surfaces share: debug.odin's F8 panel and editor.odin's Tilemap Editor,
+// neither of which is one of the six Screens (see CONTEXT.md's Screen entry).
+// The nine-slice panel art that used to sit behind the F8 panel is gone -
+// both surfaces now draw the library's Rectangle commands as plain flat
+// fills, so they render identically apart from their theme.
 
-// which nine-slice source a panel-flagged render command draws, keyed by the
-// ui library's opaque `panel_variant` int (see BUTTON_PANEL_VARIANT /
-// BUTTON_PANEL_VARIANT_PRESSED in vendor/ui/ui/ui.odin) - 0 is every
-// non-button panel (just the window/container background today). Each
-// texture is its own single square-grid source (see draw_nine_slice),
-// sliced into its 3x3 grid automatically - no per-tile source art needed.
-Menu_Panel_Variant :: enum {
-	Container,
-	Button_Normal,
-	Button_Pressed,
-}
-
-menu_panel_variant_textures: [Menu_Panel_Variant]Texture_Name = {
-	.Container      = .Ui_9square_Panel,
-	.Button_Normal  = .Ui_9square_Button,
-	.Button_Pressed = .Ui_9square_Button_Pressed,
-}
-
-// debug.odin's panel renders in real screen pixels (see ui.begin_frame
-// below), not the small 180px-tall HUD camera, so it's drawn a couple of
-// tile-lengths larger than native to stay proportionate against a full
-// window
-MENU_PANEL_SCALE :: 2
-
-// the native nine-slice corners are Ui_9square_Panel's own size / 3 (sliced
-// into even thirds - see draw_nine_slice); scaled up by MENU_PANEL_SCALE,
-// that's roughly how far the title bar/content must be inset from the
-// window's edge so the outer panel's border stays visible all the way
-// around instead of being drawn over edge-to-edge
-MENU_PANEL_MARGIN :: 16 * MENU_PANEL_SCALE
-
-// how far a pressed button sinks down: both its drawn background (see
-// draw_ui_render_commands) and, via HUD_THEME.button_press_offset below, the
-// label text laid out inside it (see layout.Node.press_offset_y) move by
-// this exact same amount, so the label stays put relative to the button
-// instead of drifting - one constant so the two can't fall out of sync
+// how far a pressed button (and its label) sinks down. Purely a *layout*
+// offset - it feeds HUD_THEME.button_press_offset, which the ui library
+// applies to the button's label node (see layout.Node.press_offset_y) so the
+// label tracks the box instead of drifting. Nothing draw-time depends on it.
 BUTTON_PRESS_SINK :: 3
 
-// how much a pressed button's drawn background additionally shrinks - taken
-// evenly off the top and bottom, so it doesn't shift the box's vertical
-// center and needs no matching adjustment on the label (unlike SINK above)
-BUTTON_PRESS_SHRINK :: 4
-
 // the ui library's `theme` is a single shared global, and its default values
-// are tuned for the editor's flat-rect windows (a saturated blue accent).
-// tinting the nine-slice panel art with those same colors reads muddy and
-// couples debug.odin's panel to whatever the editor's palette happens to
-// be, so it gets its own theme: a desaturated dark blue-gray family that
-// matches the panel art, varying only in lightness across states.
+// are tuned for the editor's windows (a saturated blue accent, 18px text).
+// debug.odin's panel draws in real screen pixels rather than the small 180px
+// HUD camera, and reads better dark and a size up, so it gets its own theme:
+// a desaturated dark blue-gray family varying only in lightness across
+// states. Swapped in and restored around the panel's draw (see debug.odin).
 HUD_THEME :: ui.Theme {
 	window_background   = {58, 63, 74, 255},
 	title_bar           = {46, 50, 60, 255},
@@ -78,54 +43,34 @@ HUD_THEME :: ui.Theme {
 	padding             = 10,
 	gap                 = 8,
 	button_press_offset = BUTTON_PRESS_SINK,
+	scrollbar_track     = {40, 44, 52, 255},
+	scrollbar_thumb     = {96, 104, 122, 255},
 }
 
-// shared by debug.odin's panel: walks the ui library's render commands,
-// drawing any node opted into `panel = true` (see the ui.begin/ui.button
-// calls there) as a tinted nine-slice panel instead of a flat rect. The
-// editor uses the same ui library but never sets `panel`, so its
-// windows/buttons keep rendering as plain flat rects untouched by any of
-// this.
-draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f32) {
+// the whole backend: walks the ui library's render commands and draws them.
+// Shared by debug.odin's F8 panel and editor.odin, so the two can't drift
+// apart. The library's `panel`/`panel_variant` fields are deliberately opaque
+// to it (layout.odin) and simply ignored - there is no decorative panel style
+// anymore, only flat fills in whichever theme is current.
+draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 	for cmd in commands {
+		// scroll containers are the library's business, not this backend's: it
+		// gets told the rect each command is visible through and scissors to
+		// it, and only when the command actually crosses that rect's edge -
+		// which, outside a scroll container, is never
+		clipped := layout.command_needs_clip(cmd)
+		if clipped {
+			rl.BeginScissorMode(
+				i32(cmd.clip.x),
+				i32(cmd.clip.y),
+				i32(cmd.clip.width),
+				i32(cmd.clip.height),
+			)
+		}
+
 		switch cmd.kind {
 		case .Rectangle:
-			dest := Rect{cmd.pos.x, cmd.pos.y, cmd.size.x, cmd.size.y}
-			tint := rl.Color(cmd.color)
-
-			if cmd.panel {
-				variant := Menu_Panel_Variant(cmd.panel_variant)
-				texture := atlas_textures[menu_panel_variant_textures[variant]]
-				// the button textures are real drawn art (normal/pressed), not a
-				// flat shape meant to be recolored - the theme's button/button_hot/
-				// button_active tints only ever made sense against the single
-				// generic panel texture, so they're ignored here to keep the art's
-				// own colors intact; the container keeps its theme tint as before
-				panel_tint := variant == .Container ? tint : rl.WHITE
-
-				if variant == .Button_Pressed {
-					// purely a draw-time visual effect on the drawn rect, not the
-					// layout node itself (which would risk reflowing sibling buttons
-					// just because one got pressed). Two separate moves, deliberately
-					// not collapsed into one: SINK translates the whole box down by
-					// the exact amount the label (a separate layout node, moved via
-					// HUD_THEME.button_press_offset - see layout.Node.press_offset_y)
-					// also moves, so the two stay aligned; SHRINK then takes evenly
-					// off the top and bottom of that already-moved box, which doesn't
-					// need a matching label adjustment since a symmetric shrink never
-					// moves the center SINK already aligned it to. Collapsing these
-					// into a single bottom-anchored shrink (translate the top only,
-					// leave the bottom fixed) is what caused the earlier bug: that
-					// moves the box's center by SINK/2, not SINK, so the label (moved
-					// by the full SINK) drifted out of alignment with it.
-					dest.y += BUTTON_PRESS_SINK + BUTTON_PRESS_SHRINK / 2
-					dest.height -= BUTTON_PRESS_SHRINK
-				}
-
-				draw_nine_slice(texture, dest, panel_tint, panel_scale)
-			} else {
-				rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), tint)
-			}
+			rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
 		case .Text:
 			rl.DrawTextEx(
 				font,
@@ -136,6 +81,42 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands, panel_scale: f3
 				rl.Color(cmd.color),
 			)
 		}
+
+		if clipped {
+			rl.EndScissorMode()
+		}
+	}
+}
+
+// whether the pointer was over one of the two vendor/ui surfaces last frame.
+// A gesture a ui surface owns must not also act on the world: the editor
+// suppresses tile painting and camera panning while true (editor.odin), and
+// the F8 panel suppresses weapon firing (main.odin), so a click that presses
+// a panel button never also fires the equipped weapon.
+//
+// One shared flag rather than one per surface, because the two are mutually
+// exclusive - F8 requires .Playing and the editor only draws in .Editing, so
+// at most one of them is live in any frame. Cleared once in draw_game
+// (main.odin) rather than by each surface, since a surface that isn't drawn
+// can't clear anything: a panel closed while the pointer sat over it would
+// otherwise leave this stuck true. Whichever surface does draw re-records
+// into it via record_ui_hover.
+//
+// One frame stale by construction: the ui is declared during the draw phase,
+// so the newest answer available to an update is the one last frame's layout
+// produced - and it's about where the pointer *is*, not about an event having
+// arrived, so it holds steady across a trackpad gesture's gaps rather than
+// flickering between them.
+ui_hovered: bool
+
+// called just inside ui.begin: the current open node is the window content,
+// whose parent is the window itself (title bar included)
+record_ui_hover :: proc() {
+	content := layout.get_node(layout.current_open_node())
+	window := layout.get_node(content.parent)
+
+	if layout.is_node_with_id_hovered(window.id) {
+		ui_hovered = true
 	}
 }
 
@@ -262,7 +243,8 @@ update_menu_transition :: proc() {
 }
 
 // the mirror image of current_screen's mapping - the one place that
-// actually writes program_mode/run_ended/shopping for a Screen change.
+// actually writes program_mode/run_ended/shopping for a Screen change, and
+// the one place that closes the debug panel a Screen opens over.
 // Always rewrites run_ended/shopping together (rather than e.g. only ever
 // setting `shopping = true` for .Shop) so they can never drift out of the
 // mutual exclusivity current_screen already assumes.
@@ -271,6 +253,14 @@ apply_screen_kind :: proc(to: Maybe(Screen_Kind)) {
 
 	game.run_ended = has_screen && screen == .Run_End
 	game.shopping = has_screen && screen == .Shop
+
+	// the debug panel doesn't pause and so can still be open when a Screen
+	// opens over it (ADR-0021) - closed here rather than at the Run End and
+	// Shop call sites for the same reason this proc exists at all: one writer,
+	// so a Screen added later can't forget
+	if has_screen {
+		game.debug.panel_open = false
+	}
 
 	if !has_screen {
 		if game.menu_transition.current == .Map_Selection {
@@ -496,7 +486,7 @@ menu_with_alpha :: proc(c: Color, alpha: f32) -> Color {
 }
 
 // flat-rect panel background (ADR-0014, Variant C): dark fill + 2px accent
-// border, no shadow - the nine-slice Menu_Panel_Variant.Container treatment
+// border, no shadow - the retired nine-slice container panel treatment
 // above is debug.odin's holdout now, not this.
 draw_menu_panel :: proc(rect: Rect, anim: Menu_Element_Anim) {
 	if anim.alpha <= 0 {

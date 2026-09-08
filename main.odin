@@ -14,7 +14,12 @@ Vec2i :: [2]i32
 Rect :: rl.Rectangle
 
 PIXEL_WINDOW_HEIGHT :: 180
-GAMEPLAY_ZOOM :: 1.2
+
+// the inset bevel drawn inside a colliding tile, so walls read as solid
+// blocks rather than flat fills
+TILEMAP_WALL_BEVEL_INSET: f32 = 3
+TILEMAP_WALL_BEVEL_THICKNESS: f32 = 2
+GAMEPLAY_ZOOM: f32 = 1.2
 SAVE_GAME_PATH :: "data/game_save.json"
 
 // starting points only - tune visually against Shop/Run_End, same as
@@ -252,6 +257,14 @@ initialize_program :: proc() -> runtime.Context {
 	initialize_logger(&ctx)
 	context = ctx // so the rest of initialize_program can log too
 
+	// Tunables first: registration captures every Default from the code, then
+	// load_tuning applies any Override on top - and load_game re-derives the
+	// player's weapon from weapon_presets and their stats from
+	// PLAYER_BASE_MOVE_SPEED/PLAYER_BASE_MAX_HEALTH, so it has to see the
+	// post-Override values. See tuning.odin.
+	register_tunables()
+	load_tuning()
+
 	load_game()
 	reset_enemies()
 	reset_bullets()
@@ -280,6 +293,7 @@ initialize_program :: proc() -> runtime.Context {
 }
 
 deinitialize_program :: proc() {
+	deinit_tunables()
 	deinitialize_renderer()
 	deinitialize_logger()
 	rl.CloseWindow()
@@ -383,7 +397,12 @@ update_game :: proc() {
 	}
 
 	update_game_state :: proc() {
-		if game.run_ended || game.shopping || game.debug.panel_open {
+		// the debug panel is deliberately absent here: it's a non-modal
+		// overlay and the simulation keeps running underneath it (ADR-0021),
+		// which is the whole point of it - toggling a visualizer has to act on
+		// a live scene to be worth anything. Nothing compensates for the extra
+		// danger that brings; God Mode already sits on that very panel.
+		if game.run_ended || game.shopping {
 			return
 		}
 
@@ -448,8 +467,19 @@ update_game :: proc() {
 			game.enemies[:],
 		)
 
-		fire_pressed :=
+		// a click the debug panel owns must not also fire the weapon, now that
+		// the panel leaves the game running (ADR-0021): without this an
+		// Automatic weapon sprays for as long as the pointer rests on the
+		// panel, and a Semi_Automatic one burns a Windup per toggle. Gating
+		// the held input rather than just the press covers both, and the same
+		// flag also holds the cast particles back so the telegraph doesn't
+		// play for an action that never happens. The cost is that the panel's
+		// own corner is a dead zone for shooting while it's open - accepted,
+		// since it's a dev surface opened deliberately, in the emptiest corner
+		// of the screen.
+		fire_input :=
 			game.player.weapon.fire_mode == .Automatic ? is_mouse_button_down(.LEFT) : is_mouse_button_pressed(.LEFT)
+		fire_pressed := fire_input && !ui_hovered
 
 		if fire_pressed {
 			try_use_weapon(
@@ -465,7 +495,7 @@ update_game :: proc() {
 			game.player.weapon,
 			player_pos,
 			game.player.aim_dir,
-			is_mouse_button_down(.LEFT),
+			is_mouse_button_down(.LEFT) && !ui_hovered,
 		)
 
 		update_bullets(rl.GetFrameTime())
@@ -492,7 +522,7 @@ update_game :: proc() {
 // fixed logical footprint for both Player and Enemy - matches the old sprite
 // document_size (24x24) so hitboxes are unchanged from before the art revamp,
 // now independent of the (removed) Animation/atlas system
-ACTOR_SIZE :: Vec2{24, 24}
+ACTOR_SIZE := Vec2{24, 24}
 
 actor_collision_rect :: proc(rect: Rect) -> Rect {
 	return {rect.x - ACTOR_SIZE.x / 2, rect.y - ACTOR_SIZE.y, ACTOR_SIZE.x, ACTOR_SIZE.y}
@@ -621,8 +651,8 @@ Player :: struct {
 	health:              f32 `json:"-"`,
 }
 
-PLAYER_BASE_MOVE_SPEED :: 100
-PLAYER_BASE_MAX_HEALTH :: 100
+PLAYER_BASE_MOVE_SPEED: f32 = 100
+PLAYER_BASE_MAX_HEALTH: f32 = 100
 
 // derives move_speed/max_health fresh from PLAYER_BASE_MOVE_SPEED/
 // PLAYER_BASE_MAX_HEALTH, layered through Account_Stat's Swiftness/Vigor
@@ -796,8 +826,8 @@ start_new_run :: proc(starter_kind: Weapon_Kind) {
 // currencies: XP was minted tens-per-Run by a formula, whereas Gold is
 // picked up hundreds-per-Run, so the old base would have unlocked every
 // Account_Stat within a single session and left the gates never biting.
-LEVEL_BASE :: 500
-LEVEL_GROWTH :: 1.25 // multiplicative growth per level
+LEVEL_BASE: int = 500
+LEVEL_GROWTH: f32 = 1.25 // multiplicative growth per level
 
 // banked Gold required to advance from `level` to `level + 1`
 gold_required_for_level :: proc(level: int) -> int {
@@ -838,9 +868,9 @@ ENEMY_SWARMER_COLOR :: rl.ORANGE
 // ENEMY_MAX_HEALTH (50) lands at the old fixed ACTOR_SIZE (24) - enemy
 // variety with different max_health per kind will differentiate sizes once
 // it exists.
-ENEMY_SIZE_MIN :: 10.0
-ENEMY_SIZE_MAX :: 48.0
-ENEMY_SIZE_PER_MAX_HEALTH :: 0.28
+ENEMY_SIZE_MIN: f32 = 10.0
+ENEMY_SIZE_MAX: f32 = 48.0
+ENEMY_SIZE_PER_MAX_HEALTH: f32 = 0.28
 
 enemy_body_size :: proc(max_health: f32) -> f32 {
 	return clamp(
@@ -852,7 +882,7 @@ enemy_body_size :: proc(max_health: f32) -> f32 {
 
 // opacity fades toward ENEMY_MIN_OPACITY as health drops, so a badly-hurt
 // enemy visibly reads as weakened at a glance, not just via a health bar
-ENEMY_MIN_OPACITY :: 0.25
+ENEMY_MIN_OPACITY: f32 = 0.25
 
 enemy_body_color :: proc(kind: Movement_Style_Kind, health_frac: f32) -> Color {
 	base: Color
@@ -869,8 +899,18 @@ enemy_body_color :: proc(kind: Movement_Style_Kind, health_frac: f32) -> Color {
 	return rl.Fade(base, alpha)
 }
 
-ACTOR_SQUASH_RATE :: 12.0 // exp_approach rate, 1/s
-ACTOR_MOVING_SCALE :: Vec2{1.15, 0.85} // scale_x/scale_y target while moving; eases back to {1,1} at rest
+// weapon-animation feel. Hoisted out of draw_game so Tunables can hold their
+// addresses; the values are unchanged.
+WEAPON_WINDUP_PULLBACK: f32 = 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
+WEAPON_RECOIL_KICK: f32 = 8.0 // px kicked back along -aim_dir during Gun's Automatic Follow-through (SMG)
+FLAME_STAFF_PULSE_SCALE: f32 = 0.35 // extra scale at the start of a Follow-through pulse, decaying to 0
+SWORD_SWING_OUT_TIME: f32 = 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
+SWORD_SWING_RETURN_TIME: f32 = 0.11 // seconds, ease-out extreme -> neutral
+SWORD_ECHO_STEP: f32 = 0.025 // seconds between each sampled echo
+SWORD_ECHO_FADE: f32 = 0.5 // alpha multiplier on an echo's already-faded color
+
+ACTOR_SQUASH_RATE: f32 = 12.0 // exp_approach rate, 1/s
+ACTOR_MOVING_SCALE := Vec2{1.15, 0.85} // scale_x/scale_y target while moving; eases back to {1,1} at rest
 
 // continuous isotropic squash while moving (ticket 01's confirmed Variant A)
 // - no rotation/tilt. Called once per frame per actor from the update phase
@@ -955,6 +995,18 @@ draw_game :: proc() {
 		}
 	}
 	end_using_camera()
+
+	// cleared here rather than inside each surface's own draw: a surface that
+	// isn't drawn this frame can't clear anything, so a panel closed (or an
+	// editor left) while the pointer sat over it would otherwise leave the
+	// flag stuck true and suppress firing forever. It has to sit *after*
+	// draw_world_contents above, since draw_editor_world_overlay reads the
+	// flag to hide the hovered-tile outline under an editor window - and
+	// *before* the two surfaces below, which re-record into it. Everything
+	// reading it outside this window (update_game_state, update_editor) sees
+	// last frame's answer, which is the one-frame staleness it's documented
+	// for (hud.odin).
+	ui_hovered = false
 
 	if game.program_mode == .Editing {
 		draw_editor()
@@ -1132,14 +1184,14 @@ draw_game :: proc() {
 			draw_rectangle(world_rect, color)
 
 			if tile.collides {
-				bevel: f32 = 3
+				bevel := TILEMAP_WALL_BEVEL_INSET
 				inset := Rect {
 					world_rect.x + bevel,
 					world_rect.y + bevel,
 					world_rect.width - bevel * 2,
 					world_rect.height - bevel * 2,
 				}
-				draw_rectangle_lines(inset, TILEMAP_WALL_BEVEL_COLOR, 2)
+				draw_rectangle_lines(inset, TILEMAP_WALL_BEVEL_COLOR, TILEMAP_WALL_BEVEL_THICKNESS)
 			}
 		}
 	}
@@ -1189,13 +1241,11 @@ draw_game :: proc() {
 		}
 	}
 
-	WEAPON_WINDUP_PULLBACK :: 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
-	WEAPON_RECOIL_KICK :: 8.0 // px kicked back along -aim_dir during Gun's Automatic Follow-through (SMG)
-	FLAME_STAFF_PULSE_SCALE :: 0.35 // extra scale at the start of a Follow-through pulse, decaying to 0
-	SWORD_SWING_OUT_TIME :: 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
-	SWORD_SWING_RETURN_TIME :: 0.11 // seconds, ease-out extreme -> neutral
-	SWORD_ECHO_COUNT :: 3 // capacity for motion-trail echoes; how many a weapon actually leaves is per-kind (Weapon_Visual.swing_echo_count)
-	SWORD_ECHO_STEP :: 0.025 // seconds between each sampled echo
+	// SWORD_ECHO_COUNT stays here and stays a compile-time constant: it backs
+	// the fixed-size echo_angles array below, so it can never be a Tunable.
+	// The per-kind echo count that *is* tunable is Weapon_Visual.swing_echo_count,
+	// which the min() further down clamps against this capacity.
+	SWORD_ECHO_COUNT :: 3
 
 	// angle offset (added to the pre-swing base angle) at `time_since_resolve`
 	// seconds into Sword's Resolve swing-through - a two-phase eased curve (a
@@ -1306,7 +1356,7 @@ draw_game :: proc() {
 			fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
 			glyph(
 				icon_frame_pivot(pivot, echo_angles[i], size),
-				rl.Fade(WEAPON_MELEE_COLOR, fade * 0.5),
+				rl.Fade(WEAPON_MELEE_COLOR, fade * SWORD_ECHO_FADE),
 				1,
 			)
 		}
@@ -1402,6 +1452,16 @@ program_should_exit :: proc() -> bool {
 	return rl.WindowShouldClose()
 }
 
+// camera-follow feel. These were bare proc-local literals until the Tunable
+// registry needed addresses for them - naming them changed no behaviour, but
+// it's what makes camera follow tunable at all, and it's the highest-leverage
+// feel knob in a twin-stick.
+CAMERA_MIN_SPEED: f32 = 30.0 // px/s floor once the camera is chasing at all
+CAMERA_MIN_EFFECT_LENGTH: f32 = 10.0 // deadzone radius - below this the camera doesn't move
+CAMERA_FRACTION_SPEED: f32 = 0.8 // linear term of the catch-up speed
+CAMERA_SPEED_CURVE: f32 = 0.1 // quadratic term: speed grows with distance^2, so a far camera snaps back hard
+CAMERA_ZOOM_EASE_RATE: f32 = 8 // exp_approach rate back to GAMEPLAY_ZOOM, 1/s
+
 update_camera_center_smooth_follow :: proc(
 	camera: ^Camera,
 	player: ^Player,
@@ -1409,20 +1469,16 @@ update_camera_center_smooth_follow :: proc(
 	width: int,
 	height: int,
 ) {
-	minSpeed: f32 = 30.0
-	minEffectLength: f32 = 10.0
-	fractionSpeed: f32 = 0.8
-
 	camera.offset = Vec2{f32(width) / 2.0, f32(height) / 2.0}
 	diff := Vec2{player.rect.x, player.rect.y} - camera.target
 	length := rl.Vector2Length(diff)
 
-	if (length > minEffectLength) {
-		speed := max(fractionSpeed * length * (0.1 * length), minSpeed)
+	if (length > CAMERA_MIN_EFFECT_LENGTH) {
+		speed := max(CAMERA_FRACTION_SPEED * length * (CAMERA_SPEED_CURVE * length), CAMERA_MIN_SPEED)
 		camera.target = camera.target + diff * (speed * delta / length)
 	}
 
 	// gameplay zoom is independent of the editor's: ease back to it, so
 	// leaving the editor animates the zoom as well as the position
-	camera.zoom = exp_approach(camera.zoom, GAMEPLAY_ZOOM, 8, delta)
+	camera.zoom = exp_approach(camera.zoom, GAMEPLAY_ZOOM, CAMERA_ZOOM_EASE_RATE, delta)
 }

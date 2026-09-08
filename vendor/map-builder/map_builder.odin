@@ -37,7 +37,6 @@ Vec2 :: [2]f32
 Vec2i :: [2]i32
 
 Tile :: struct {
-	atlas_coords: Vec2i,
 	world_coords: Vec2i,
 	collides:     bool,
 }

@@ -23,6 +23,10 @@ import ui "vendor/ui/ui"
 EditorMode :: enum {
 	Tiles,
 	Collisions,
+	// balance/feel numbers rather than map content (tuning.odin). A third mode
+	// rather than an always-visible section because it's mutually exclusive
+	// with the work Tiles/Collisions do.
+	Tuning,
 }
 
 EditorTool :: enum {
@@ -34,9 +38,6 @@ EditorTool :: enum {
 editor: struct {
 	mode:          EditorMode,
 	tool:          EditorTool,
-	// whether the pointer was over an editor window last frame; world
-	// painting is suppressed while true
-	ui_hovered:    bool,
 	// rectangle tool drag, from mouse press to release
 	dragging:      bool,
 	drag_erasing:  bool,
@@ -48,6 +49,11 @@ editor: struct {
 	// whether the map-switcher's list-and-pick panel is open; purely a UI
 	// toggle, unrelated to game.editing_map itself
 	picking_map:   bool,
+	// which Tuning Group is expanded in Tuning mode, at most one at a time -
+	// the same one-open-at-a-time shape as expanded_spawn_triggers below, but a
+	// single value since a Tuning Group list is a menu rather than a set of
+	// independently-inspectable rows
+	expanded_tuning_group: Maybe(Tuning_Group),
 	// which rows of the always-visible Spawn Trigger list (editor_window)
 	// are expanded, keyed by index into game.editing_map.spawn_triggers -
 	// purely a UI toggle, unrelated to the persisted Spawn_Trigger itself,
@@ -62,6 +68,7 @@ initialize_editor :: proc() {
 	// the layout engine assumes each wrapped line advances exactly font_size
 	rl.SetTextLineSpacing(0)
 	ui.set_measure_text_proc(editor_measure_text)
+
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
@@ -93,6 +100,17 @@ update_editor_camera :: proc() {
 
 	camera := &editor.camera
 	wheel := get_mouse_wheel_move()
+
+	// a gesture the editor's ui owns must not also pan or zoom the world. One
+	// frame stale, like the shared ui_hovered it sits beside (hud.odin): the
+	// ui is declared during the draw phase, so the newest answer available
+	// here is the one last frame's layout produced - and it's about where the
+	// pointer is, not about a delta having arrived, so it holds steady across
+	// a trackpad gesture's gaps rather than letting the camera drift between
+	// them
+	if layout.scroll_captured() {
+		wheel = {}
+	}
 
 	if is_key_down(.LEFT_SUPER) || is_key_down(.RIGHT_SUPER) {
 		if wheel.y != 0 {
@@ -162,7 +180,7 @@ update_editor :: proc() {
 		return
 	}
 
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -183,7 +201,7 @@ update_editor :: proc() {
 // left-drag marks tiles as colliding, right-drag clears them. only existing
 // tiles can collide: painting over an empty spot does nothing
 update_collisions_mode :: proc(hovered_coord: Vec2i) {
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -207,7 +225,7 @@ update_collisions_mode :: proc(hovered_coord: Vec2i) {
 // one there is blocked
 update_rectangle_tool :: proc(hovered_coord: Vec2i) {
 	if !editor.dragging {
-		if editor.ui_hovered {
+		if ui_hovered {
 			return
 		}
 
@@ -307,7 +325,7 @@ draw_editor_world_overlay :: proc() {
 			}
 		}
 
-		if !editor.ui_hovered {
+		if !ui_hovered {
 			draw_rectangle_lines(tile_world_rect(hovered_tile_coords(), tile_size), rl.ORANGE, 1)
 		}
 
@@ -327,7 +345,7 @@ draw_editor_world_overlay :: proc() {
 		return
 	}
 
-	if editor.ui_hovered {
+	if ui_hovered {
 		return
 	}
 
@@ -338,32 +356,14 @@ draw_editor_world_overlay :: proc() {
 // -- editor windows ----------------------------------------------------------
 
 draw_editor :: proc() {
-	editor.ui_hovered = false
-
-	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
+	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT), get_mouse_wheel_move())
 	ui.begin_frame(game.window_width, game.window_height)
 
 	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, padding = 12}) {
 		editor_window()
 	}
 
-	render_commands := ui.end_frame()
-
-	for cmd in render_commands {
-		switch cmd.kind {
-		case .Rectangle:
-			rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
-		case .Text:
-			rl.DrawTextEx(
-				font,
-				strings.clone_to_cstring(cmd.text, context.temp_allocator),
-				rl.Vector2(cmd.pos),
-				f32(cmd.font_size),
-				0,
-				rl.Color(cmd.color),
-			)
-		}
-	}
+	draw_ui_render_commands(ui.end_frame())
 }
 
 editor_window :: proc() {
@@ -393,6 +393,7 @@ editor_window :: proc() {
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
+			mode_button("Tuning", .Tuning)
 		}
 
 		switch editor.mode {
@@ -400,6 +401,15 @@ editor_window :: proc() {
 			tiles_mode_ui()
 		case .Collisions:
 			collisions_mode_ui()
+		case .Tuning:
+			tuning_mode_ui()
+		}
+
+		// Tuning edits globals, not the open Map - the Spawn Trigger panel and
+		// the map Save/Clear footer below would both be misleading next to it,
+		// so Tuning mode ends here with its own footer (see tuning_mode_ui)
+		if editor.mode == .Tuning {
+			return
 		}
 
 		// always-visible, like the Map row above - there's no map position to
@@ -474,6 +484,155 @@ collisions_mode_ui :: proc() {
 // click-place a trigger at anymore, so this isn't a dedicated EditorMode.
 // Clicking a row's summary toggles an inline detail panel beneath it
 // (multiple rows may be expanded at once, per the winning prototype).
+
+// -- Tuning mode -------------------------------------------------------------
+// Every Tuning Group as a collapsible row, at most one expanded (see
+// editor.expanded_tuning_group). Only the expanded group emits Tunable rows,
+// which is what keeps a frame's node count small - the ~275 Tunables all at
+// once would be about 1700 nodes against layout's cap of 1024 - and what makes
+// the group list itself the navigation.
+//
+// The list scrolls (vendor/ui gained scroll containers for this); the Save/
+// Reset footer above it deliberately doesn't, so the two buttons stay put
+// wherever you are in the list. The scroll box takes a share of the window
+// height rather than growing into the editor window's slack, which keeps
+// Tiles and Collisions mode laying out exactly as they did.
+TUNING_LIST_HEIGHT_FRACTION :: 0.6
+
+tuning_mode_ui :: proc() {
+	overridden := 0
+	for t in tunables {
+		if tunable_overridden(t) {
+			overridden += 1
+		}
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		// edits are already live in memory (see tuning_row); Save only writes
+		// them to disk, exactly like the map editor's own Save button below.
+		// Deliberately not autosaved on drag: that would thrash the file mid-
+		// drag and turn every experiment into a git diff.
+		if ui.button("Save Tuning") {
+			save_tuning()
+		}
+		if ui.button("Reset All") {
+			for t in tunables {
+				tunable_reset(t)
+			}
+			apply_tuning_change()
+		}
+		ui.spacer()
+		ui.text("{} of {} overridden", overridden, len(tunables))
+	}
+
+	// explicitly keyed, as ui.scroll_area requires: the offset is retained
+	// across frames by node id, and this container's siblings come and go as
+	// groups expand
+	if ui.scroll_area(
+		"tuning_groups",
+		{
+			size = {y = layout.fixed(game.window_height * TUNING_LIST_HEIGHT_FRACTION)},
+			gap = ui.theme.gap,
+		},
+	) {
+		tuning_group_list()
+	}
+}
+
+tuning_group_list :: proc() {
+	for group in Tuning_Group {
+		expanded := false
+		if current, ok := editor.expanded_tuning_group.?; ok {
+			expanded = current == group
+		}
+
+		// the override count rides on the group's own label so a collapsed
+		// group still says whether anything inside it has been moved
+		group_overrides := tuning_group_override_count(group)
+		label := tuning_group_display_name[group]
+		if group_overrides > 0 {
+			label = fmt.tprintf("{} [{}]", label, group_overrides)
+		}
+
+		if selectable_button(fmt.tprintf("tuning_group_{}", group), label, expanded) {
+			editor.expanded_tuning_group = expanded ? nil : group
+		}
+
+		if !expanded {
+			continue
+		}
+
+		for tunable in tunables_in_group(group) {
+			tuning_row(tunable)
+		}
+
+		if group_overrides > 0 {
+			if ui.row({gap = ui.theme.gap}) {
+				ui.spacer()
+				if selectable_button(fmt.tprintf("tuning_reset_group_{}", group), "Reset Group", false) {
+					tuning_reset_group(group)
+					apply_tuning_change()
+				}
+			}
+		}
+	}
+}
+
+// one Tunable: a label+value line (with Reset when Overridden), then the
+// control. ui.slider is f32-only, so int rides on an f32 proxy - the same
+// idiom draw_spawn_trigger_detail already uses for Kills_Reached.count - and
+// bool gets an ON/OFF button instead, matching debug.odin's toggles.
+tuning_row :: proc(tunable: ^Tunable) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}: {}", tunable.label, tunable_value_text(tunable^))
+		ui.spacer()
+		if tunable_overridden(tunable^) {
+			if selectable_button(fmt.tprintf("{}_reset", tunable.slug), "Reset", false) {
+				tunable_reset(tunable^)
+				apply_tuning_change()
+			}
+		}
+	}
+
+	switch value in tunable.value {
+	case ^bool:
+		if selectable_button(tunable.slug, value^ ? "ON" : "OFF", value^) {
+			value^ = !value^
+			apply_tuning_change()
+		}
+	case ^int:
+		proxy := f32(value^)
+		if ui.slider(tunable.slug, &proxy, tunable.min, tunable.max) {
+			tunable_set(tunable^, proxy)
+			apply_tuning_change()
+		}
+	case ^f32:
+		// ui.slider uses its label as the node key, and a slug is already
+		// unique across the whole registry - so it doubles as the key here
+		if ui.slider(tunable.slug, value, tunable.min, tunable.max) {
+			apply_tuning_change()
+		}
+	}
+}
+
+tunable_value_text :: proc(tunable: Tunable) -> string {
+	switch value in tunable.value {
+	case ^bool:
+		return value^ ? "ON" : "OFF"
+	case ^int:
+		return fmt.tprintf("{}", value^)
+	case ^f32:
+		// two literal format strings rather than one with a runtime precision:
+		// Odin's fmt has no `{:.*f}`, and writing it emits its own error text
+		// into the label. A 0..1 ratio needs more digits to read as changing at
+		// all than a 0..800 speed does.
+		if tunable.max <= 2 {
+			return fmt.tprintf("{:.3f}", value^)
+		}
+		return fmt.tprintf("{:.1f}", value^)
+	}
+	return ""
+}
 
 DEFAULT_SPAWN_TRIGGER_INTERVAL :: 3
 DEFAULT_SPAWN_CONDITION_KILLS :: 10
@@ -957,16 +1116,5 @@ mode_button :: proc(label: string, mode: EditorMode) {
 tool_button :: proc(label: string, tool: EditorTool) {
 	if selectable_button(label, label, editor.tool == tool) {
 		editor.tool = tool
-	}
-}
-
-// called just inside ui.begin: the current open node is the window content,
-// whose parent is the window itself (title bar included)
-record_ui_hover :: proc() {
-	content := layout.get_node(layout.current_open_node())
-	window := layout.get_node(content.parent)
-
-	if layout.is_node_with_id_hovered(window.id) {
-		editor.ui_hovered = true
 	}
 }

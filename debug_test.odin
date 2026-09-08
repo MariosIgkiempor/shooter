@@ -196,3 +196,79 @@ test_damage_player_does_not_double_bank_gold_on_repeated_hits_after_death :: pro
 
 	clear(&game.particles)
 }
+
+// The panel no longer pauses the simulation (ADR-0021), so a Run can end or
+// the Shop can open while it's still up, and a dev panel sitting on top of the
+// Run End modal would obscure it. apply_screen_kind is the one place that
+// writes run_ended/shopping for a Screen change, so it's also where the panel
+// is closed; tested there directly for the same reason hud_test.odin tests it
+// there - it's a plain proc over global state with no rendering and none of
+// request_screen_change's Dismiss-window wait.
+
+@(test)
+test_apply_screen_kind_run_end_closes_the_debug_panel :: proc(t: ^testing.T) {
+	previous_panel_open := game.debug.panel_open
+	previous_run_ended := game.run_ended
+	previous_program_mode := game.program_mode
+	defer {
+		game.debug.panel_open = previous_panel_open
+		game.run_ended = previous_run_ended
+		game.program_mode = previous_program_mode
+	}
+
+	game.debug.panel_open = true
+
+	apply_screen_kind(.Run_End)
+
+	testing.expect(
+		t,
+		!game.debug.panel_open,
+		"a Run ending should close the debug panel rather than let it draw over the Run End modal",
+	)
+}
+
+@(test)
+test_apply_screen_kind_shop_closes_the_debug_panel :: proc(t: ^testing.T) {
+	previous_panel_open := game.debug.panel_open
+	previous_shopping := game.shopping
+	previous_program_mode := game.program_mode
+	defer {
+		game.debug.panel_open = previous_panel_open
+		game.shopping = previous_shopping
+		game.program_mode = previous_program_mode
+	}
+
+	game.debug.panel_open = true
+
+	apply_screen_kind(.Shop)
+
+	testing.expect(
+		t,
+		!game.debug.panel_open,
+		"opening the Shop should close the debug panel rather than let both drive the ui in one frame",
+	)
+}
+
+@(test)
+test_apply_screen_kind_nil_leaves_the_debug_panel_alone :: proc(t: ^testing.T) {
+	previous_panel_open := game.debug.panel_open
+	previous_program_mode := game.program_mode
+	previous_current := game.menu_transition.current
+	defer {
+		game.debug.panel_open = previous_panel_open
+		game.program_mode = previous_program_mode
+		game.menu_transition.current = previous_current
+	}
+
+	game.program_mode = .Playing
+	game.menu_transition.current = .Shop
+	game.debug.panel_open = true
+
+	apply_screen_kind(nil)
+
+	testing.expect(
+		t,
+		game.debug.panel_open,
+		"returning to Playing is not a reason to close the panel - only a Screen opening over it is",
+	)
+}

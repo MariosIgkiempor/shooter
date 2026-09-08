@@ -34,12 +34,19 @@ Debug_State :: struct {
 	god_mode:    bool,
 }
 
-DEBUG_GOLD_GRANT :: 500 // gold added to the player per click of the panel's Add Gold button
+DEBUG_GOLD_GRANT: int = 500 // gold added to the player per click of the panel's Add Gold button
 
-// F8 opens/closes this panel (main.odin's update_game). Mirrors
-// draw_shop_ui's panel/pause pattern (hud.odin) - game.debug.panel_open
-// pauses update_game_state the same way game.shopping does, so clicking a
-// toggle here never also fires the equipped weapon or moves the player.
+// F8 opens/closes this panel (main.odin's update_game). Unlike draw_shop_ui
+// and the Run End modal, it does not pause update_game_state (ADR-0021): the
+// simulation runs underneath it so a visualizer can be toggled against a live
+// scene. What keeps a click on a toggle from also firing the equipped weapon
+// is the shared ui_hovered flag (hud.odin) instead, the same one the Tilemap
+// Editor uses to keep a click on its chrome from painting a tile.
+//
+// Scope: dev *views and cheats* only. Every balance/feel number lives in the
+// editor's Tuning mode instead (tuning.odin) - one surface per knob, so the
+// two can't drift. That's why the weapon_visual_scale slider that used to sit
+// here is gone: it's a Tunable now.
 draw_debug_panel_ui :: proc() {
 	previous_theme := ui.theme
 	ui.theme = HUD_THEME
@@ -48,14 +55,21 @@ draw_debug_panel_ui :: proc() {
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
 	ui.begin_frame(game.window_width, game.window_height)
 
-	if ui.row({size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Center, .Center}}) {
-		if ui.begin("Debug", {panel = true, panel_margin = MENU_PANEL_MARGIN}) {
-			ui.text("Gold: {}", game.player.gold)
+	// anchored to the bottom-left corner rather than offset into it: the
+	// top-right is already taken by draw_hud_counters (hud.odin), and an
+	// offset would couple this panel's position to that row's height. The
+	// only other bottom-anchored surface is the Confirm New Run dialog, which
+	// is Main Menu only and so can never coexist with this panel.
+	if ui.row(
+		{size = {layout.grow(0, 0), layout.grow(0, 0)}, align = {.Left, .Bottom}, padding = 12},
+	) {
+		if ui.begin("Debug") {
+			record_ui_hover()
 
 			for visualizer in Debug_Visualizer {
 				on := game.debug.visualizers[visualizer]
 				label := fmt.tprintf("{}: {}", visualizer_display_name[visualizer], on ? "ON" : "OFF")
-				if ui.button(label, {panel = true}) {
+				if ui.button(label) {
 					game.debug.visualizers[visualizer] = !on
 				}
 			}
@@ -66,35 +80,21 @@ draw_debug_panel_ui :: proc() {
 			// so granting Gold without also moving that baseline would let a
 			// dev cheat inflate real Account progression. Raising both hands
 			// the tester spendable Gold that settles as exactly zero.
-			if ui.button(fmt.tprintf("Add {} Gold", DEBUG_GOLD_GRANT), {panel = true}) {
+			if ui.button(fmt.tprintf("Add {} Gold", DEBUG_GOLD_GRANT)) {
 				game.player.gold += DEBUG_GOLD_GRANT
 				game.player.run_start_gold += DEBUG_GOLD_GRANT
 			}
 
-			// weapon silhouettes are per-kind now (ADR-0018) and the only
-			// honest way to judge one is at gameplay zoom while it rotates
-			// with your aim - so the global size multiplier is a live
-			// slider rather than a constant to recompile against. Drives
-			// Gun/Magic only; a melee blade's drawn length reports its real
-			// reach and must not be scaled away from it.
-			ui.text("Weapon size: {:.2f}x", weapon_visual_scale)
-			ui.slider(
-				"weapon_visual_scale",
-				&weapon_visual_scale,
-				WEAPON_VISUAL_SCALE_MIN,
-				WEAPON_VISUAL_SCALE_MAX,
-			)
-
 			god_mode_label := fmt.tprintf("God Mode: {}", game.debug.god_mode ? "ON" : "OFF")
-			if ui.button(god_mode_label, {panel = true}) {
+			if ui.button(god_mode_label) {
 				game.debug.god_mode = !game.debug.god_mode
 			}
 
-			if ui.button("Close", {panel = true}) {
+			if ui.button("Close") {
 				game.debug.panel_open = false
 			}
 		}
 	}
 
-	draw_ui_render_commands(ui.end_frame(), MENU_PANEL_SCALE)
+	draw_ui_render_commands(ui.end_frame())
 }

@@ -4,8 +4,8 @@ import "core:math/rand"
 
 // trauma decays to 0 over roughly 1/SCREEN_SHAKE_DECAY seconds; shake offset
 // is scaled by trauma^2 so a hit kicks in hard and then eases out smoothly
-SCREEN_SHAKE_DECAY :: 2.5
-SCREEN_SHAKE_MAX_OFFSET :: 120.0 // screen-space pixels at trauma = 1
+SCREEN_SHAKE_DECAY: f32 = 2.5
+SCREEN_SHAKE_MAX_OFFSET: f32 = 120.0 // screen-space pixels at trauma = 1
 
 reset_screen_shake :: proc() {
 	game.screen_shake_trauma = 0

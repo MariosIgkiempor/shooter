@@ -358,6 +358,9 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 // Magic only: scaling a melee blade would decouple its drawn length from
 // the reach it is reporting, making the silhouette lie about its hit arc.
 weapon_visual_scale: f32 = 1
+// alpha of the one-shot muzzle flash disc, 0..1
+MUZZLE_FLASH_ALPHA: f32 = 0.8
+
 WEAPON_VISUAL_SCALE_MIN :: 0.4
 WEAPON_VISUAL_SCALE_MAX :: 2.5
 
@@ -377,7 +380,7 @@ weapon_world_frame_size :: proc(weapon: Weapon) -> f32 {
 	return weapon_visuals[weapon.kind].length * weapon_visual_scale
 }
 
-WEAPON_STARTING_RESERVE_CLIPS :: 69420 // clips worth of reserve ammo a fresh weapon starts with
+WEAPON_STARTING_RESERVE_CLIPS: int = 69420 // clips worth of reserve ammo a fresh weapon starts with
 
 // hud.odin's Shop panel weapon-tier-ladder button labels
 weapon_display_name: [Weapon_Kind]string = {
@@ -460,7 +463,7 @@ start_reload :: proc(weapon: ^Weapon) {
 	}
 }
 
-WEAPON_REFILL_RESERVE_CLIPS :: 2 // clips worth of reserve ammo granted per "Refill Ammo" pick
+WEAPON_REFILL_RESERVE_CLIPS: int = 2 // clips worth of reserve ammo granted per "Refill Ammo" pick
 
 refill_weapon_reserve :: proc(weapon: ^Weapon) {
 	switch &v in weapon.variant {
@@ -620,7 +623,7 @@ weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
 // zero at the instant a weapon Resolves, and the recoil that starts right
 // after reads correctly as the gun kicking back away from where the shot left.
 
-WEAPON_PIVOT_HEIGHT :: ACTOR_SIZE.y / 2 // px above the player's feet anchor (main.odin) - roughly chest height
+WEAPON_PIVOT_HEIGHT: f32 = 12 // px above the player's feet anchor (main.odin) - roughly chest height
 
 // the weapon's grip point: chest height on the player's feet anchor. Shared
 // with draw_weapon (main.odin) so the shape the player sees and the point its
@@ -696,7 +699,7 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, muzzle, aim_dir: Vec2) -> bool 
 	// icon-transform lacked
 	visual := weapon_visuals[weapon.kind]
 	spawn_streak_burst(muzzle, aim_dir, visual.muzzle_streak_count, visual.muzzle_spread_degrees, WEAPON_GUN_COLOR)
-	spawn_muzzle_flash(muzzle, rl.Fade(rl.WHITE, 0.8), visual.muzzle_flash_radius)
+	spawn_muzzle_flash(muzzle, rl.Fade(rl.WHITE, MUZZLE_FLASH_ALPHA), visual.muzzle_flash_radius)
 
 	if gun.ammo_in_clip <= 0 {
 		start_reload(weapon)
