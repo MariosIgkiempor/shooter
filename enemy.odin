@@ -140,7 +140,9 @@ Spawn_Condition_Kind :: enum {
 // plain (non-union) persisted shape of Spawn_Trigger.condition - see the
 // json:"-" comment on Spawn_Trigger.condition above
 Spawn_Condition_Save :: struct {
-	kind:          Spawn_Condition_Kind,
+	// the Spawn_Condition_Kind case's identity string, never its ordinal -
+	// see persistence.odin and ADR-0028
+	kind:          string,
 	time_elapsed:  Maybe(Time_Elapsed) `json:"time_elapsed,omitempty"`,
 	kills_reached: Maybe(Kills_Reached) `json:"kills_reached,omitempty"`,
 }
@@ -148,23 +150,28 @@ Spawn_Condition_Save :: struct {
 spawn_condition_to_save :: proc(condition: Spawn_Condition) -> Spawn_Condition_Save {
 	switch v in condition {
 	case Time_Elapsed:
-		return {kind = .Time_Elapsed, time_elapsed = v}
+		return {kind = enum_identity_string(Spawn_Condition_Kind.Time_Elapsed), time_elapsed = v}
 	case Kills_Reached:
-		return {kind = .Kills_Reached, kills_reached = v}
+		return {kind = enum_identity_string(Spawn_Condition_Kind.Kills_Reached), kills_reached = v}
 	}
-	return {} // unreachable: every Spawn_Trigger always has a condition
+	// unreachable: every Spawn_Trigger always has a condition. Unlike Movement_Style/Attack_Style, which
+	// name their nil case (Inert), there is no case to name here - so if
+	// it ever were reached the empty identity fails the load loudly,
+	// rather than decoding back as ordinal zero the way {} used to.
+	return {}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
 // union-variant-guessing loop run, same rationale as movement_style_from_save
-spawn_condition_from_save :: proc(s: Spawn_Condition_Save) -> Spawn_Condition {
-	switch s.kind {
+spawn_condition_from_save :: proc(s: Spawn_Condition_Save) -> (condition: Spawn_Condition, ok: bool) {
+	kind := enum_from_identity_string(Spawn_Condition_Kind, s.kind) or_return
+	switch kind {
 	case .Time_Elapsed:
-		return s.time_elapsed.? or_else Time_Elapsed{}
+		return s.time_elapsed.? or_else Time_Elapsed{}, true
 	case .Kills_Reached:
-		return s.kills_reached.? or_else Kills_Reached{}
+		return s.kills_reached.? or_else Kills_Reached{}, true
 	}
-	return Time_Elapsed{} // unreachable: s.kind is always one of the above
+	return nil, false // unreachable: kind is always one of the above
 }
 
 Spawn_Mode :: union {
@@ -185,7 +192,8 @@ Spawn_Mode_Kind :: enum {
 // plain (non-union) persisted shape of Spawn_Trigger.mode - see the
 // json:"-" comment on Spawn_Trigger.mode above
 Spawn_Mode_Save :: struct {
-	kind:      Spawn_Mode_Kind,
+	// identity string, not ordinal - see persistence.odin and ADR-0028
+	kind:      string,
 	one_shot:  Maybe(One_Shot) `json:"one_shot,omitempty"`,
 	repeating: Maybe(Repeating) `json:"repeating,omitempty"`,
 }
@@ -193,23 +201,28 @@ Spawn_Mode_Save :: struct {
 spawn_mode_to_save :: proc(mode: Spawn_Mode) -> Spawn_Mode_Save {
 	switch v in mode {
 	case One_Shot:
-		return {kind = .One_Shot, one_shot = v}
+		return {kind = enum_identity_string(Spawn_Mode_Kind.One_Shot), one_shot = v}
 	case Repeating:
-		return {kind = .Repeating, repeating = v}
+		return {kind = enum_identity_string(Spawn_Mode_Kind.Repeating), repeating = v}
 	}
-	return {} // unreachable: every Spawn_Trigger always has a mode
+	// unreachable: every Spawn_Trigger always has a mode. Unlike Movement_Style/Attack_Style, which
+	// name their nil case (Inert), there is no case to name here - so if
+	// it ever were reached the empty identity fails the load loudly,
+	// rather than decoding back as ordinal zero the way {} used to.
+	return {}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
 // union-variant-guessing loop run, same rationale as movement_style_from_save
-spawn_mode_from_save :: proc(s: Spawn_Mode_Save) -> Spawn_Mode {
-	switch s.kind {
+spawn_mode_from_save :: proc(s: Spawn_Mode_Save) -> (mode: Spawn_Mode, ok: bool) {
+	kind := enum_from_identity_string(Spawn_Mode_Kind, s.kind) or_return
+	switch kind {
 	case .One_Shot:
-		return s.one_shot.? or_else One_Shot{}
+		return s.one_shot.? or_else One_Shot{}, true
 	case .Repeating:
-		return s.repeating.? or_else Repeating{}
+		return s.repeating.? or_else Repeating{}, true
 	}
-	return One_Shot{} // unreachable: s.kind is always one of the above
+	return nil, false // unreachable: kind is always one of the above
 }
 
 // one (Movement Style, Attack Style, count) entry in a Spawn_Trigger's
@@ -249,7 +262,10 @@ movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 // plain (non-union) persisted shape of Spawn_Composition_Entry.movement_template
 // - see the json:"-" comment on Spawn_Composition_Entry.movement_template above
 Movement_Style_Save :: struct {
-	kind:     Movement_Style_Kind,
+	// identity string, not ordinal - see persistence.odin and ADR-0028. A
+	// Movement_Style_Save missing its `kind` key used to decode to
+	// .Grounded (ordinal zero) in silence; it now fails to resolve.
+	kind:     string,
 	grounded: Maybe(Grounded) `json:"grounded,omitempty"`,
 	floater:  Maybe(Floater) `json:"floater,omitempty"`,
 	swarmer:  Maybe(Swarmer) `json:"swarmer,omitempty"`,
@@ -258,30 +274,31 @@ Movement_Style_Save :: struct {
 movement_style_to_save :: proc(movement: Movement_Style) -> Movement_Style_Save {
 	switch v in movement {
 	case Grounded:
-		return {kind = .Grounded, grounded = v}
+		return {kind = enum_identity_string(Movement_Style_Kind.Grounded), grounded = v}
 	case Floater:
-		return {kind = .Floater, floater = v}
+		return {kind = enum_identity_string(Movement_Style_Kind.Floater), floater = v}
 	case Swarmer:
-		return {kind = .Swarmer, swarmer = v}
+		return {kind = enum_identity_string(Movement_Style_Kind.Swarmer), swarmer = v}
 	}
-	return {kind = .Inert}
+	return {kind = enum_identity_string(Movement_Style_Kind.Inert)}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
 // union-variant-guessing loop run, since Movement_Style is never the direct
 // target of json.unmarshal; only Movement_Style_Save is.
-movement_style_from_save :: proc(s: Movement_Style_Save) -> Movement_Style {
-	switch s.kind {
+movement_style_from_save :: proc(s: Movement_Style_Save) -> (movement: Movement_Style, ok: bool) {
+	kind := enum_from_identity_string(Movement_Style_Kind, s.kind) or_return
+	switch kind {
 	case .Grounded:
-		return s.grounded.? or_else Grounded{}
+		return s.grounded.? or_else Grounded{}, true
 	case .Floater:
-		return s.floater.? or_else Floater{}
+		return s.floater.? or_else Floater{}, true
 	case .Swarmer:
-		return s.swarmer.? or_else Swarmer{}
+		return s.swarmer.? or_else Swarmer{}, true
 	case .Inert:
-		return nil
+		return nil, true
 	}
-	return nil // unreachable: s.kind is always one of the above
+	return nil, false // unreachable: kind is always one of the above
 }
 
 // discriminant for Attack_Style_Save; internal to persistence, unrelated to
@@ -295,7 +312,8 @@ Attack_Style_Kind :: enum {
 // plain (non-union) persisted shape of Spawn_Composition_Entry.attack_template
 // - see the json:"-" comment on Spawn_Composition_Entry.attack_template above
 Attack_Style_Save :: struct {
-	kind:   Attack_Style_Kind,
+	// identity string, not ordinal - see persistence.odin and ADR-0028
+	kind:   string,
 	melee:  Maybe(Melee) `json:"melee,omitempty"`,
 	ranged: Maybe(Ranged) `json:"ranged,omitempty"`,
 }
@@ -303,26 +321,27 @@ Attack_Style_Save :: struct {
 attack_style_to_save :: proc(attack: Attack_Style) -> Attack_Style_Save {
 	switch v in attack {
 	case Melee:
-		return {kind = .Melee, melee = v}
+		return {kind = enum_identity_string(Attack_Style_Kind.Melee), melee = v}
 	case Ranged:
-		return {kind = .Ranged, ranged = v}
+		return {kind = enum_identity_string(Attack_Style_Kind.Ranged), ranged = v}
 	}
-	return {kind = .Inert}
+	return {kind = enum_identity_string(Attack_Style_Kind.Inert)}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
 // union-variant-guessing loop run, since Attack_Style is never the direct
 // target of json.unmarshal; only Attack_Style_Save is.
-attack_style_from_save :: proc(s: Attack_Style_Save) -> Attack_Style {
-	switch s.kind {
+attack_style_from_save :: proc(s: Attack_Style_Save) -> (attack: Attack_Style, ok: bool) {
+	kind := enum_from_identity_string(Attack_Style_Kind, s.kind) or_return
+	switch kind {
 	case .Melee:
-		return s.melee.? or_else Melee{}
+		return s.melee.? or_else Melee{}, true
 	case .Ranged:
-		return s.ranged.? or_else Ranged{}
+		return s.ranged.? or_else Ranged{}, true
 	case .Inert:
-		return nil
+		return nil, true
 	}
-	return nil // unreachable: s.kind is always one of the above
+	return nil, false // unreachable: kind is always one of the above
 }
 
 // -- Separation ---------------------------------------------------------

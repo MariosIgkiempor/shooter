@@ -1033,7 +1033,7 @@ draw_map_selection_ui :: proc() {
 			// otherwise alias the shared baked table's backing tile/spawner
 			// memory (see clone_map's doc comment)
 			game.current_map = clone_map(chosen)
-			apply_chosen_map(chosen, map_identity_string(name))
+			apply_chosen_map(chosen, enum_identity_string(name))
 			request_screen_change(nil) // Playing isn't a Screen - see current_screen
 		}
 		y += MENU_ICON_BUTTON_LINE_HEIGHT

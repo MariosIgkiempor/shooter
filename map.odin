@@ -2,7 +2,6 @@ package shooter
 
 import "core:encoding/json"
 import "core:os"
-import "core:reflect"
 import "core:slice"
 
 // A named, reusable level definition - tile layout, a Spawn Trigger
@@ -52,12 +51,47 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 		return {}, false
 	}
 
-	for &trigger in map_data.spawn_triggers {
-		trigger.condition = spawn_condition_from_save(trigger.condition_save)
-		trigger.mode = spawn_mode_from_save(trigger.mode_save)
-		for &entry in trigger.composition {
-			entry.movement_template = movement_style_from_save(entry.movement_template_save)
-			entry.attack_template = attack_style_from_save(entry.attack_template_save)
+	// a name no case carries is a load failure, not something to guess at
+	// (ADR-0028). The *_from_save procs name the offending identity and its
+	// enum; these lines name the file and the record it sits in, so between
+	// them the log says exactly which edit is needed. json.unmarshal has
+	// already allocated by this point, hence the delete_map before bailing.
+	for &trigger, trigger_index in map_data.spawn_triggers {
+		condition, condition_ok := spawn_condition_from_save(trigger.condition_save)
+		mode, mode_ok := spawn_mode_from_save(trigger.mode_save)
+		if !condition_ok || !mode_ok {
+			log_error("Spawn trigger {} in `{}` names something this build doesn't have", trigger_index, path)
+			delete_map(map_data)
+			return {}, false
+		}
+		trigger.condition = condition
+		trigger.mode = mode
+		// the identity strings have done their job. Unlike the ones
+		// *_to_save writes (which point into static type info), these were
+		// allocated by json.unmarshal out of the file, and nothing reads
+		// them again - save_map rebuilds all four from the live unions
+		// before it marshals. Freeing them here keeps a map switch from
+		// leaking one string per trigger and per composition entry.
+		delete_identity_string(&trigger.condition_save.kind)
+		delete_identity_string(&trigger.mode_save.kind)
+
+		for &entry, entry_index in trigger.composition {
+			movement, movement_ok := movement_style_from_save(entry.movement_template_save)
+			attack, attack_ok := attack_style_from_save(entry.attack_template_save)
+			if !movement_ok || !attack_ok {
+				log_error(
+					"Composition entry {} of spawn trigger {} in `{}` names something this build doesn't have",
+					entry_index,
+					trigger_index,
+					path,
+				)
+				delete_map(map_data)
+				return {}, false
+			}
+			entry.movement_template = movement
+			entry.attack_template = attack
+			delete_identity_string(&entry.movement_template_save.kind)
+			delete_identity_string(&entry.attack_template_save.kind)
 		}
 	}
 
@@ -138,12 +172,4 @@ apply_chosen_map :: proc(map_data: Map, chosen_identity: string) {
 		game.player.rect.y = map_data.player_start.y
 	}
 	game.active_map_pointer = chosen_identity
-}
-
-// the canonical identity a Map_Name is stored/compared as in
-// game_save.json's active_map_pointer - the enum case's name, read directly
-// from Odin's static type info (not allocated, safe to store indefinitely)
-map_identity_string :: proc(name: Map_Name) -> string {
-	str, _ := reflect.enum_name_from_value(name)
-	return str
 }

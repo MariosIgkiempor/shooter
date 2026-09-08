@@ -63,7 +63,7 @@ Swarmer_Save :: struct {
 }
 
 Movement_Style_Save :: struct {
-	kind:     int,
+	kind:     string,
 	grounded: Maybe(Grounded_Save) `json:"grounded,omitempty"`,
 	floater:  Maybe(Floater_Save) `json:"floater,omitempty"`,
 	swarmer:  Maybe(Swarmer_Save) `json:"swarmer,omitempty"`,
@@ -87,7 +87,7 @@ Ranged_Save :: struct {
 }
 
 Attack_Style_Save :: struct {
-	kind:   int,
+	kind:   string,
 	melee:  Maybe(Melee_Save) `json:"melee,omitempty"`,
 	ranged: Maybe(Ranged_Save) `json:"ranged,omitempty"`,
 }
@@ -107,7 +107,7 @@ Kills_Reached :: struct {
 }
 
 Spawn_Condition_Save :: struct {
-	kind:          int,
+	kind:          string,
 	time_elapsed:  Maybe(Time_Elapsed) `json:"time_elapsed,omitempty"`,
 	kills_reached: Maybe(Kills_Reached) `json:"kills_reached,omitempty"`,
 }
@@ -120,7 +120,7 @@ Repeating :: struct {
 }
 
 Spawn_Mode_Save :: struct {
-	kind:      int,
+	kind:      string,
 	one_shot:  Maybe(One_Shot) `json:"one_shot,omitempty"`,
 	repeating: Maybe(Repeating) `json:"repeating,omitempty"`,
 }
@@ -298,66 +298,70 @@ write_spawn_triggers_literal :: proc(f: ^os.File, triggers: [dynamic]Spawn_Trigg
 
 write_spawn_condition_literal :: proc(f: ^os.File, s: Spawn_Condition_Save) {
 	switch s.kind {
-	case 0:
+	case "Time_Elapsed":
 		v := s.time_elapsed.? or_else Time_Elapsed{}
 		fmt.fprintf(f, "Time_Elapsed{{seconds = %v}}", v.seconds)
-	case 1:
+	case "Kills_Reached":
 		v := s.kills_reached.? or_else Kills_Reached{}
 		fmt.fprintf(f, "Kills_Reached{{count = %v}}", v.count)
 	case:
-		fmt.fprint(f, "nil")
+		log.panicf("`%s` is not a Spawn_Condition_Kind - the map file is stale, or the enum was renamed", s.kind)
 	}
 }
 
 write_spawn_mode_literal :: proc(f: ^os.File, s: Spawn_Mode_Save) {
 	switch s.kind {
-	case 0:
+	case "One_Shot":
 		fmt.fprint(f, "One_Shot{}")
-	case 1:
+	case "Repeating":
 		v := s.repeating.? or_else Repeating{}
 		fmt.fprintf(f, "Repeating{{interval = %v, duration = %v}}", v.interval, v.duration)
 	case:
-		fmt.fprint(f, "nil")
+		log.panicf("`%s` is not a Spawn_Mode_Kind - the map file is stale, or the enum was renamed", s.kind)
 	}
 }
 
 write_movement_style_literal :: proc(f: ^os.File, s: Movement_Style_Save) {
 	switch s.kind {
-	case 0:
+	case "Grounded":
 		v := s.grounded.? or_else Grounded_Save{}
 		fmt.fprintf(f, "Grounded{{speed = %v}}", v.speed)
-	case 1:
+	case "Floater":
 		v := s.floater.? or_else Floater_Save{}
 		fmt.fprintf(
 			f,
 			"Floater{{speed = %v, wobble_amplitude = %v, wobble_frequency = %v, pull_strength = %v}}",
 			v.speed, v.wobble_amplitude, v.wobble_frequency, v.pull_strength,
 		)
-	case 2:
+	case "Swarmer":
 		v := s.swarmer.? or_else Swarmer_Save{}
 		fmt.fprintf(f, "Swarmer{{speed = %v}}", v.speed)
-	case:
+	case "Inert":
 		fmt.fprint(f, "nil")
+	case:
+		log.panicf("`%s` is not a Movement_Style_Kind - the map file is stale, or the enum was renamed", s.kind)
 	}
 }
 
 write_attack_style_literal :: proc(f: ^os.File, s: Attack_Style_Save) {
 	switch s.kind {
-	case 0:
+	case "Melee":
 		v := s.melee.? or_else Melee_Save{}
 		fmt.fprintf(
 			f,
 			"Melee{{attack_damage = %v, attack_range = %v, attack_cooldown = %v}}",
 			v.attack_damage, v.attack_range, v.attack_cooldown,
 		)
-	case 1:
+	case "Ranged":
 		v := s.ranged.? or_else Ranged_Save{}
 		fmt.fprintf(
 			f,
 			"Ranged{{min_range = %v, max_range = %v, attack_damage = %v, projectile_speed = %v, fire_rate = %v, bullet_lifetime = %v}}",
 			v.min_range, v.max_range, v.attack_damage, v.projectile_speed, v.fire_rate, v.bullet_lifetime,
 		)
-	case:
+	case "Inert":
 		fmt.fprint(f, "nil")
+	case:
+		log.panicf("`%s` is not an Attack_Style_Kind - the map file is stale, or the enum was renamed", s.kind)
 	}
 }
