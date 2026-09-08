@@ -93,7 +93,6 @@ Gun :: struct {
 	projectile_speed: f32,
 	clip_size:        int,
 	ammo_in_clip:     int,
-	reserve_ammo:     int, // ammo available to reload from; depletes and is not auto-refilled
 	reload_time:      f32,
 	reload_timer:     f32, // > 0 while reloading
 	pellet_count:     int, // 1 for pistol/SMG, >1 for shotgun-style spread
@@ -293,8 +292,8 @@ weapon_presets: [Weapon_Kind]Weapon = {
 // weapon shape dimensions/colors by family (art-revamp ticket 02): distinct
 // silhouette per family, not per-kind - Gun = thin rod, Melee = wedge/blade,
 // Magic = rod with a circular orb tip. Colors lean metal-toned for the
-// physical weapons (echoed by ticket 05's Ammo pickup color) and warm/glowy
-// for Magic's orb.
+// physical weapons (a tone the Ammo indicator's glyph still echoes) and
+// warm/glowy for Magic's orb.
 WEAPON_GUN_COLOR :: rl.Color{180, 180, 190, 255}
 WEAPON_MELEE_COLOR :: rl.Color{210, 210, 220, 255}
 WEAPON_MAGIC_ROD_COLOR :: rl.Color{110, 80, 150, 255}
@@ -380,8 +379,6 @@ weapon_world_frame_size :: proc(weapon: Weapon) -> f32 {
 	return weapon_visuals[weapon.kind].length * weapon_visual_scale
 }
 
-WEAPON_STARTING_RESERVE_CLIPS: int = 69420 // clips worth of reserve ammo a fresh weapon starts with
-
 // hud.odin's Shop panel weapon-tier-ladder button labels
 weapon_display_name: [Weapon_Kind]string = {
 	.Pistol       = "Pistol",
@@ -408,7 +405,6 @@ weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 	switch &v in w.variant {
 	case Gun:
 		v.ammo_in_clip = v.clip_size
-		v.reserve_ammo = v.clip_size * WEAPON_STARTING_RESERVE_CLIPS
 	case Melee_Weapon, Magic: // no runtime init yet - tickets 03/04
 	}
 	return w
@@ -443,9 +439,10 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32, origin, aim_dir, mouse_world: Ve
 		if v.reload_timer > 0 {
 			v.reload_timer -= dt
 			if v.reload_timer <= 0 {
-				new_ammo := min(v.clip_size, v.ammo_in_clip + v.reserve_ammo)
-				v.reserve_ammo -= new_ammo - v.ammo_in_clip
-				v.ammo_in_clip = new_ammo
+				// a reload refills the clip outright - there is no reserve to
+				// draw from, so reload_time is the whole of what a reload
+				// costs (CONTEXT.md's Weapon variants entry)
+				v.ammo_in_clip = v.clip_size
 			}
 		}
 	case Melee_Weapon, Magic:
@@ -455,21 +452,11 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32, origin, aim_dir, mouse_world: Ve
 start_reload :: proc(weapon: ^Weapon) {
 	switch &v in weapon.variant {
 	case Gun:
-		if v.reload_timer > 0 || v.ammo_in_clip == v.clip_size || v.reserve_ammo <= 0 {
+		if v.reload_timer > 0 || v.ammo_in_clip == v.clip_size {
 			return
 		}
 		v.reload_timer = v.reload_time
 	case Melee_Weapon, Magic: // no reload concept
-	}
-}
-
-WEAPON_REFILL_RESERVE_CLIPS: int = 2 // clips worth of reserve ammo granted per "Refill Ammo" pick
-
-refill_weapon_reserve :: proc(weapon: ^Weapon) {
-	switch &v in weapon.variant {
-	case Gun:
-		v.reserve_ammo += v.clip_size * WEAPON_REFILL_RESERVE_CLIPS
-	case Melee_Weapon, Magic: // no reserve-ammo concept
 	}
 }
 

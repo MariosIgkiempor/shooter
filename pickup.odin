@@ -17,24 +17,20 @@ PICKUP_HEAL_AMOUNT: f32 = 50.0 // health pickup heal amount
 PICKUP_GOLD_RADIUS: f32 = 5.0 // world-space draw radius
 
 // shape/color per kind (art-revamp ticket 03, colors amended by ticket 05):
-// Gold is a plain circle (the fixed anchor the other two are chosen not to
-// collide with); Health = a plus/cross, warm red/pink; Ammo = stacked short
-// bars, light gray/silver (echoing the weapon-metal tone)
+// Gold is a plain circle (the fixed anchor Health is chosen not to collide
+// with); Health = a plus/cross, warm red/pink
 PICKUP_HEALTH_COLOR :: rl.Color{225, 90, 110, 255}
-PICKUP_AMMO_COLOR :: rl.Color{200, 200, 205, 255}
 PICKUP_CROSS_SIZE :: 10.0 // overall span of Health's plus/cross
 PICKUP_CROSS_THICKNESS :: 3.0
-PICKUP_AMMO_BAR_COUNT :: 3
-PICKUP_AMMO_BAR_WIDTH :: 2.5
-PICKUP_AMMO_BAR_HEIGHT :: 8.0
-PICKUP_AMMO_BAR_GAP :: 1.5
 
-// Gold reuses all existing pickup machinery (roll odds, homing, collection) -
-// it's a third uniform option in maybe_spawn_pickup's rand.choice_enum roll,
-// same as Health/Ammo, spent entirely in the Shop (CONTEXT.md's Gold entry)
+// Two kinds, each of which restores something a Run actually uses: Gold, spent
+// entirely in the Shop (CONTEXT.md's Gold entry), and Health. Every kind is an
+// equal option in maybe_spawn_pickup's rand.choice_enum roll, so a kind added
+// here dilutes every other one - the roster is deliberately held at what a Run
+// actually spends, which is why the Ammo kind went when the Gun reserve it
+// refilled did (CONTEXT.md's Pickup entry).
 Pickup_Kind :: enum {
 	Health,
-	Ammo,
 	Gold,
 }
 
@@ -46,7 +42,7 @@ Pickup :: struct {
 	// Gold only: the payout this drop carries, resolved from the dying
 	// enemy's kind at spawn time (enemy_gold_value) rather than read back
 	// from a global at collection time, so a drop is worth what the enemy
-	// that dropped it was worth. Ignored by Health/Ammo.
+	// that dropped it was worth. Ignored by Health.
 	gold:     int,
 }
 
@@ -54,7 +50,7 @@ reset_pickups :: proc() {
 	clear(&game.pickups)
 }
 
-// rolls PICKUP_DROP_CHANCE; on a hit, picks one of the three kinds uniformly
+// rolls PICKUP_DROP_CHANCE; on a hit, picks one of the kinds uniformly
 // and spawns it. `kind` is the dying enemy's Enemy_Kind, used only to price a
 // Gold drop (enemy_gold_value) - the roll itself is unaffected by it.
 maybe_spawn_pickup :: proc(position: Vec2, kind: Enemy_Kind) {
@@ -104,8 +100,6 @@ collect_pickup :: proc(pickup: Pickup) {
 	switch pickup.kind {
 	case .Health:
 		heal_player(PICKUP_HEAL_AMOUNT)
-	case .Ammo:
-		refill_weapon_reserve(&game.player.weapon)
 	case .Gold:
 		amount := int(apply_account_stat_effect(f32(pickup.gold), .Fortune, game.player.account_stat_stacks[.Fortune]))
 		game.player.gold += amount
@@ -120,8 +114,6 @@ draw_pickups :: proc(pickups: []Pickup) {
 			rl.DrawCircleV(pickup.position, PICKUP_GOLD_RADIUS, rl.GOLD)
 		case .Health:
 			draw_health_pickup_cross(pickup.position)
-		case .Ammo:
-			draw_ammo_pickup_bars(pickup.position)
 		}
 	}
 }
@@ -140,20 +132,4 @@ draw_health_pickup_cross :: proc(position: Vec2) {
 		Vec2{PICKUP_CROSS_THICKNESS, PICKUP_CROSS_SIZE},
 		PICKUP_HEALTH_COLOR,
 	)
-}
-
-// a small cluster of parallel bars ("stacked cartridges") - distinct from
-// the cross, Gold's circle, and a single bullet streak (art-revamp ticket 03)
-draw_ammo_pickup_bars :: proc(position: Vec2) {
-	total_width := f32(PICKUP_AMMO_BAR_COUNT) * PICKUP_AMMO_BAR_WIDTH + f32(PICKUP_AMMO_BAR_COUNT - 1) * PICKUP_AMMO_BAR_GAP
-	left := position.x - total_width / 2
-
-	for i in 0 ..< PICKUP_AMMO_BAR_COUNT {
-		x := left + f32(i) * (PICKUP_AMMO_BAR_WIDTH + PICKUP_AMMO_BAR_GAP)
-		rl.DrawRectangleV(
-			Vec2{x, position.y - PICKUP_AMMO_BAR_HEIGHT / 2},
-			Vec2{PICKUP_AMMO_BAR_WIDTH, PICKUP_AMMO_BAR_HEIGHT},
-			PICKUP_AMMO_COLOR,
-		)
-	}
 }

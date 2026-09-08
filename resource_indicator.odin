@@ -38,7 +38,6 @@ RESOURCE_HEALTHY_COLOR :: Color{100, 200, 120, 255}
 RESOURCE_CRITICAL_COLOR :: Color{210, 60, 60, 255}
 RESOURCE_AMMO_COLOR :: Color{215, 215, 225, 255}
 RESOURCE_RELOADING_COLOR :: Color{230, 150, 40, 255}
-RESOURCE_EMPTY_COLOR :: Color{210, 60, 60, 255}
 RESOURCE_COOLDOWN_COLOR :: Color{150, 170, 230, 255}
 
 PLAYER_BAR_MAX_PARTICLES :: 20 // sustained particle count at frac = 1
@@ -198,8 +197,8 @@ draw_resource_bar :: proc(bar: Rect, frac: f32, fill_color: Color, particles: []
 // tile - there is no icon art in the atlas any more, and a code-drawn glyph
 // scales into this 9px slot from the same unit-space definition the ~20px
 // menu rows use. Tinted with the bar's own live color rather than its world
-// color: this row already goes orange while reloading and red when dry, and
-// the icon has to follow its bar or the two contradict each other.
+// color: this row already goes orange while reloading, and the icon has to
+// follow its bar or the two contradict each other.
 draw_resource_indicator_icon :: proc(pos: Vec2, icon: Icon_Proc, color: Color) {
 	icon(icon_frame_rect({pos.x, pos.y, RESOURCE_BAR_ICON_SIZE, RESOURCE_BAR_ICON_SIZE}), color, 1)
 }
@@ -216,7 +215,7 @@ Player_Secondary_Resource :: struct {
 	frac:    f32,
 	chaotic: bool, // Gun reload: distinct fast/chaotic particle treatment
 	color:   Color,
-	icon:    Icon_Proc, // Ammo's stacked bars for Gun, a clock face for Melee_Weapon/Magic
+	icon:    Icon_Proc, // the Ammo indicator's stacked bars for Gun, a clock face for Melee_Weapon/Magic
 }
 
 player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resource, ok: bool) {
@@ -227,16 +226,15 @@ player_secondary_resource :: proc(weapon: Weapon) -> (r: Player_Secondary_Resour
 			ammo_frac = clamp(f32(v.ammo_in_clip) / f32(v.clip_size), 0, 1)
 		}
 
+		// only two states, because only two are reachable: a Gun with an
+		// empty clip always starts a reload on the spot (try_fire_gun ->
+		// start_reload, which has no reserve left to refuse on), so there is
+		// no "out of ammo entirely" for the bar to show
 		color := RESOURCE_AMMO_COLOR
 		if v.reload_timer > 0 {
 			color = RESOURCE_RELOADING_COLOR
-		} else if v.ammo_in_clip <= 0 && v.reserve_ammo <= 0 {
-			color = RESOURCE_EMPTY_COLOR
 		}
 
-		// the same stacked-bars mark the Ammo pickup uses in the world, so
-		// the bar you're watching drain and the thing that refills it read
-		// as the same resource
 		return Player_Secondary_Resource{frac = ammo_frac, chaotic = v.reload_timer > 0, color = color, icon = icon_ammo}, true
 	case Melee_Weapon, Magic:
 		return Player_Secondary_Resource {
