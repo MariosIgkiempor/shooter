@@ -1498,9 +1498,10 @@ draw_game :: proc() {
 
 	// F8 debug panel visualizer: each enemy's Separation neighbour radius (how close
 	// same-Movement-Style enemies must be before they push apart), plus a
-	// dedicated ring for Swarmer's surround distance - the band around the
-	// player it seeks to orbit, read from its own Attack Style's engagement
-	// range (see swarmer_surround_radius).
+	// dedicated ring for Swarmer's surround distance, read from its own Attack
+	// Style's engagement range (see swarmer_surround_radius). The circle is the
+	// nominal distance only - the contour a Swarmer actually drifts along is a
+	// path distance that wraps geometry, which the .Flow_Field overlay shows.
 	draw_debug_movement_styles :: proc() {
 		player_pos := Vec2{game.player.x, game.player.y}
 

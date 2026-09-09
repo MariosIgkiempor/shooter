@@ -772,3 +772,274 @@ test_field_chase_direction_follows_the_field_and_falls_back_to_the_goal :: proc(
 	fallback := field_chase_direction(&empty, {0, 0}, .Approach, {0, 100})
 	testing.expectf(t, fallback == Vec2{0, 1}, "with no field, steer straight at the goal, got %v", fallback)
 }
+
+// -- the Swarmer contour ----------------------------------------------------
+// A Swarmer follows the field inward to its surround distance and then drifts
+// along that path-distance contour (CONTEXT.md's Swarmer entry, ADR-0025).
+// Everything below goes through the same seam procs update_enemies calls, so
+// the steering dispatch itself stays out of this file - see the note at the
+// top.
+
+@(test)
+test_the_surround_radius_converts_to_the_fields_cost_units :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"...", "...", "..."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	// 16px tiles: two tiles of travel is two orthogonal steps
+	testing.expectf(
+		t,
+		flow_field_cost_for_world_distance(&field, 32) == 2 * FLOW_COST_ORTHOGONAL,
+		"expected 32px to be two orthogonal steps, got %v",
+		flow_field_cost_for_world_distance(&field, 32),
+	)
+
+	empty: Flow_Field
+	defer flow_field_destroy(&empty)
+	testing.expect(t, flow_field_cost_for_world_distance(&empty, 32) == 0, "no field, no cost")
+	testing.expect(t, flow_field_cost_for_world_distance(&field, -5) == 0, "a negative radius is not a distance")
+}
+
+@(test)
+test_a_swarmer_outside_its_surround_distance_closes_on_the_player :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	pos := cell_world_center({5, 0})
+	player := cell_world_center({0, 0})
+
+	testing.expect(t, swarmer_intent(&field, pos, 32) == .Approach, "five cells out, one tile of radius: close")
+
+	dir, drifting := swarmer_direction(&field, pos, player, 32, 1)
+	testing.expectf(t, dir == Vec2{-1, 0}, "expected the field's leftward step, got %v", dir)
+	testing.expect(t, !drifting, "closing is not drifting, so it moves at full speed")
+}
+
+@(test)
+test_a_swarmer_on_its_contour_drifts_tangentially :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".......", ".......", ".......", ".......", ".......", ".......", "......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	// two orthogonal steps out, and a 32px surround radius is exactly that far
+	pos := cell_world_center({5, 3})
+	player := cell_world_center({3, 3})
+	testing.expect(t, swarmer_intent(&field, pos, 32) == .Hold, "on the contour, it holds its distance")
+
+	dir, drifting := swarmer_direction(&field, pos, player, 32, 1)
+	testing.expect(t, drifting, "holding the contour is drifting")
+	testing.expectf(t, dir == Vec2{0, -1}, "expected a step across the field's gradient, got %v", dir)
+
+	// the step it took is still on the contour rather than one closer in
+	stepped := flow_field_distance(&field, {5, 2})
+	target := flow_field_cost_for_world_distance(&field, 32)
+	testing.expectf(
+		t,
+		stepped >= target,
+		"drifting must not press inward: %v against a contour at %v",
+		stepped,
+		target,
+	)
+}
+
+@(test)
+test_the_two_drift_signs_go_opposite_ways_round_the_contour :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".......", ".......", ".......", ".......", ".......", ".......", "......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	pos := cell_world_center({5, 3})
+	player := cell_world_center({3, 3})
+
+	clockwise, _ := swarmer_direction(&field, pos, player, 32, 1)
+	widdershins, _ := swarmer_direction(&field, pos, player, 32, -1)
+
+	testing.expectf(
+		t,
+		clockwise == -widdershins,
+		"the two signs must mirror each other: %v against %v",
+		clockwise,
+		widdershins,
+	)
+
+	// an unset sign is a real state - an old save, or a template authored
+	// before the field existed - and must still pick a side
+	unset, _ := swarmer_direction(&field, pos, player, 32, 0)
+	testing.expectf(t, unset == clockwise, "a zero sign reads as +1, got %v", unset)
+}
+
+@(test)
+test_a_swarmer_inside_its_surround_distance_backs_out :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".......", ".......", ".......", ".......", ".......", ".......", "......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	// one cell out, but asked to surround at six
+	pos := cell_world_center({4, 3})
+	player := cell_world_center({3, 3})
+	testing.expect(t, swarmer_intent(&field, pos, 96) == .Withdraw, "well inside the ring, it backs off")
+
+	dir, drifting := swarmer_direction(&field, pos, player, 96, 1)
+	testing.expect(t, !drifting, "backing out is not drifting")
+	// only the x component is the assertion: several neighbours share the
+	// farthest distance and scan order picks between them, so pinning y would
+	// pin a tie-break rather than "away"
+	testing.expectf(t, dir.x > 0, "expected a step away from the player, got %v", dir)
+
+	// and the step it takes is genuinely farther out than where it stands
+	stepped := pos + dir * 16
+	testing.expectf(
+		t,
+		flow_field_distance(&field, world_to_cell_coord(stepped, {16, 16})) > flow_field_distance(&field, {4, 3}),
+		"a withdrawal must strictly increase the path distance, got cell %v",
+		world_to_cell_coord(stepped, {16, 16}),
+	)
+}
+
+@(test)
+test_a_swarmer_never_drifts_into_a_wall :: proc(t: ^testing.T) {
+	// the same room, with a wall standing exactly where the open-ground drift
+	// stepped in test_a_swarmer_on_its_contour_drifts_tangentially
+	tilemap := fixture_room({".......", ".......", ".....#.", ".......", ".......", ".......", "......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	pos := cell_world_center({5, 3})
+	player := cell_world_center({3, 3})
+
+	// a colliding cell is never filled, so {5,2} is not a candidate; and {4,2},
+	// the diagonal that would slip past the wall's corner, is refused by the
+	// same flanking rule the flood uses. This arc dead-ends, so the Swarmer
+	// holds its ground rather than pressing inward - Separation still spreads
+	// the pack along it
+	dir, drifting := swarmer_direction(&field, pos, player, 32, 1)
+	testing.expect(t, drifting, "the wall blocks a step, not the drift itself")
+	testing.expectf(t, dir == Vec2{}, "expected it to hold rather than push into the wall, got %v", dir)
+}
+
+@(test)
+test_a_drift_slides_along_a_wall_it_runs_beside :: proc(t: ^testing.T) {
+	// a wall down the right-hand side, parallel to the drift rather than
+	// across it: the contour continues, so the Swarmer keeps moving
+	tilemap := fixture_room({"......#", "......#", "......#", "......#", "......#", "......#", "......#"})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	pos := cell_world_center({5, 3})
+	player := cell_world_center({3, 3})
+
+	dir, drifting := swarmer_direction(&field, pos, player, 32, 1)
+	testing.expect(t, drifting, "it is on its contour")
+	testing.expectf(t, dir == Vec2{0, -1}, "expected it to run alongside the wall, got %v", dir)
+}
+
+@(test)
+test_a_swarmer_behind_a_wall_routes_around_it :: proc(t: ^testing.T) {
+	// a wall down the middle, open only along the bottom row
+	tilemap := fixture_room(
+		{"...#...", "...#...", "...#...", "...#...", "...#...", "...#...", "......."},
+	)
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({1, 0}), 0)
+
+	pos := cell_world_center({5, 0})
+	player := cell_world_center({1, 0})
+
+	dir, _ := swarmer_direction(&field, pos, player, 16, 1)
+
+	// straight at the player is straight into the wall; the field's route runs
+	// down to the gap at the bottom first
+	testing.expectf(t, dir != Vec2{-1, 0}, "a Swarmer must not walk into the wall, got %v", dir)
+	testing.expectf(t, dir.y > 0, "expected it to head down toward the way round, got %v", dir)
+}
+
+@(test)
+test_a_drift_step_never_leaves_the_contours_band :: proc(t: ^testing.T) {
+	// the primitive directly, at costs swarmer_intent would never hand it -
+	// what is being pinned is that the band is a filter and not merely a
+	// tie-break, so a body has nowhere to drift rather than somewhere wrong.
+	tilemap := fixture_room({".......", ".......", ".......", ".......", ".......", ".......", "......."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 0)
+
+	// {5,3} sits 20 out; its neighbours run 14 to 34, so a contour at 100 has
+	// no cell here at all and the drift must decline rather than take the
+	// best-aligned neighbour going
+	_, ok := flow_field_contour_target(&field, cell_world_center({5, 3}), 100, 1)
+	testing.expect(t, !ok, "no cell here is on the ring, so there is no step to take")
+
+	// and where the ring does pass, the step lands on it rather than on
+	// whichever neighbour points most squarely round the turn. At a contour of
+	// 14 the diagonal {4,2} sits exactly on it while the perfectly tangential
+	// {5,2}, at 24, is ten out - so the ring has to win, or a Swarmer walks
+	// inward a step at a time until it stands a whole band closer than asked.
+	target, on_ring := flow_field_contour_target(&field, cell_world_center({5, 3}), 14, 1)
+	testing.expect(t, on_ring, "the ring passes through this cell's neighbours")
+	testing.expectf(
+		t,
+		world_to_cell_coord(target, {16, 16}) == Vec2i{4, 2},
+		"the ring beats the turn: expected the neighbour nearest the contour, got cell %v",
+		world_to_cell_coord(target, {16, 16}),
+	)
+}
+
+@(test)
+test_a_swarmer_inside_the_inflation_envelope_closes_on_the_player :: proc(t: ^testing.T) {
+	// the shipped field inflates walls by one cell (main.odin), and the flood
+	// only ever leaves that envelope - so a Swarmer standing beside a wall has
+	// no path distance of its own and cannot read a contour off one. It takes
+	// the same fallback every other field consumer takes: walk back toward what
+	// the field does know. Behaviour to watch, not a decision this ticket made.
+	tilemap := fixture_room({".......", ".......", ".......", ".......", ".......", ".......", "######."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({3, 3}), 1)
+
+	beside_the_wall := cell_world_center({2, 5})
+	testing.expect(
+		t,
+		flow_field_distance(&field, {2, 5}) == FLOW_UNREACHED,
+		"the fixture must actually put this cell in the envelope",
+	)
+	testing.expect(t, swarmer_intent(&field, beside_the_wall, 32) == .Approach, "no distance to hold, so it closes")
+}

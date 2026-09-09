@@ -554,7 +554,7 @@ register_enemy_tunables :: proc() {
 	register_tunable(.Enemy_Steering, "enemy.separation.grid_cell_size", "Grid Cell Size", &SEPARATION_GRID_CELL_SIZE, 4, 200)
 
 	register_tunable(.Enemy_AI, "enemy.swarmer.fallback_surround_radius", "Swarmer Fallback Radius", &SWARMER_FALLBACK_SURROUND_RADIUS, 0, 300)
-	register_tunable(.Enemy_AI, "enemy.swarmer.ring_rotation_speed", "Swarmer Ring Speed", &SWARMER_RING_ROTATION_SPEED, 0, 5)
+	register_tunable(.Enemy_AI, "enemy.swarmer.drift_speed_scale", "Swarmer Drift Speed", &SWARMER_DRIFT_SPEED_SCALE, 0, 1)
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_side_damping", "Floater Side Damping", &FLOATER_WOBBLE_SIDE_DAMPING, 0, 2)
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_boost_scale", "Floater Wobble Boost", &FLOATER_WOBBLE_BOOST_SCALE, 0, 3)
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_amplitude_ceiling", "Floater Amplitude Ceiling", &FLOATER_WOBBLE_AMPLITUDE_CEILING, 0, 200)

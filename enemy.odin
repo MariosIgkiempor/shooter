@@ -64,11 +64,13 @@ Floater :: struct {
 	wobble_phase:     f32, // runtime: randomized at spawn so multiple Floaters don't wobble in lockstep, not editor-set
 }
 
-// flanks the player by seeking a dynamically-assigned slot on a ring around
-// it, instead of converging with other Swarmers on one point. See the
-// Swarmer surround mechanic ticket.
+// flanks the player by following the shared flow field inward until its path
+// distance reaches its own surround radius, then drifting along that contour. The ring is emergent rather than assigned - every Swarmer at one
+// distance, pushed apart by Separation - so there is no slot to place and no
+// slot that can land inside a wall. See CONTEXT.md's Swarmer entry.
 Swarmer :: struct {
-	speed: f32,
+	speed:      f32,
+	drift_sign: f32, // runtime: +1 or -1, which way round the contour this one turns, picked at spawn so a pack closes the ring from both sides. 0 (an old save, or an authored template) reads as +1
 }
 
 Melee :: struct {
@@ -444,7 +446,7 @@ compute_separation_direction :: proc(enemies: []Enemy, index: int, grid: Separat
 // -- Swarmer surround -----------------------------------------------------
 
 SWARMER_FALLBACK_SURROUND_RADIUS: f32 = 60 // used when the Swarmer's Attack Style is nil (no attack_range to read)
-SWARMER_RING_ROTATION_SPEED: f32 = 0.3 // radians/sec, matches the swarmer-surround prototype's slow ring drift
+SWARMER_DRIFT_SPEED_SCALE: f32 = 0.35 // fraction of `speed` used while drifting on the contour rather than closing on it, standing in for the retired ring's slow 0.3 rad/s rotation
 
 // the distance a Swarmer orbits the player at - its own Attack Style's
 // engagement range, so orbiting and attacking naturally coincide (validated
@@ -459,62 +461,6 @@ swarmer_surround_radius :: proc(attack: Attack_Style) -> f32 {
 		return a.max_range
 	}
 	return SWARMER_FALLBACK_SURROUND_RADIUS
-}
-
-// dynamic nearest-free-slot assignment: builds a ring of slots around the
-// player (one per live Swarmer, slowly rotating), then greedily assigns each
-// Swarmer to whichever unclaimed slot is nearest to it - mirrors the
-// swarmer-surround prototype's Steering.ringSlots/assignNearestSlots.
-// Returns enemy index -> world-space slot target, temp-allocated. Mixed
-// Attack Styles among live Swarmers would want mixed ring radii too; this
-// uses the first Swarmer's radius for the whole ring, which is exact for the
-// common case (one spawner template) and a reasonable approximation
-// otherwise.
-assign_swarmer_slots :: proc(enemies: []Enemy, player_pos: Vec2, t: f32) -> map[int]Vec2 {
-	swarmer_indices := make([dynamic]int, 0, len(enemies), context.temp_allocator)
-	for enemy, i in enemies {
-		if _, ok := enemy.movement.(Swarmer); ok {
-			append(&swarmer_indices, i)
-		}
-	}
-
-	count := len(swarmer_indices)
-	if count == 0 {
-		return nil
-	}
-
-	radius := swarmer_surround_radius(enemies[swarmer_indices[0]].attack)
-	rotation := t * SWARMER_RING_ROTATION_SPEED
-
-	slots := make([dynamic]Vec2, count, context.temp_allocator)
-	for i in 0 ..< count {
-		angle := (f32(i) / f32(count)) * math.TAU + rotation
-		slots[i] = player_pos + Vec2{math.cos(angle), math.sin(angle)} * radius
-	}
-
-	claimed := make([dynamic]bool, count, context.temp_allocator)
-	targets := make(map[int]Vec2, count, context.temp_allocator)
-	for swarmer_index in swarmer_indices {
-		pos := Vec2{enemies[swarmer_index].x, enemies[swarmer_index].y}
-
-		best := -1
-		best_dist := max(f32)
-		for s in 0 ..< count {
-			if claimed[s] {
-				continue
-			}
-			d := linalg.distance(slots[s], pos)
-			if d < best_dist {
-				best_dist = d
-				best = s
-			}
-		}
-
-		claimed[best] = true
-		targets[swarmer_index] = slots[best]
-	}
-
-	return targets
 }
 
 // -- Floater drift ---------------------------------------------------------
@@ -647,7 +593,11 @@ spawn_enemy_at :: proc(position: Vec2, movement_template: Movement_Style, attack
 	switch &m in movement {
 	case Floater:
 		m.wobble_phase = rand.float32_range(0, math.TAU)
-	case Grounded, Swarmer:
+	case Swarmer:
+		// half the pack turns each way, so a ring closes from both sides
+		// instead of every Swarmer queueing round the same arc
+		m.drift_sign = rand.float32() < 0.5 ? -1 : 1
+	case Grounded:
 	}
 
 	enemy := Enemy {
@@ -748,7 +698,6 @@ update_enemies :: proc(dt: f32) {
 	t := f32(rl.GetTime())
 
 	separation_grid := build_separation_grid(game.enemies[:])
-	swarmer_slots := assign_swarmer_slots(game.enemies[:], player_pos, t)
 
 	for &enemy, i in game.enemies {
 		delta: Vec2
@@ -771,10 +720,12 @@ update_enemies :: proc(dt: f32) {
 				1 + (m.wobble_amplitude / FLOATER_WOBBLE_AMPLITUDE_CEILING) * FLOATER_WOBBLE_BOOST_SCALE
 			delta = final_dir * m.speed * wobble_boost * dt
 		case Swarmer:
-			target := swarmer_slots[i] or_else player_pos
-			seek_dir := linalg.normalize0(target - pos)
-			final_dir := linalg.normalize0(seek_dir + separation_dir * SEPARATION_STRENGTH[kind])
-			delta = final_dir * m.speed * dt
+			radius := swarmer_surround_radius(enemy.attack)
+			drift_dir, drifting := swarmer_direction(&game.flow_field, pos, player_pos, radius, m.drift_sign)
+			final_dir := linalg.normalize0(drift_dir + separation_dir * SEPARATION_STRENGTH[kind])
+			// a Swarmer rushes in at full speed and settles into a slow orbit
+			speed := drifting ? m.speed * SWARMER_DRIFT_SPEED_SCALE : m.speed
+			delta = final_dir * speed * dt
 		case:
 		// nil: doesn't move
 		}
@@ -900,6 +851,73 @@ field_chase_direction :: proc(
 	return linalg.normalize0(fallback_goal - pos)
 }
 
+// -- Swarmer contour steering ----------------------------------------------
+
+// which of the three regimes a Swarmer is in, read off the flow field: too far
+// out and it closes, too far in and it backs off, and on the contour it holds
+// that path distance and drifts. The band is the contour's own width, so the
+// three regimes tile the field with no gap for a body to oscillate in.
+//
+// Backing off is not a third behaviour bolted on: the retired ring assigned
+// slots on both sides of the player, so a Swarmer that found itself inside the
+// ring already moved outward to reach one. Without it the surround radius would
+// only ever be a floor, and a Swarmer the player walked into would press all
+// the way to contact - the converge-on-one-point this Movement Style exists to
+// avoid.
+//
+// A cell the flood never reached - no field at all, or a body Separation has
+// pushed into the inflation envelope - answers Approach, the same "walk back
+// toward what the field knows" every other field lookup falls back to.
+swarmer_intent :: proc(field: ^Flow_Field, pos: Vec2, surround_radius: f32) -> Movement_Intent {
+	if !flow_field_is_usable(field) {
+		return .Approach
+	}
+
+	distance := flow_field_distance(field, world_to_cell_coord(pos, field.tile_size))
+	if distance == FLOW_UNREACHED {
+		return .Approach
+	}
+
+	target_cost := flow_field_cost_for_world_distance(field, surround_radius)
+	switch {
+	case distance > target_cost + FLOW_CONTOUR_BAND:
+		return .Approach
+	case distance + FLOW_CONTOUR_BAND < target_cost:
+		return .Withdraw
+	case:
+		return .Hold
+	}
+}
+
+// unit steering direction for a Swarmer, plus whether it is drifting on its
+// contour rather than closing on it - which is what the caller scales speed by.
+//
+// Approach and Withdraw are the field steering Grounded already uses; only the
+// hold is Swarmer's own, and it is a step around the contour rather than the
+// standing-still Hold means for a Ranged enemy. Where the contour dead-ends
+// against geometry it steers nowhere and stays drifting: pressing inward there
+// is exactly the "converge on one point" this Movement Style exists to avoid,
+// and Separation still spreads the pack along the arc.
+swarmer_direction :: proc(
+	field: ^Flow_Field,
+	pos, player_pos: Vec2,
+	surround_radius, drift_sign: f32,
+) -> (
+	dir: Vec2,
+	drifting: bool,
+) {
+	intent := swarmer_intent(field, pos, surround_radius)
+	if intent != .Hold {
+		return field_chase_direction(field, pos, intent, movement_goal_point(pos, player_pos, intent)), false
+	}
+
+	target_cost := flow_field_cost_for_world_distance(field, surround_radius)
+	if target, ok := flow_field_contour_target(field, pos, target_cost, drift_sign); ok {
+		return linalg.normalize0(target - pos), true
+	}
+	return {}, true
+}
+
 // takes tile_size explicitly rather than always reading game.current_map -
 // shared by Playing's own pathfinding/collision code (current_map) and
 // editor.odin's world-cursor math (editing_map), which can be a different
@@ -923,8 +941,9 @@ cell_center_to_world :: proc(cell: Vec2i, tile_size: Vec2) -> Vec2 {
 // type-asserted on Floater at the point of use. This is the seam the flow
 // field splits on too (ADR-0025): a style that collides is one that can read
 // the field, because routing around geometry is only meaningful to a body
-// geometry stops. Grounded reads it today; Swarmer collides but still seeks
-// its ring slots directly until ticket 05 puts it on the contour.
+// geometry stops. Grounded and Swarmer both read it - Swarmer to reach its
+// surround contour and then to follow it - and ADR-0025 names Charger as the
+// third, once ticket 10 adds it.
 movement_style_collides_with_terrain := [Movement_Style_Kind]bool {
 	.Grounded = true,
 	.Floater  = false, // flying through walls is its identity - see CONTEXT.md

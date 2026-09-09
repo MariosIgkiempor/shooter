@@ -1,6 +1,6 @@
 package shooter
 
-
+import "core:math/linalg"
 
 // The shared flow field: one flood outward from the player's cell that every
 // terrain-colliding enemy reads, replacing the per-enemy BFS every Grounded
@@ -480,6 +480,132 @@ flow_field_retreat_target :: proc(field: ^Flow_Field, world_pos: Vec2) -> (targe
 		}
 	}
 	return cell_center_to_world(best, field.tile_size), true
+}
+
+// the field's own units for a world-space distance, so a Swarmer's surround
+// radius - authored in pixels, on its Attack Style - can be compared against a
+// path distance. One cell of travel costs FLOW_COST_ORTHOGONAL, so a radius of
+// two tiles is 20. Only the x tile size is read: a non-square tile would make
+// "distance" direction-dependent and the flood's two edge weights meaningless,
+// which is a deeper problem than this conversion.
+flow_field_cost_for_world_distance :: proc(field: ^Flow_Field, world_distance: f32) -> u32 {
+	if !flow_field_is_usable(field) || world_distance <= 0 {
+		return 0
+	}
+	return u32((world_distance / field.tile_size.x) * FLOW_COST_ORTHOGONAL)
+}
+
+// how far a distance sits from the contour, in cost units, without underflowing
+// u32 - both arguments are unsigned and either may be the larger
+@(private = "file")
+flow_cost_gap :: proc(a, b: u32) -> u32 {
+	return a > b ? a - b : b - a
+}
+
+// how wide the contour is: one diagonal step, the largest single move the flood
+// makes. Narrower and a body standing between two cells would find no
+// neighbour on the ring at all; wider and the "ring" is a band thick enough for
+// two Swarmers to orbit inside each other.
+FLOW_CONTOUR_BAND :: u32(FLOW_COST_DIAGONAL)
+
+// the world point a body drifting along a fixed path-distance contour should
+// head for: the neighbouring cell that both sits on the contour and lies
+// furthest around it in the direction `drift_sign` turns.
+//
+// The tangent is the cell's own inward gradient turned ninety degrees, so the
+// drift follows whatever shape the flood made - which is what makes the ring
+// wrap geometry instead of cutting through it. Only *filled* neighbours are
+// candidates, and a filled cell is walkable by construction, so a wall across
+// the contour is simply not among the options: the drift slides along it rather
+// than into it.
+//
+// ok=false where there is nowhere to drift - the source cell (no gradient), an
+// unfilled cell, or an arc that dead-ends against geometry in this direction.
+// The caller then holds its ground rather than pressing inward.
+flow_field_contour_target :: proc(
+	field: ^Flow_Field,
+	world_pos: Vec2,
+	target_cost: u32,
+	drift_sign: f32,
+) -> (
+	target: Vec2,
+	ok: bool,
+) {
+	if !flow_field_is_usable(field) {
+		return {}, false
+	}
+
+	cell_coord := world_to_cell_coord(world_pos, field.tile_size)
+	here, in_bounds := flow_field_cell(field, cell_coord)
+	if !in_bounds || here.distance == FLOW_UNREACHED || here.step == .None {
+		return {}, false
+	}
+
+	offset := FLOW_STEP_OFFSET[here.step]
+	inward := linalg.normalize0(Vec2{f32(offset.x), f32(offset.y)})
+	turn: f32 = drift_sign < 0 ? -1 : 1
+	tangent := Vec2{-inward.y, inward.x} * turn
+
+	best_cell: Vec2i
+	best_gap: u32
+	best_align: f32
+	for dy in i32(-1) ..= 1 {
+		for dx in i32(-1) ..= 1 {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+
+			neighbour := cell_coord + {dx, dy}
+			found, neighbour_in_bounds := flow_field_cell(field, neighbour)
+			if !neighbour_in_bounds || found.distance == FLOW_UNREACHED {
+				continue
+			}
+
+			gap := flow_cost_gap(found.distance, target_cost)
+			if gap > FLOW_CONTOUR_BAND {
+				continue
+			}
+
+			// the flood's own corner rule: a diagonal whose two flanking cells
+			// are not both enterable is a route drawn through the gap where two
+			// walls touch. The drift may not take a step the flood itself
+			// refuses, or it would squeeze past a corner the field routed
+			// around.
+			if dx != 0 && dy != 0 {
+				if !flow_can_enter(field, cell_coord + {dx, 0}, here) ||
+				   !flow_can_enter(field, cell_coord + {0, dy}, here) {
+					continue
+				}
+			}
+
+			// strictly forward around the contour: a step with no tangential
+			// component at all is the one the body just came from, and a
+			// backward one would reverse the drift every frame it spent
+			// against a wall
+			align := linalg.dot(linalg.normalize0(Vec2{f32(dx), f32(dy)}), tangent)
+			if align <= 0 {
+				continue
+			}
+
+			// the ring first, the turn second. Alignment alone would take a
+			// perfectly tangential neighbour a whole diagonal inside the
+			// contour over a slightly angled one sitting on it, and near
+			// geometry that walks a Swarmer inward a step at a time until it is
+			// a band's width closer than it was asked to stand.
+			better := gap < best_gap || (gap == best_gap && align > best_align)
+			if !ok || better {
+				best_gap = gap
+				best_align = align
+				best_cell = neighbour
+				ok = true
+			}
+		}
+	}
+
+	if !ok {
+		return {}, false
+	}
+	return cell_center_to_world(best_cell, field.tile_size), true
 }
 
 // which end of the distance ramp a neighbour scan wants: closing on the
