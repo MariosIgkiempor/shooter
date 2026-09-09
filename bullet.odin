@@ -174,7 +174,6 @@ apply_hit_to_enemy :: proc(index: int, damage: f32, hit_position: Vec2) {
 	if enemy.health <= 0 {
 		game.player.kills[enemy.kind] += 1
 		maybe_spawn_pickup(Vec2{enemy.x, enemy.y}, enemy.kind)
-		delete(enemy.path)
 		unordered_remove(&game.enemies, index)
 	}
 }

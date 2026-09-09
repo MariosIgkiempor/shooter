@@ -13,7 +13,7 @@ Debug_Visualizer :: enum {
 	Weapon_Area,
 	Attack_Ranges,
 	Movement_Styles,
-	Pathfinding,
+	Flow_Field,
 }
 
 visualizer_display_name := [Debug_Visualizer]string {
@@ -21,7 +21,7 @@ visualizer_display_name := [Debug_Visualizer]string {
 	.Weapon_Area     = "Weapon Area",
 	.Attack_Ranges   = "Attack Ranges",
 	.Movement_Styles = "Movement Styles",
-	.Pathfinding     = "Pathfinding",
+	.Flow_Field      = "Flow Field",
 }
 
 Debug_State :: struct {

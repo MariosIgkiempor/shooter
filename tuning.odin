@@ -572,8 +572,14 @@ register_enemy_tunables :: proc() {
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_harmonic_freq", "Wobble Harmonic Freq", &FLOATER_WOBBLE_HARMONIC_FREQ, 0, 8)
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_harmonic_phase", "Wobble Harmonic Phase", &FLOATER_WOBBLE_HARMONIC_PHASE, 0, 8)
 	register_tunable(.Enemy_AI, "enemy.ranged.retreat_lookahead", "Ranged Retreat Lookahead", &RANGED_RETREAT_LOOKAHEAD, 0, 500)
-	register_tunable(.Enemy_AI, "enemy.path.arrive_radius", "Path Arrive Radius", &ARRIVE_RADIUS, 0.5, 32)
-	register_tunable(.Enemy_AI, "enemy.path.max_search_nodes", "Path Max Search Nodes", &MAX_SEARCH_NODES, 64, 8192)
+	register_tunable(
+		.Enemy_AI,
+		"enemy.flow_field.inflation_radius",
+		"Flow Field Inflation",
+		&FLOW_FIELD_INFLATION_RADIUS,
+		0,
+		3,
+	)
 }
 
 @(private = "file")

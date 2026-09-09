@@ -1,10 +1,8 @@
 package shooter
 
-import "core:container/queue"
 import "core:math"
 import "core:math/linalg"
 import "core:math/rand"
-import "core:slice"
 import rl "vendor:raylib"
 
 MAX_ENEMIES: int = 24
@@ -24,7 +22,6 @@ Enemy :: struct {
 	squash:     Vec2, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
 	movement:   Movement_Style,
 	attack:     Attack_Style,
-	path:       Path,
 	health:     f32,
 	kind:       Enemy_Kind,
 }
@@ -44,8 +41,8 @@ Attack_Style :: union {
 	Ranged,
 }
 
-// grounded chase along the existing BFS path, colliding with terrain like
-// the player does
+// grounded chase by the shared flow field, colliding with terrain like the
+// player does - so it routes around geometry rather than through it
 Grounded :: struct {
 	speed: f32,
 }
@@ -648,8 +645,9 @@ OFFSCREEN_SPAWN_MAX_RETRIES: int = 6
 // to clamp a chosen spawn point back onto the playable map. Computed by
 // scanning tiles rather than a stored width/height, since Tilemap only ever
 // grows sparse tile-by-tile (tilemap_place_tile) - the same "just scan every
-// tile" approach move_actor/build_inflated_collision_map already use rather
-// than maintaining a cached bound.
+// tile" approach move_actor already uses rather than maintaining a cached
+// bound. (The flow field is the one thing that does index cells, and it
+// derives its own extent in cell space - see tilemap_cell_bounds.)
 tilemap_world_bounds :: proc(tilemap: ^Tilemap) -> World_Bounds {
 	if len(tilemap.tiles) == 0 {
 		return {}
@@ -716,8 +714,10 @@ pick_offscreen_spawn_point :: proc(
 	return point
 }
 
+// the flow field is not ensured here: update_game_state re-floods it once a
+// frame, before the Spawn Triggers run, so everything downstream reads one
+// field describing this frame's player cell.
 update_enemies :: proc(dt: f32) {
-	inflated_collision_map := build_inflated_collision_map(&game.current_map.tilemap, 1)
 	player_pos := Vec2{game.player.x, game.player.y}
 	t := f32(rl.GetTime())
 
@@ -732,18 +732,13 @@ update_enemies :: proc(dt: f32) {
 
 		switch &m in enemy.movement {
 		case Grounded:
-			goal := movement_goal_point(pos, player_pos, enemy.attack)
-			delta = chase_to(
-				&enemy,
-				inflated_collision_map,
-				goal,
-				m.speed,
-				separation_dir,
-				SEPARATION_STRENGTH[kind],
-				dt,
-			)
+			intent := movement_intent(pos, player_pos, enemy.attack)
+			goal := movement_goal_point(pos, player_pos, intent)
+			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			final_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
+			delta = final_dir * m.speed * dt
 		case Floater:
-			goal := movement_goal_point(pos, player_pos, enemy.attack)
+			goal := movement_goal_point(pos, player_pos, movement_intent(pos, player_pos, enemy.attack))
 			dir := floater_direction(pos, goal, t, m.wobble_phase, m.wobble_frequency, m.pull_strength)
 			final_dir := linalg.normalize0(dir + separation_dir * SEPARATION_STRENGTH[kind])
 			wobble_boost :=
@@ -787,83 +782,90 @@ update_enemies :: proc(dt: f32) {
 
 		// Floater ignores tilemap collision entirely (see the Floater
 		// movement design ticket), so it skips move_actor's collision
-		// resolution and applies its delta directly
-		if _, is_floater := enemy.movement.(Floater); is_floater {
+		// resolution and applies its delta directly - the same split that
+		// decided whether it read the flow field above
+		if movement_style_collides_with_terrain[kind] {
+			move_actor(&enemy.rect, &game.current_map.tilemap, delta)
+		} else {
 			enemy.x += delta.x
 			enemy.y += delta.y
-		} else {
-			move_actor(&enemy.rect, &game.current_map.tilemap, delta)
 		}
 	}
 }
 
-RANGED_RETREAT_LOOKAHEAD: f32 = 100 // arbitrary distance behind the enemy to aim a retreat path at; only direction matters since the goal recomputes every frame
+RANGED_RETREAT_LOOKAHEAD: f32 = 100 // arbitrary distance behind the enemy to aim a euclidean Withdraw at; only direction matters since the goal recomputes every frame. A field-steered enemy ignores it entirely - its Withdraw is a one-cell step (flow_field_retreat_target)
 
-// the point a chasing/homing Movement Style should aim for, given the
-// enemy's own Attack Style. Melee (or no attack) simply closes to the
-// player. Ranged wants to hold its min..max firing band, so this re-plugs
-// today's "advance if too far, retreat if too close, hold if in band" logic
-// (previously bundled inside Ranged itself, which used to own movement)
-// onto whichever Movement Style is driving - a genuine read of Attack Style
-// by Movement Style, same as Swarmer reading attack_range above.
-movement_goal_point :: proc(enemy_pos, player_pos: Vec2, attack: Attack_Style) -> Vec2 {
+// what an enemy's Attack Style is asking its Movement Style to do this frame.
+// Realised two different ways: as a euclidean goal point by Floater, which
+// never reads the field, and as a step to a neighbouring cell by every
+// field-steered style. Derived per frame and stored nowhere, so a Movement
+// Style is free to ignore it (a Charger mid-dash will).
+Movement_Intent :: enum {
+	Approach,
+	Hold,
+	Withdraw,
+}
+
+// re-plugs today's "advance if too far, retreat if too close, hold if in
+// band" logic onto whichever Movement Style is driving - a genuine read of
+// Attack Style by Movement Style, same as Swarmer reading attack_range.
+// Melee (or no attack) simply closes.
+movement_intent :: proc(enemy_pos, player_pos: Vec2, attack: Attack_Style) -> Movement_Intent {
 	ranged, is_ranged := attack.(Ranged)
 	if !is_ranged {
-		return player_pos
+		return .Approach
 	}
 
 	dist := linalg.distance(enemy_pos, player_pos)
 	switch {
 	case dist > ranged.max_range:
-		return player_pos
+		return .Approach
 	case dist < ranged.min_range:
-		return enemy_pos + linalg.normalize0(enemy_pos - player_pos) * RANGED_RETREAT_LOOKAHEAD
+		return .Withdraw
 	case:
-		return enemy_pos
+		return .Hold
 	}
 }
 
-// computes a fresh BFS path from enemy to goal_world, stores it on enemy.path
-// (for the debug draw), and returns this frame's movement delta toward the
-// next un-arrived waypoint, blended with the Separation force (validated
-// blend: normalize(chase_dir + separation_dir * strength) * speed * dt)
-chase_to :: proc(
-	enemy: ^Enemy,
-	collision_map: Collision_Map,
-	goal_world: Vec2,
-	speed: f32,
-	separation_dir: Vec2,
-	separation_strength: f32,
-	dt: f32,
+// the euclidean realisation of an intent: the point a style that steers
+// straight at things should aim for. Floater's whole path, and the fallback
+// every field-steered style takes when the field has nothing to say.
+movement_goal_point :: proc(enemy_pos, player_pos: Vec2, intent: Movement_Intent) -> Vec2 {
+	switch intent {
+	case .Approach:
+		return player_pos
+	case .Withdraw:
+		return enemy_pos + linalg.normalize0(enemy_pos - player_pos) * RANGED_RETREAT_LOOKAHEAD
+	case .Hold:
+		return enemy_pos
+	}
+	return player_pos
+}
+
+// unit steering direction for a terrain-colliding enemy: the flow field's own
+// step where its cell has one, and otherwise straight at the euclidean goal
+// the same intent implies - which covers exactly the cases an empty path used
+// to cover (the player's own cell, a cell the flood never reached and whose
+// neighbours it never reached either, or no field at all).
+field_chase_direction :: proc(
+	field: ^Flow_Field,
+	pos: Vec2,
+	intent: Movement_Intent,
+	fallback_goal: Vec2,
 ) -> Vec2 {
-	tile_size := game.current_map.tilemap.tile_size
-	enemy_cell := world_to_cell_coord(Vec2{enemy.x, enemy.y}, tile_size)
-
-	enemy_path, ok := find_path(collision_map, enemy_cell, world_to_cell_coord(goal_world, tile_size))
-	if ok {
-		delete(enemy.path)
-		enemy.path = enemy_path
-	} else {
-		enemy.path = {}
+	switch intent {
+	case .Hold:
+		return {}
+	case .Approach:
+		if target, ok := flow_field_step_target(field, pos); ok {
+			return linalg.normalize0(target - pos)
+		}
+	case .Withdraw:
+		if target, ok := flow_field_retreat_target(field, pos); ok {
+			return linalg.normalize0(target - pos)
+		}
 	}
-
-	path_index := 0
-	for path_index < len(enemy.path) &&
-	    linalg.distance(cell_center_to_world(enemy.path[path_index], tile_size), Vec2{enemy.x, enemy.y}) <
-		    ARRIVE_RADIUS {
-		path_index += 1
-	}
-
-	target: Vec2
-	if path_index < len(enemy.path) {
-		target = cell_center_to_world(enemy.path[path_index], tile_size)
-	} else {
-		target = goal_world
-	}
-
-	chase_dir := linalg.normalize0(target - Vec2{enemy.x, enemy.y})
-	blended := linalg.normalize0(chase_dir + separation_dir * separation_strength)
-	return blended * speed * dt
+	return linalg.normalize0(fallback_goal - pos)
 }
 
 // takes tile_size explicitly rather than always reading game.current_map -
@@ -884,73 +886,16 @@ cell_center_to_world :: proc(cell: Vec2i, tile_size: Vec2) -> Vec2 {
 	}
 }
 
-Collision_Map :: map[Vec2i]bool
-
-build_inflated_collision_map :: proc(tilemap: ^Tilemap, radius: i32) -> Collision_Map {
-	result: Collision_Map
-	for tile in tilemap.tiles {
-		if !tile.collides do continue
-
-		for dx in -radius ..= radius {
-			for dy in -radius ..= radius {
-				result[{tile.world_coords.x + dx, tile.world_coords.y + dy}] = true
-			}
-		}
-	}
-	return result
-}
-
-// how close an enemy must get to a path node before it advances to the next.
-// Hoisted out of chase_to so a Tunable can hold its address.
-ARRIVE_RADIUS: f32 = 4.0
-
-Path :: [dynamic]Vec2i
-MAX_SEARCH_NODES: int = 1024
-find_path :: proc(collision_map: Collision_Map, start, goal: Vec2i) -> (path: Path, ok: bool) {
-	frontier: queue.Queue(Vec2i)
-	defer queue.destroy(&frontier)
-	queue.init(&frontier)
-	queue.push(&frontier, start)
-
-	came_from := map[Vec2i]Vec2i{}
-	defer delete(came_from)
-	came_from[start] = start
-
-	for queue.len(frontier) != 0 && len(came_from) < MAX_SEARCH_NODES {
-		current := queue.pop_front(&frontier)
-		if current == goal do break
-
-		for neighbour in get_neighbours(current) {
-			if neighbour in came_from do continue
-			if does_cell_collide(collision_map, neighbour, start, goal) do continue
-
-			came_from[neighbour] = current
-			queue.push(&frontier, neighbour)
-		}
-	}
-
-	if !(goal in came_from) do return {}, false
-
-	node := goal
-	for node != start {
-		append(&path, node)
-		node = came_from[node]
-	}
-
-	slice.reverse(path[:])
-	return path, true
-
-	get_neighbours :: proc(cell: Vec2i) -> [4]Vec2i {
-		return {
-			{cell.x - 1, cell.y},
-			{cell.x + 1, cell.y},
-			{cell.x, cell.y - 1},
-			{cell.x, cell.y + 1},
-		}
-	}
-
-	does_cell_collide :: proc(collision_map: Collision_Map, cell, start, goal: Vec2i) -> bool {
-		if cell == start || cell == goal do return false // endpoints always allowed
-		return collision_map[cell]
-	}
+// -- the flow field's collision seam --------------------------------------
+// which Movement Styles resolve against terrain, named once rather than
+// type-asserted on Floater at the point of use. This is the seam the flow
+// field splits on too (ADR-0025): a style that collides is one that can read
+// the field, because routing around geometry is only meaningful to a body
+// geometry stops. Grounded reads it today; Swarmer collides but still seeks
+// its ring slots directly until ticket 05 puts it on the contour.
+movement_style_collides_with_terrain := [Movement_Style_Kind]bool {
+	.Grounded = true,
+	.Floater  = false, // flying through walls is its identity - see CONTEXT.md
+	.Swarmer  = true,
+	.Inert    = true,
 }

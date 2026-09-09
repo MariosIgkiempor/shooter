@@ -189,6 +189,20 @@ camera_visible_world_rect :: proc(camera: Camera) -> World_Bounds {
 	}
 }
 
+// per-channel linear blend between two colors, t clamped to 0..1
+color_lerp :: proc(from, to: Color, t: f32) -> Color {
+	mix := clamp(t, 0, 1)
+	channel :: proc(a, b: u8, mix: f32) -> u8 {
+		return u8(f32(a) + (f32(b) - f32(a)) * mix)
+	}
+	return {
+		channel(from.r, to.r, mix),
+		channel(from.g, to.g, mix),
+		channel(from.b, to.b, mix),
+		channel(from.a, to.a, mix),
+	}
+}
+
 draw_rectangle :: proc(rect: Rect, color: Color, origin: Vec2 = {}, rotation: f32 = 0) {
 	rl.DrawRectanglePro(rect, origin, rotation, color)
 }

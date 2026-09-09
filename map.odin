@@ -133,6 +133,11 @@ delete_map :: proc(map_data: Map) {
 // game.active_map_pointer starts as the zero value (empty string), which
 // never matches any real identity, so the reset branch always fires.
 apply_chosen_map :: proc(map_data: Map, chosen_identity: string) {
+	// the live tilemap has just been replaced, so every cell the flow field
+	// holds describes the previous Map. Invalidate rather than destroy: the
+	// allocation is reused by the next flood.
+	flow_field_invalidate(&game.flow_field)
+
 	if chosen_identity != game.active_map_pointer {
 		game.player.rect.x = map_data.player_start.x
 		game.player.rect.y = map_data.player_start.y

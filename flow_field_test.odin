@@ -1,0 +1,668 @@
+package shooter
+
+import "core:testing"
+
+// The flow field (ADR-0025) never reads `game` - every proc takes the Tilemap
+// and a world position explicitly, exactly so this file can build throwaway
+// tilemaps and needs no ODIN_TEST_THREADS=1 pinning. That's a constraint on
+// flow_field.odin's signatures, not a happy accident; keep it if you add to
+// either file.
+//
+// Deliberately not covered here: update_enemies' steering dispatch. Exercising
+// it needs game.enemies/current_map/player and would drag this file into the
+// snapshot/restore + thread-pinning idiom (see spawn_trigger_test.odin) for
+// coverage the seam procs - movement_intent, movement_goal_point,
+// field_chase_direction - already give directly.
+
+// builds a Tilemap from an ASCII picture, one row per string, so the pocket
+// and corridor cases below read as the shapes they are: '#' a colliding tile,
+// '.' a floor tile, ' ' no tile at all (an untiled gap - walkable, and
+// load-bearing on the shipped map, whose doorways are exactly this)
+fixture_room :: proc(rows: []string) -> Tilemap {
+	tilemap := Tilemap {
+		tile_size = {16, 16},
+	}
+	for row, y in rows {
+		for char, x in row {
+			switch char {
+			case '#':
+				append(&tilemap.tiles, Tile{world_coords = {i32(x), i32(y)}, collides = true})
+			case '.':
+				append(&tilemap.tiles, Tile{world_coords = {i32(x), i32(y)}, collides = false})
+			}
+		}
+	}
+	return tilemap
+}
+
+@(private = "file")
+cell_world_center :: proc(cell: Vec2i) -> Vec2 {
+	return cell_center_to_world(cell, {16, 16})
+}
+
+// -- extent and degenerate tilemaps ----------------------------------------
+
+@(test)
+test_flow_field_is_empty_for_a_tilemap_with_no_tiles :: proc(t: ^testing.T) {
+	tilemap := Tilemap {
+		tile_size = {16, 16},
+	}
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, {0, 0}, 1)
+
+	testing.expectf(t, field.size == Vec2i{0, 0}, "expected an empty extent, got %v", field.size)
+	testing.expect(t, len(field.cells) == 0, "an empty tilemap should allocate no cells")
+	testing.expect(t, field.filled_count == 0, "nothing can be flooded with no tiles")
+	testing.expect(
+		t,
+		flow_field_distance(&field, {0, 0}) == FLOW_UNREACHED,
+		"every cell of an empty field is unreached",
+	)
+}
+
+@(test)
+test_flow_field_is_empty_for_a_zero_tile_size :: proc(t: ^testing.T) {
+	// game.current_map = Map{} is a real state (spawn_trigger_test.odin), and
+	// dividing a world position by a zero tile_size would poison every cell
+	// coordinate before it ever reached an index
+	tilemap: Tilemap
+	append(&tilemap.tiles, Tile{world_coords = {0, 0}})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, {0, 0}, 1)
+
+	testing.expectf(t, field.size == Vec2i{0, 0}, "expected an empty extent, got %v", field.size)
+	testing.expect(t, field.built, "a degenerate rebuild still counts as built, so it isn't retried every frame")
+
+	_, ok := flow_field_step_target(&field, {0, 0})
+	testing.expect(t, !ok, "a zero-size field can offer no step target")
+}
+
+@(test)
+test_flow_field_spans_the_authored_cell_extent_including_negative_coords :: proc(t: ^testing.T) {
+	tilemap := Tilemap {
+		tile_size = {16, 16},
+	}
+	append(&tilemap.tiles, Tile{world_coords = {-2, -1}})
+	append(&tilemap.tiles, Tile{world_coords = {1, 3}})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({-2, -1}), 0)
+
+	testing.expectf(t, field.origin == Vec2i{-2, -1}, "expected origin {-2,-1}, got %v", field.origin)
+	testing.expectf(t, field.size == Vec2i{4, 5}, "expected a 4x5 extent, got %v", field.size)
+}
+
+// -- the flood -------------------------------------------------------------
+
+@(test)
+test_flow_field_source_cell_has_distance_zero_and_no_step :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({2, 0}), 0)
+
+	cell, ok := flow_field_cell(&field, {2, 0})
+	testing.expect(t, ok, "the source cell should be inside the extent")
+	testing.expectf(t, cell.distance == 0, "expected distance 0 at the source, got %v", cell.distance)
+	testing.expect(t, cell.step == .None, "the source has nowhere to step")
+	testing.expect(t, field.filled_count > 0, "the source cell was flooded")
+}
+
+@(test)
+test_flow_field_distance_increases_by_one_per_cell_along_a_corridor :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	for x in i32(0) ..< 5 {
+		testing.expectf(
+			t,
+			flow_field_distance(&field, {x, 0}) == u32(x),
+			"expected distance %v at cell %v, got %v",
+			x,
+			x,
+			flow_field_distance(&field, {x, 0}),
+		)
+	}
+	testing.expectf(t, field.max_distance == 4, "expected max_distance 4, got %v", field.max_distance)
+	testing.expectf(t, field.filled_count == 5, "expected 5 filled cells, got %v", field.filled_count)
+}
+
+@(test)
+test_flow_field_every_step_descends_toward_the_player :: proc(t: ^testing.T) {
+	// the ticket's central claim: from any filled cell, following `step`
+	// strictly decreases the distance, so every enemy is walking downhill
+	tilemap := fixture_room({"........", ".##..##.", "........", ".##..##.", "........"})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({7, 4}), 0)
+
+	for y in i32(0) ..< 5 {
+		for x in i32(0) ..< 8 {
+			cell, _ := flow_field_cell(&field, {x, y})
+			if cell.distance == FLOW_UNREACHED || cell.step == .None {
+				continue
+			}
+
+			next := Vec2i{x, y} + FLOW_STEP_OFFSET[cell.step]
+			next_cell, in_bounds := flow_field_cell(&field, next)
+			testing.expectf(t, in_bounds, "cell %v steps out of the extent to %v", Vec2i{x, y}, next)
+			testing.expectf(
+				t,
+				next_cell.distance == cell.distance - 1,
+				"cell %v at distance %v steps to %v at distance %v; expected %v",
+				Vec2i{x, y},
+				cell.distance,
+				next,
+				next_cell.distance,
+				cell.distance - 1,
+			)
+		}
+	}
+}
+
+@(test)
+test_flow_field_distance_wraps_around_a_wall :: proc(t: ^testing.T) {
+	// the player sits behind a U of wall; the cell directly "above" it is 2
+	// cells away in a straight line but must walk the long way round
+	tilemap := fixture_room({".....", ".###.", ".#@#.", ".#.#.", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	source := Vec2i{2, 2}
+	flow_field_rebuild(&field, &tilemap, cell_world_center(source), 0)
+
+	far := Vec2i{2, 0}
+	distance := flow_field_distance(&field, far)
+	testing.expect(t, distance != FLOW_UNREACHED, "the cell above the pocket is reachable the long way round")
+	testing.expectf(t, distance > 2, "expected a path distance greater than the straight-line 2, got %v", distance)
+
+	// walking the steps must land on the source in exactly `distance` hops,
+	// which also proves the field is acyclic
+	cursor := far
+	for _ in 0 ..< distance {
+		cell, _ := flow_field_cell(&field, cursor)
+		cursor += FLOW_STEP_OFFSET[cell.step]
+	}
+	testing.expectf(t, cursor == source, "expected to arrive at %v after %v hops, got %v", source, distance, cursor)
+}
+
+@(test)
+test_flow_field_never_fills_an_enclosed_pocket :: proc(t: ^testing.T) {
+	// a sealed 1x1 room inside an open one. The ticket's last criterion, and
+	// what ticket 07 leans on to reject an unreachable spawn.
+	tilemap := fixture_room({".....", ".###.", ".#.#.", ".###.", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {2, 2}) == FLOW_UNREACHED,
+		"the sealed cell must never be filled, got distance %v",
+		flow_field_distance(&field, {2, 2}),
+	)
+	testing.expect(t, flow_field_distance(&field, {1, 1}) == FLOW_UNREACHED, "wall cells are never filled")
+	// the 16 cells of the outer ring, and nothing else
+	testing.expectf(t, field.filled_count == 16, "expected 16 filled cells, got %v", field.filled_count)
+}
+
+@(test)
+test_flow_field_treats_a_cell_outside_the_extent_as_unreached :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"..", ".."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	_, ok := flow_field_cell(&field, {2, 0})
+	testing.expect(t, !ok, "a cell one past the extent is out of bounds, not a crash")
+	testing.expect(t, flow_field_distance(&field, {2, 0}) == FLOW_UNREACHED, "out of bounds reads as unreached")
+	testing.expect(t, flow_field_distance(&field, {-1, -1}) == FLOW_UNREACHED, "so does a cell before the origin")
+}
+
+@(test)
+test_flow_field_fills_nothing_when_the_player_is_outside_the_extent :: proc(t: ^testing.T) {
+	// half-authored editor maps let the player walk off the tiles. Clamping
+	// the source into the extent would flood from the wrong cell and march
+	// every enemy at a map corner; filling nothing falls every enemy back to
+	// the straight-line chase, which is what they did before the field.
+	tilemap := fixture_room({"..", ".."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({9, 9}), 0)
+
+	testing.expectf(t, field.filled_count == 0, "expected 0 filled cells, got %v", field.filled_count)
+	testing.expectf(t, field.max_distance == 0, "max_distance must reset, got %v", field.max_distance)
+}
+
+// -- inflation -------------------------------------------------------------
+
+@(test)
+test_flow_field_inflation_marks_the_ring_around_a_wall :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"...", ".#.", "..."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 1)
+
+	wall, _ := flow_field_cell(&field, {1, 1})
+	testing.expect(t, wall.collides, "the authored tile is solid")
+
+	for y in i32(0) ..< 3 {
+		for x in i32(0) ..< 3 {
+			cell, _ := flow_field_cell(&field, {x, y})
+			testing.expectf(t, cell.inflated, "cell %v is inside the wall's radius-1 envelope", Vec2i{x, y})
+			if x == 1 && y == 1 {
+				continue
+			}
+			testing.expectf(t, !cell.collides, "cell %v carries no authored tile collision", Vec2i{x, y})
+		}
+	}
+}
+
+@(test)
+test_flow_field_floods_out_of_a_source_inside_the_inflation_envelope :: proc(t: ^testing.T) {
+	// a third of the shipped map's floor is inflation-solid at radius 1, so a
+	// player standing next to a wall is the common case, not an edge one: a
+	// flood that refused to leave its own cell would strand every enemy
+	tilemap := fixture_room({"#....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	source := Vec2i{1, 0} // adjacent to the wall, so inflated at radius 1
+	flow_field_rebuild(&field, &tilemap, cell_world_center(source), 1)
+
+	source_cell, _ := flow_field_cell(&field, source)
+	testing.expect(t, source_cell.inflated, "the source really is inside the envelope")
+	testing.expect(t, field.filled_count > 1, "the source is flooded regardless, and does not stop there")
+	testing.expect(
+		t,
+		flow_field_distance(&field, {4, 1}) != FLOW_UNREACHED,
+		"open ground beyond the envelope must still fill",
+	)
+}
+
+@(test)
+test_flow_field_floods_out_of_a_fully_inflated_corridor :: proc(t: ^testing.T) {
+	// the harder half of the same rule: every cell of the corridor is
+	// inflated, so exempting only the source cell would still strand the
+	// flood one cell in
+	tilemap := fixture_room({"#####", ".....", "#.###", "..#..", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	source := Vec2i{0, 1}
+	flow_field_rebuild(&field, &tilemap, cell_world_center(source), 1)
+
+	for x in i32(0) ..< 5 {
+		cell, _ := flow_field_cell(&field, {x, 1})
+		testing.expectf(t, cell.inflated, "corridor cell %v should be inflated", Vec2i{x, 1})
+	}
+	testing.expect(
+		t,
+		flow_field_distance(&field, {4, 1}) != FLOW_UNREACHED,
+		"the far end of a wholly inflated corridor must fill",
+	)
+	testing.expect(
+		t,
+		flow_field_distance(&field, {4, 4}) != FLOW_UNREACHED,
+		"and so must the room the corridor opens onto",
+	)
+}
+
+@(test)
+test_flow_field_does_not_re_enter_the_envelope_from_open_ground :: proc(t: ^testing.T) {
+	// the other half of the may-enter rule: once the flood reaches free
+	// ground it must stop hugging walls, or inflation buys nothing
+	tilemap := fixture_room({".....", ".....", "..#..", ".....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 1)
+
+	// {2,1} is inside the wall's envelope and is only reachable through free
+	// ground, never from another envelope cell connected to the source
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {2, 1}) == FLOW_UNREACHED,
+		"an envelope cell reached only from open ground stays unfilled, got %v",
+		flow_field_distance(&field, {2, 1}),
+	)
+	testing.expect(
+		t,
+		flow_field_distance(&field, {4, 4}) != FLOW_UNREACHED,
+		"open ground on the far side of the pillar still fills",
+	)
+}
+
+// -- steering lookups ------------------------------------------------------
+
+@(test)
+test_flow_field_step_target_is_the_next_cell_centre :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	target, ok := flow_field_step_target(&field, cell_world_center({3, 0}))
+	testing.expect(t, ok, "a filled cell has a step target")
+	testing.expectf(
+		t,
+		target == cell_world_center({2, 0}),
+		"expected the centre of {2,0} (%v), got %v",
+		cell_world_center({2, 0}),
+		target,
+	)
+}
+
+@(test)
+test_flow_field_step_target_is_absent_at_the_source :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({2, 0}), 0)
+
+	_, ok := flow_field_step_target(&field, cell_world_center({2, 0}))
+	testing.expect(t, !ok, "standing on the player's own cell, steer straight at them instead")
+}
+
+@(test)
+test_flow_field_step_target_falls_back_to_the_best_of_eight_neighbours :: proc(t: ^testing.T) {
+	// Separation can push an enemy into an unfilled envelope cell. The
+	// fallback reproduces find_path's "endpoints always allowed" exemption -
+	// and must consider diagonals, and pick the lowest distance rather than
+	// the first hit.
+	tilemap := fixture_room({".....", ".....", "..#..", ".....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 4}), 1)
+
+	stranded := Vec2i{2, 1}
+	testing.expect(t, flow_field_distance(&field, stranded) == FLOW_UNREACHED, "fixture assumption: {2,1} is unfilled")
+
+	target, ok := flow_field_step_target(&field, cell_world_center(stranded))
+	testing.expect(t, ok, "an unfilled cell still steers by its neighbours")
+
+	// whichever neighbour it picked must be the lowest-distance one available
+	best := FLOW_UNREACHED
+	for dy in i32(-1) ..= 1 {
+		for dx in i32(-1) ..= 1 {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			best = min(best, flow_field_distance(&field, stranded + {dx, dy}))
+		}
+	}
+	chosen := world_to_cell_coord(target, {16, 16})
+	testing.expectf(
+		t,
+		flow_field_distance(&field, chosen) == best,
+		"expected the best-valued neighbour (distance %v), got %v at distance %v",
+		best,
+		chosen,
+		flow_field_distance(&field, chosen),
+	)
+	testing.expectf(
+		t,
+		abs(chosen.x - stranded.x) <= 1 && abs(chosen.y - stranded.y) <= 1,
+		"the fallback must pick a neighbour of %v, got %v",
+		stranded,
+		chosen,
+	)
+}
+
+@(test)
+test_flow_field_step_target_is_absent_with_no_valued_neighbour :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".....", ".###.", ".#.#.", ".###.", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	_, ok := flow_field_step_target(&field, cell_world_center({2, 2}))
+	testing.expect(t, !ok, "sealed in a pocket, an enemy keeps the straight-line chase it had before the field")
+}
+
+@(test)
+test_flow_field_retreat_target_is_the_farthest_neighbour :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	target, ok := flow_field_retreat_target(&field, cell_world_center({2, 0}))
+	testing.expect(t, ok, "a filled cell with filled neighbours can retreat")
+	testing.expectf(
+		t,
+		target == cell_world_center({3, 0}),
+		"expected the higher-distance neighbour {3,0} (%v), got %v",
+		cell_world_center({3, 0}),
+		target,
+	)
+}
+
+@(test)
+test_flow_field_retreat_target_is_absent_at_a_local_maximum :: proc(t: ^testing.T) {
+	// the back of a dead end: every neighbour is *closer* to the player, so
+	// the farthest of them is still a step inward. Taking it would walk the
+	// enemy toward the player and straight back out next frame.
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	_, ok := flow_field_retreat_target(&field, cell_world_center({4, 0}))
+	testing.expect(t, !ok, "with nowhere farther to stand, a Withdraw must not step back toward the player")
+}
+
+// -- rebuild policy --------------------------------------------------------
+
+@(test)
+test_flow_field_ensure_rebuilds_only_when_the_source_cell_changes :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".....", ".....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	testing.expect(t, flow_field_ensure(&field, &tilemap, {8, 8}, 1), "the first ensure builds the field")
+	testing.expect(
+		t,
+		!flow_field_ensure(&field, &tilemap, {15, 15}, 1),
+		"a move within the same cell must not rebuild - this is what makes the field affordable",
+	)
+	testing.expect(t, flow_field_ensure(&field, &tilemap, {24, 8}, 1), "crossing into the next cell rebuilds")
+	testing.expectf(t, field.source == Vec2i{1, 0}, "expected the source to follow the player, got %v", field.source)
+}
+
+@(test)
+test_flow_field_ensure_rebuilds_on_a_radius_change_and_after_invalidation :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".....", ".....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_ensure(&field, &tilemap, {8, 8}, 1)
+	testing.expect(t, flow_field_ensure(&field, &tilemap, {8, 8}, 2), "a radius change rebuilds")
+	testing.expect(t, !flow_field_ensure(&field, &tilemap, {8, 8}, 2), "and then settles again")
+
+	flow_field_invalidate(&field)
+	testing.expect(t, flow_field_ensure(&field, &tilemap, {8, 8}, 2), "an invalidated field rebuilds")
+}
+
+@(test)
+test_flow_field_ensure_reuses_its_allocation_across_a_same_size_rebuild :: proc(t: ^testing.T) {
+	tilemap := fixture_room({".....", ".....", "....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_ensure(&field, &tilemap, {8, 8}, 1)
+	before := raw_data(field.cells)
+	before_cap := cap(field.cells)
+
+	flow_field_ensure(&field, &tilemap, {24, 8}, 1)
+
+	testing.expect(t, raw_data(field.cells) == before, "a same-size rebuild must not reallocate")
+	testing.expectf(t, cap(field.cells) == before_cap, "expected capacity %v, got %v", before_cap, cap(field.cells))
+}
+
+@(test)
+test_flow_field_rebuild_clears_the_previous_map_out_of_its_cells :: proc(t: ^testing.T) {
+	// reusing the allocation without clearing every cell leaves ghost walls
+	// and stale distances behind - silent, and visible only as enemies
+	// refusing to enter a room
+	walled := fixture_room({"...", ".#.", "..."})
+	defer delete(walled.tiles)
+	open := fixture_room({"...", "...", "..."})
+	defer delete(open.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &walled, cell_world_center({0, 0}), 0)
+	testing.expect(t, flow_field_distance(&field, {1, 1}) == FLOW_UNREACHED, "fixture assumption: the wall blocks")
+
+	flow_field_rebuild(&field, &open, cell_world_center({0, 0}), 0)
+
+	cell, _ := flow_field_cell(&field, {1, 1})
+	testing.expect(t, !cell.collides, "the previous map's wall must not survive the rebuild")
+	testing.expect(t, cell.distance == 2, "the cell the wall occupied is now ordinary floor")
+}
+
+@(test)
+test_flow_field_destroy_zeroes_the_field_and_is_safe_twice :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"..", ".."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	flow_field_rebuild(&field, &tilemap, {0, 0}, 1)
+
+	flow_field_destroy(&field)
+	testing.expect(t, len(field.cells) == 0, "destroy frees the cells")
+	testing.expect(t, !field.built, "destroy leaves an unbuilt field")
+
+	flow_field_destroy(&field)
+}
+
+// -- the Attack Style seam -------------------------------------------------
+
+@(test)
+test_movement_intent_bands_a_ranged_enemy_against_its_firing_range :: proc(t: ^testing.T) {
+	ranged := Ranged {
+		min_range = 100,
+		max_range = 200,
+	}
+
+	testing.expect(
+		t,
+		movement_intent({0, 0}, {300, 0}, ranged) == .Approach,
+		"beyond max_range, a Ranged enemy closes",
+	)
+	testing.expect(t, movement_intent({0, 0}, {150, 0}, ranged) == .Hold, "inside the band, it holds")
+	testing.expect(t, movement_intent({0, 0}, {50, 0}, ranged) == .Withdraw, "inside min_range, it backs off")
+	testing.expect(t, movement_intent({0, 0}, {50, 0}, Melee{}) == .Approach, "a Melee enemy always closes")
+	testing.expect(t, movement_intent({0, 0}, {50, 0}, nil) == .Approach, "and so does one with no attack")
+}
+
+@(test)
+test_movement_goal_point_keeps_todays_euclidean_realisation :: proc(t: ^testing.T) {
+	// Floater never reads the field, so its goal arithmetic must be exactly
+	// what it was before the field existed
+	enemy_pos := Vec2{100, 0}
+	player_pos := Vec2{0, 0}
+
+	testing.expect(t, movement_goal_point(enemy_pos, player_pos, .Approach) == player_pos, "Approach aims at the player")
+	testing.expect(t, movement_goal_point(enemy_pos, player_pos, .Hold) == enemy_pos, "Hold aims at itself")
+	testing.expectf(
+		t,
+		movement_goal_point(enemy_pos, player_pos, .Withdraw) == Vec2{100 + RANGED_RETREAT_LOOKAHEAD, 0},
+		"Withdraw aims RANGED_RETREAT_LOOKAHEAD directly away from the player, got %v",
+		movement_goal_point(enemy_pos, player_pos, .Withdraw),
+	)
+}
+
+@(test)
+test_field_chase_direction_follows_the_field_and_falls_back_to_the_goal :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"....."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	pos := cell_world_center({3, 0})
+	dir := field_chase_direction(&field, pos, .Approach, cell_world_center({0, 0}))
+	testing.expectf(t, dir == Vec2{-1, 0}, "expected the field's leftward step, got %v", dir)
+
+	testing.expect(t, field_chase_direction(&field, pos, .Hold, pos) == Vec2{}, "Hold steers nowhere")
+
+	away := field_chase_direction(&field, pos, .Withdraw, pos + {100, 0})
+	testing.expectf(t, away == Vec2{1, 0}, "expected a step to the farther cell, got %v", away)
+
+	// an empty field is exactly the case an empty path used to cover
+	empty: Flow_Field
+	defer flow_field_destroy(&empty)
+	fallback := field_chase_direction(&empty, {0, 0}, .Approach, {0, 100})
+	testing.expectf(t, fallback == Vec2{0, 1}, "with no field, steer straight at the goal, got %v", fallback)
+}

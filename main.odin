@@ -104,6 +104,14 @@ game: struct {
 	// a stale angle for one frame on load.
 	relic_state:            Relic_State `json:"-"`,
 
+	// the one flow field every terrain-colliding enemy steers by, flooded
+	// from the player's cell (flow_field.odin, ADR-0025). Lives here rather
+	// than on Map because a Map is serialised to data/maps/*.json and
+	// deep-cloned; this is derived runtime state with no business in a level
+	// definition. Never persisted - it is re-flooded from current_map on the
+	// first frame after any load anyway.
+	flow_field:             Flow_Field `json:"-"`,
+
 	// true while the Run End modal is open (see end_run); simulation is
 	// paused. Never saved - a save taken mid-modal simply reopens closed,
 	// which is fine since no Run state is lost (the Gold settle is already
@@ -139,7 +147,7 @@ game: struct {
 	menu_transition:        Menu_Transition `json:"-"`,
 
 	// F8-toggled debug settings panel (debug.odin): each dev-view visualizer
-	// (colliders, weapon area, attack ranges, movement styles, pathfinding)
+	// (colliders, weapon area, attack ranges, movement styles, flow field)
 	// toggles independently instead of the old single debug_overlay bool
 	// that gated all of them together, plus a Gold grant and God Mode. Never
 	// saved, same rationale as run_ended/shopping.
@@ -293,6 +301,7 @@ initialize_program :: proc() -> runtime.Context {
 }
 
 deinitialize_program :: proc() {
+	flow_field_destroy(&game.flow_field)
 	deinit_tunables()
 	deinitialize_renderer()
 	deinitialize_logger()
@@ -430,6 +439,19 @@ update_game :: proc() {
 			&game.player.rect,
 			&game.current_map.tilemap,
 			input * rl.GetFrameTime() * game.player.move_speed,
+		)
+
+		// re-floods only when the player has crossed into a new cell, so the
+		// goal is a cell rather than a point and the field is exact rather
+		// than merely fresh. Placed here, right after the player moves and
+		// before update_spawn_triggers, so every later system this frame -
+		// spawn placement included - reads one field describing where the
+		// player actually is.
+		flow_field_ensure(
+			&game.flow_field,
+			&game.current_map.tilemap,
+			Vec2{game.player.x, game.player.y},
+			i32(FLOW_FIELD_INFLATION_RADIUS),
 		)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
@@ -1054,11 +1076,14 @@ draw_game :: proc() {
 	// backbuffer, with zero duplication between the two paths.
 	draw_world_contents :: proc() {
 		draw_tilemap(&game.current_map.tilemap)
+		// under the bodies rather than over them: the field is terrain
+		// furniture, and it is one drawing for the whole map rather than one
+		// per enemy - there are no per-enemy routes to draw any more
+		if game.debug.visualizers[.Flow_Field] {
+			draw_debug_flow_field()
+		}
 		for &enemy in game.enemies {
 			draw_enemy(enemy)
-			if game.debug.visualizers[.Pathfinding] {
-				draw_path(Vec2{enemy.x, enemy.y}, enemy.path)
-			}
 		}
 		draw_actor(game.player.rect, game.player.squash)
 		draw_weapon(game.player)
@@ -1196,12 +1221,85 @@ draw_game :: proc() {
 		}
 	}
 
-	draw_path :: proc(from: Vec2, path: [dynamic]Vec2i) {
-		point := from
-		for cell in path {
-			next := cell_center_to_world(cell, game.current_map.tilemap.tile_size)
-			rl.DrawLineV(point, next, rl.YELLOW)
-			point = next
+	// the flow field overlay's palette: a near->far ramp for the step stubs,
+	// a brighter band every FLOW_FIELD_DEBUG_BAND steps of path distance, and
+	// two distinct washes for the two reasons a cell can be unfilled
+	FLOW_FIELD_DEBUG_BAND :: 8
+	FLOW_FIELD_DEBUG_NEAR :: Color{255, 232, 120, 220}
+	FLOW_FIELD_DEBUG_FAR :: Color{70, 120, 190, 160}
+	FLOW_FIELD_DEBUG_BAND_TINT :: Color{255, 255, 255, 230}
+	FLOW_FIELD_DEBUG_SOURCE :: Color{120, 255, 140, 230}
+	FLOW_FIELD_DEBUG_INFLATED :: Color{200, 140, 60, 45}
+	FLOW_FIELD_DEBUG_UNREACHED :: Color{220, 40, 40, 55}
+
+	// F8 debug panel visualizer: the shared flow field itself. A filled cell
+	// draws a stub toward the cell it steps to, shaded along the distance
+	// ramp with a brighter band every FLOW_FIELD_DEBUG_BAND steps so that
+	// distance visibly *wraps* walls rather than radiating through them. A
+	// cell inside the inflation envelope that the flood never entered draws
+	// faintly - that is what explains an enemy on the eight-neighbour
+	// fallback - and an unfilled cell outside the envelope draws in the
+	// unreachable tint, which is the on-screen proof that a sealed pocket is
+	// never filled.
+	//
+	// Culled to the visible rect before anything else: draw_world_contents
+	// runs a second time every frame draw_blurred_world is active, and a
+	// map-sized loop twice a frame is not something a dev overlay may cost.
+	draw_debug_flow_field :: proc() {
+		field := &game.flow_field
+		if !flow_field_is_usable(field) {
+			return
+		}
+
+		visible := camera_visible_world_rect(game.camera)
+		min_cell := world_to_cell_coord({visible.min_x, visible.min_y}, field.tile_size)
+		max_cell := world_to_cell_coord({visible.max_x, visible.max_y}, field.tile_size)
+		min_cell.x = max(min_cell.x, field.origin.x)
+		min_cell.y = max(min_cell.y, field.origin.y)
+		max_cell.x = min(max_cell.x, field.origin.x + field.size.x - 1)
+		max_cell.y = min(max_cell.y, field.origin.y + field.size.y - 1)
+
+		ramp := f32(max(field.max_distance, 1))
+
+		for y in min_cell.y ..= max_cell.y {
+			for x in min_cell.x ..= max_cell.x {
+				coord := Vec2i{x, y}
+				cell, in_bounds := flow_field_cell(field, coord)
+				if !in_bounds || cell.collides {
+					continue
+				}
+
+				center := cell_center_to_world(coord, field.tile_size)
+
+				if cell.distance == FLOW_UNREACHED {
+					tint := cell.inflated ? FLOW_FIELD_DEBUG_INFLATED : FLOW_FIELD_DEBUG_UNREACHED
+					draw_rectangle(
+						{
+							center.x - field.tile_size.x / 2,
+							center.y - field.tile_size.y / 2,
+							field.tile_size.x,
+							field.tile_size.y,
+						},
+						tint,
+					)
+					continue
+				}
+
+				tint :=
+					cell.distance % FLOW_FIELD_DEBUG_BAND == 0 \
+					? FLOW_FIELD_DEBUG_BAND_TINT \
+					: color_lerp(FLOW_FIELD_DEBUG_NEAR, FLOW_FIELD_DEBUG_FAR, f32(cell.distance) / ramp)
+
+				if cell.step == .None {
+					rl.DrawCircleV(center, field.tile_size.x / 4, FLOW_FIELD_DEBUG_SOURCE)
+					continue
+				}
+
+				offset := FLOW_STEP_OFFSET[cell.step]
+				head := center + Vec2{f32(offset.x), f32(offset.y)} * (field.tile_size / 2)
+				rl.DrawLineV(center, head, tint)
+				rl.DrawCircleV(head, 1.5, tint)
+			}
 		}
 	}
 
