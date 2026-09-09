@@ -199,8 +199,10 @@ test_a_tunable_into_a_union_variant_writes_through_to_the_preset :: proc(t: ^tes
 		testing.expectf(t, gun.pellet_count == 3, "expected the write to reach weapon_presets, got %v", gun.pellet_count)
 	}
 
-	damage := find_tunable("upgrade.damage.effect")
-	testing.expect(t, damage != nil, "upgrade.damage.effect should be registered")
+	// the slug carries the effect's shape - see register_tunables' note on why
+	// Multiplicative and Additive must not share one
+	damage := find_tunable("upgrade.damage.effect_mult")
+	testing.expect(t, damage != nil, "upgrade.damage.effect_mult should be registered")
 	if damage != nil {
 		tunable_set(damage^, 1.5)
 		effect, is_multiplicative := upgrade_presets[.Damage].effect.(Multiplicative)

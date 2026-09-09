@@ -14,7 +14,7 @@ Upgrade_Kind :: enum {
 	Damage,
 	Action_Rate,
 	Clip_Size, // Ranged only - Gun.clip_size/ammo_in_clip
-	Arc_Width, // Melee only - Melee_Weapon.range (see the rename to Reach)
+	Reach, // Melee only - Melee_Weapon.range
 	Range, // Magic only - Magic.range/cast_range/bullet_lifetime, per spell_kind (see apply_magic_range_upgrade)
 }
 
@@ -79,11 +79,14 @@ upgrade_presets: [Upgrade_Kind]Upgrade_Preset = {
 		base_price   = 90,
 		price_growth = 1.15,
 		max_stack    = 10,
-		effect       = Additive(2),
-		family       = .Ranged,
+		// multiplicative so one purchase means the same thing whichever gun is
+		// equipped - the retired Additive(2) was a third of a Shotgun's clip
+		// and a fifteenth of an SMG's (issue 19-reach-and-clip-size)
+		effect = Multiplicative(1.15),
+		family = .Ranged,
 	},
-	.Arc_Width = {
-		display_name = "Arc Width",
+	.Reach = {
+		display_name = "Reach",
 		base_price   = 90,
 		price_growth = 1.15,
 		max_stack    = 10,
@@ -155,21 +158,30 @@ apply_upgrades :: proc(weapon: ^Weapon, upgrade_stacks: [Upgrade_Kind]int, accou
 	switch &v in weapon.variant {
 	case Gun:
 		base := preset.variant.(Gun)
-		v.clip_size = base.clip_size + int(apply_upgrade_effect(0, .Clip_Size, upgrade_stacks[.Clip_Size]))
+		v.clip_size = upgraded_clip_size(base.clip_size, upgrade_stacks[.Clip_Size])
 	case Melee_Weapon:
 		base := preset.variant.(Melee_Weapon)
 		// repointed from the deleted Melee_Weapon.arc_degrees. Scaling `range`
 		// scales weapon_world_frame_size, so the blade grows and its Hit volume
 		// grows with it, honestly; widening an arc instead would sweep the same
 		// volume through more ground and buy nothing under a blade collider
-		// (ADR-0026). The member is still called Arc_Width - the rename to
-		// Reach is its own change, because a name outliving its mechanism is
-		// how a retired concept walks back in.
-		v.range = apply_upgrade_effect(base.range, .Arc_Width, upgrade_stacks[.Arc_Width])
+		// (ADR-0026).
+		v.range = apply_upgrade_effect(base.range, .Reach, upgrade_stacks[.Reach])
 	case Magic:
 		base := preset.variant.(Magic)
 		apply_magic_range_upgrade(&v, base, upgrade_stacks[.Range])
 	}
+}
+
+// Clip_Size is the one Upgrade whose stat is a whole count rather than a
+// float, so its multiplier has to land on an integer somewhere. Rounding, not
+// truncating: 1.15 on the Shotgun's six is +0.9 of a round, and truncation
+// would hand the player nothing at all for a purchase they just paid for.
+// Every ranged preset in the catalog gains at least one round per stack under
+// this rule - test_every_clip_size_stack_grows_every_gun_s_clip is what keeps
+// that true as weapons are added.
+upgraded_clip_size :: proc(base_clip_size: int, stacks: int) -> int {
+	return int(math.round(apply_upgrade_effect(f32(base_clip_size), .Clip_Size, stacks)))
 }
 
 // Range's per-stack additive amount means a different field depending on

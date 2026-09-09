@@ -96,7 +96,7 @@ try_buy_upgrade :: proc(kind: Upgrade_Kind) -> bool {
 		// reads as a net improvement rather than just a bigger empty cap
 		// (issue 01-upgrade-catalog-contents)
 		game.player.health += game.player.max_health - old_max
-	case .Damage, .Action_Rate, .Clip_Size, .Arc_Width, .Range:
+	case .Damage, .Action_Rate, .Clip_Size, .Reach, .Range:
 		old_clip_size := 0
 		if gun, ok := game.player.weapon.variant.(Gun); ok {
 			old_clip_size = gun.clip_size

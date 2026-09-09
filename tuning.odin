@@ -596,12 +596,20 @@ register_economy_tunables :: proc() {
 		// Multiplicative and Additive are both `distinct f32` (ADR-0007), so a
 		// Tunable can point straight at either variant's payload - the union
 		// tag is the *shape* of the effect and stays a design decision, only
-		// its magnitude is tunable
+		// its magnitude is tunable.
+		//
+		// The shape is part of the slug because the two read the same number
+		// incompatibly: an Override of 2 is "+2 per stack" under Additive and
+		// "x2 per stack" under Multiplicative, and both sit inside the other's
+		// slider range. Sharing one slug would let a stale Override survive an
+		// effect-shape change and be applied with the wrong meaning, silently.
+		// Spelling the shape into the slug retires it instead, which
+		// load_tuning already handles by dropping it with a warning.
 		switch &effect in preset.effect {
 		case Multiplicative:
-			register_tunable(.Upgrades_Effect, fmt.tprintf("upgrade.{}.effect", name), preset.display_name, cast(^f32)&effect, 1, 3)
+			register_tunable(.Upgrades_Effect, fmt.tprintf("upgrade.{}.effect_mult", name), preset.display_name, cast(^f32)&effect, 1, 3)
 		case Additive:
-			register_tunable(.Upgrades_Effect, fmt.tprintf("upgrade.{}.effect", name), preset.display_name, cast(^f32)&effect, 0, 100)
+			register_tunable(.Upgrades_Effect, fmt.tprintf("upgrade.{}.effect_add", name), preset.display_name, cast(^f32)&effect, 0, 100)
 		}
 	}
 

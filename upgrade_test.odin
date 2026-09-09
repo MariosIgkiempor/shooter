@@ -134,7 +134,7 @@ test_apply_upgrades_layers_might_account_stat_under_damage_upgrade :: proc(t: ^t
 }
 
 @(test)
-test_apply_upgrades_gun_clip_size_derives_from_preset_plus_stacks :: proc(t: ^testing.T) {
+test_apply_upgrades_scales_a_gun_s_clip_size_from_its_preset_baseline :: proc(t: ^testing.T) {
 	previous_stacks := game.player.upgrade_stacks
 	defer game.player.upgrade_stacks = previous_stacks
 	game.player.upgrade_stacks = {}
@@ -145,14 +145,102 @@ test_apply_upgrades_gun_clip_size_derives_from_preset_plus_stacks :: proc(t: ^te
 	gun, ok := weapon.variant.(Gun)
 	testing.expect(t, ok, "sanity check: Pistol should be a Gun")
 
-	bonus := int(apply_upgrade_effect(0, .Clip_Size, 3))
+	// spelled out rather than recomputed through upgraded_clip_size, so this
+	// asserts the multiplier's actual arithmetic instead of restating it:
+	// the Pistol's 12 * 1.15^3 = 18.25, rounded to 18. The baseline is pinned
+	// first so retuning the Pistol fails with the reason rather than leaving
+	// the message below claiming an arithmetic that no longer applies.
+	testing.expect(
+		t,
+		weapon_presets[.Pistol].variant.(Gun).clip_size == 12,
+		"this test's expected value is derived from a 12-round Pistol clip",
+	)
 	testing.expectf(
 		t,
-		gun.clip_size == weapon_presets[.Pistol].variant.(Gun).clip_size + bonus,
-		"clip_size should be preset base + Clip_Size stack bonus, got %v",
+		gun.clip_size == 18,
+		"12 * 1.15^3 rounds to 18, got %v",
 		gun.clip_size,
 	)
 	testing.expect(t, gun.ammo_in_clip == gun.clip_size, "a freshly created weapon should start with a full (upgraded) clip")
+}
+
+@(test)
+test_every_clip_size_stack_grows_every_gun_s_clip :: proc(t: ^testing.T) {
+	// the guard rail on the rounding rule in upgraded_clip_size. A multiplier
+	// on a small enough clip rounds back onto the same integer, and a stack
+	// that costs gold and changes nothing is the failure mode a flat bonus
+	// could never have. Runs over every Gun preset so a new low-clip weapon
+	// (a rifle, say) fails here rather than in someone's hands.
+	max_stack := upgrade_presets[.Clip_Size].max_stack
+	for kind in Weapon_Kind {
+		base, is_gun := weapon_presets[kind].variant.(Gun)
+		if !is_gun {
+			continue
+		}
+
+		previous := base.clip_size
+		for stack in 1 ..= max_stack {
+			current := upgraded_clip_size(base.clip_size, stack)
+			testing.expectf(
+				t,
+				current > previous,
+				"%v's Clip_Size stack %v buys nothing: clip stayed at %v",
+				kind,
+				stack,
+				current,
+			)
+			previous = current
+		}
+	}
+}
+
+@(test)
+test_clip_size_scales_in_proportion_rather_than_by_a_flat_amount :: proc(t: ^testing.T) {
+	// the whole point of the change (issue 19-reach-and-clip-size): the same
+	// purchase should be worth the same to a Shotgun and to an SMG, whose
+	// clips differ five-fold. Under the retired Additive(2) these two ratios
+	// were 4.3x and 1.7x.
+	stacks := upgrade_presets[.Clip_Size].max_stack
+	shotgun := weapon_presets[.Shotgun].variant.(Gun).clip_size
+	smg := weapon_presets[.SMG].variant.(Gun).clip_size
+
+	shotgun_ratio := f32(upgraded_clip_size(shotgun, stacks)) / f32(shotgun)
+	smg_ratio := f32(upgraded_clip_size(smg, stacks)) / f32(smg)
+
+	// tolerance covers rounding, which moves a six-round clip's ratio by up to
+	// half a round in twelve
+	testing.expectf(
+		t,
+		math.abs(shotgun_ratio - smg_ratio) < 0.2,
+		"a maxed Clip_Size should multiply every clip alike: Shotgun %vx, SMG %vx",
+		shotgun_ratio,
+		smg_ratio,
+	)
+}
+
+@(test)
+test_apply_upgrades_extends_a_melee_weapon_s_reach :: proc(t: ^testing.T) {
+	previous_stacks := game.player.upgrade_stacks
+	defer game.player.upgrade_stacks = previous_stacks
+	game.player.upgrade_stacks = {}
+	game.player.upgrade_stacks[.Reach] = 2
+
+	weapon := weapon_create(.Sword)
+
+	melee, ok := weapon.variant.(Melee_Weapon)
+	testing.expect(t, ok, "sanity check: Sword should be a Melee_Weapon")
+
+	base := weapon_presets[.Sword].variant.(Melee_Weapon)
+	expected := apply_upgrade_effect(base.range, .Reach, 2)
+	testing.expectf(
+		t,
+		melee.range == expected,
+		"Reach stacks should extend range from the preset baseline %v to %v, got %v",
+		base.range,
+		expected,
+		melee.range,
+	)
+	testing.expect(t, melee.range > base.range, "a Reach stack that does not lengthen the weapon is not reach")
 }
 
 @(test)

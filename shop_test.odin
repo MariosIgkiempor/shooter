@@ -160,7 +160,10 @@ test_try_buy_upgrade_clip_size_grants_the_bonus_as_usable_ammo_not_a_refill :: p
 	bought := try_buy_upgrade(.Clip_Size)
 	testing.expect(t, bought, "sanity check: purchase should succeed")
 
-	bonus := int(apply_upgrade_effect(0, .Clip_Size, 1))
+	base := weapon_presets[.Pistol].variant.(Gun).clip_size
+	bonus := upgraded_clip_size(base, 1) - base
+	testing.expect(t, bonus > 0, "sanity check: a Clip_Size stack should raise the Pistol's capacity")
+
 	new_gun, ok := game.player.weapon.variant.(Gun)
 	testing.expect(t, ok, "sanity check: still a Gun")
 	testing.expectf(

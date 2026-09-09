@@ -463,12 +463,19 @@ icon_upgrade_clip_size :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	}
 }
 
-// a swept fan - the melee arc itself
-icon_upgrade_arc_width :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
-	icon_sector(f, 0.16, 0.5, 0.74, -52, 52, icon_color(ICON_NEUTRAL_COLOR, tint, alpha))
+// a blade with the shared "further" chevron off its tip - Reach lengthens the
+// weapon itself (and its Hit volume with it, ADR-0026), so the glyph is a
+// blade going further rather than icon_upgrade_range's bare measuring rule
+icon_upgrade_reach :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(ICON_NEUTRAL_COLOR, tint, alpha)
+	icon_bar_h(f, 0.06, 0.5, 0.13, 0.10, c) // hilt
+	icon_bar_v(f, 0.21, 0.39, 0.22, 0.09, c) // crossguard
+	icon_tri(f, 0.21, 0.39, 0.60, 0.5, 0.21, 0.61, c) // blade
+	icon_chevron(f, 0.70, 0.5, 0.20, 0.44, 0.12, c)
 }
 
-// a rule with an arrowhead - "reaches further"
+// a measuring rule with an arrowhead - how far a spell carries, distinct from
+// Reach's blade because Range extends a cast, not the weapon
 icon_upgrade_range :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	c := icon_color(ICON_NEUTRAL_COLOR, tint, alpha)
 	icon_bar_h(f, 0.12, 0.5, 0.58, 0.13, c)
@@ -482,7 +489,7 @@ upgrade_icons: [Upgrade_Kind]Icon_Proc = {
 	.Damage      = icon_upgrade_damage,
 	.Action_Rate = icon_upgrade_action_rate,
 	.Clip_Size   = icon_upgrade_clip_size,
-	.Arc_Width   = icon_upgrade_arc_width,
+	.Reach       = icon_upgrade_reach,
 	.Range       = icon_upgrade_range,
 }
 

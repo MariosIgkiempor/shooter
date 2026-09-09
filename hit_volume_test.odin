@@ -25,6 +25,20 @@ test_volume_at :: proc(weapon: Weapon, progress: f32, out: []Vec2) -> []Vec2 {
 	return hit_poly_to_world(frame, weapon_hit_volumes[weapon.kind][0], out)
 }
 
+// the furthest `weapon`'s hit volume reaches from the grip, posed at rest.
+// Shared so the "a volume stops exactly at range" and "Reach grows the volume"
+// assertions measure the same way rather than each folding the polygons again.
+test_volume_extent :: proc(weapon: Weapon, pivot: Vec2) -> (furthest: f32) {
+	points: [MAX_HIT_POLY_POINTS]Vec2
+	frame := weapon_pose_frame(weapon, pivot, aim_angle_degrees(TEST_AIM), 1)
+	for poly in weapon_hit_volumes[weapon.kind] {
+		for p in hit_poly_to_world(frame, poly, points[:]) {
+			furthest = max(furthest, linalg.length(p - pivot))
+		}
+	}
+	return
+}
+
 // an Enemy whose *body centre* lands on `center` - the point the blade is
 // tested against, ACTOR_SIZE.y/2 above its feet anchor
 test_enemy_centered_at :: proc(center: Vec2, health: f32 = 100) -> Enemy {
@@ -93,7 +107,6 @@ test_a_hit_volume_reaches_exactly_the_weapons_range :: proc(t: ^testing.T) {
 	// the world-space counterpart of the assertion above, and the analogue of
 	// icon_test's test_melee_world_frame_puts_the_blade_tip_at_its_actual_range:
 	// what the weapon says its reach is, is where its volume stops
-	points: [MAX_HIT_POLY_POINTS]Vec2
 	pivot := weapon_pivot_position(TEST_ORIGIN)
 
 	for kind in Weapon_Kind {
@@ -105,13 +118,7 @@ test_a_hit_volume_reaches_exactly_the_weapons_range :: proc(t: ^testing.T) {
 		melee, is_melee := weapon.variant.(Melee_Weapon)
 		testing.expect(t, is_melee, "a kind with a hit volume should be a Melee_Weapon variant")
 
-		frame := weapon_pose_frame(weapon, pivot, aim_angle_degrees(TEST_AIM), 1)
-		furthest: f32 = 0
-		for poly in weapon_hit_volumes[kind] {
-			for p in hit_poly_to_world(frame, poly, points[:]) {
-				furthest = max(furthest, linalg.length(p - pivot))
-			}
-		}
+		furthest := test_volume_extent(weapon, pivot)
 
 		testing.expectf(
 			t,
@@ -120,6 +127,42 @@ test_a_hit_volume_reaches_exactly_the_weapons_range :: proc(t: ^testing.T) {
 			kind,
 			furthest,
 			melee.range,
+		)
+	}
+}
+
+@(test)
+test_reach_stacks_grow_the_hit_volume_along_with_the_blade :: proc(t: ^testing.T) {
+	// Reach replaced an upgrade that widened the retired arc, and the reason it
+	// can (ADR-0026) is that scaling Melee_Weapon.range scales
+	// weapon_world_frame_size, which the volume rides. The test above already
+	// pins the volume to whatever `range` says; what is unproven without this
+	// is that a Reach stack moves `range` in the first place, so a stack that
+	// bought a longer number and no longer blade would pass both halves.
+	previous_stacks := game.player.upgrade_stacks
+	defer game.player.upgrade_stacks = previous_stacks
+
+	pivot := weapon_pivot_position(TEST_ORIGIN)
+
+	for kind in Weapon_Kind {
+		if len(weapon_hit_volumes[kind]) == 0 {
+			continue
+		}
+
+		game.player.upgrade_stacks = {}
+		unstacked := test_volume_extent(weapon_create(kind), pivot)
+
+		game.player.upgrade_stacks[.Reach] = 3
+		stacked_weapon := weapon_create(kind)
+		_, is_melee := stacked_weapon.variant.(Melee_Weapon)
+		testing.expect(t, is_melee, "a kind with a hit volume should be a Melee_Weapon variant")
+
+		testing.expectf(
+			t,
+			test_volume_extent(stacked_weapon, pivot) > unstacked,
+			"%v's hit volume should reach further with Reach stacks, stayed at %v",
+			kind,
+			unstacked,
 		)
 	}
 }
