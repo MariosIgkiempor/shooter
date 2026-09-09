@@ -123,7 +123,7 @@ test_flow_field_source_cell_has_distance_zero_and_no_step :: proc(t: ^testing.T)
 }
 
 @(test)
-test_flow_field_distance_increases_by_one_per_cell_along_a_corridor :: proc(t: ^testing.T) {
+test_flow_field_distance_increases_by_one_step_cost_per_cell_along_a_corridor :: proc(t: ^testing.T) {
 	tilemap := fixture_room({"....."})
 	defer delete(tilemap.tiles)
 
@@ -133,16 +133,23 @@ test_flow_field_distance_increases_by_one_per_cell_along_a_corridor :: proc(t: ^
 	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
 
 	for x in i32(0) ..< 5 {
+		expected := u32(x) * FLOW_COST_ORTHOGONAL
 		testing.expectf(
 			t,
-			flow_field_distance(&field, {x, 0}) == u32(x),
+			flow_field_distance(&field, {x, 0}) == expected,
 			"expected distance %v at cell %v, got %v",
-			x,
+			expected,
 			x,
 			flow_field_distance(&field, {x, 0}),
 		)
 	}
-	testing.expectf(t, field.max_distance == 4, "expected max_distance 4, got %v", field.max_distance)
+	testing.expectf(
+		t,
+		field.max_distance == 4 * FLOW_COST_ORTHOGONAL,
+		"expected max_distance %v, got %v",
+		4 * FLOW_COST_ORTHOGONAL,
+		field.max_distance,
+	)
 	testing.expectf(t, field.filled_count == 5, "expected 5 filled cells, got %v", field.filled_count)
 }
 
@@ -170,13 +177,14 @@ test_flow_field_every_step_descends_toward_the_player :: proc(t: ^testing.T) {
 			testing.expectf(t, in_bounds, "cell %v steps out of the extent to %v", Vec2i{x, y}, next)
 			testing.expectf(
 				t,
-				next_cell.distance == cell.distance - 1,
-				"cell %v at distance %v steps to %v at distance %v; expected %v",
+				next_cell.distance == cell.distance - FLOW_STEP_COST[cell.step],
+				"cell %v at distance %v steps %v to %v at distance %v; expected %v",
 				Vec2i{x, y},
 				cell.distance,
+				cell.step,
 				next,
 				next_cell.distance,
-				cell.distance - 1,
+				cell.distance - FLOW_STEP_COST[cell.step],
 			)
 		}
 	}
@@ -198,16 +206,24 @@ test_flow_field_distance_wraps_around_a_wall :: proc(t: ^testing.T) {
 	far := Vec2i{2, 0}
 	distance := flow_field_distance(&field, far)
 	testing.expect(t, distance != FLOW_UNREACHED, "the cell above the pocket is reachable the long way round")
-	testing.expectf(t, distance > 2, "expected a path distance greater than the straight-line 2, got %v", distance)
+	testing.expectf(
+		t,
+		distance > 2 * FLOW_COST_ORTHOGONAL,
+		"expected a path distance beyond the straight-line two cells, got %v",
+		distance,
+	)
 
-	// walking the steps must land on the source in exactly `distance` hops,
+	// walking the steps must spend exactly `distance` arriving at the source,
 	// which also proves the field is acyclic
 	cursor := far
-	for _ in 0 ..< distance {
+	spent := u32(0)
+	for cursor != source && spent <= distance {
 		cell, _ := flow_field_cell(&field, cursor)
+		spent += FLOW_STEP_COST[cell.step]
 		cursor += FLOW_STEP_OFFSET[cell.step]
 	}
-	testing.expectf(t, cursor == source, "expected to arrive at %v after %v hops, got %v", source, distance, cursor)
+	testing.expectf(t, cursor == source, "expected the steps to arrive at %v, got %v", source, cursor)
+	testing.expectf(t, spent == distance, "expected the walk to cost %v, got %v", distance, spent)
 }
 
 @(test)
@@ -275,7 +291,7 @@ test_flow_field_grows_its_extent_to_contain_a_player_off_the_tiles :: proc(t: ^t
 	)
 	testing.expectf(
 		t,
-		flow_field_distance(&field, {1, 1}) == 3,
+		flow_field_distance(&field, {1, 1}) == 3 * FLOW_COST_ORTHOGONAL,
 		"the flood must walk back onto the tiles, got distance %v",
 		flow_field_distance(&field, {1, 1}),
 	)
@@ -405,6 +421,59 @@ test_flow_field_does_not_re_enter_the_envelope_from_open_ground :: proc(t: ^test
 		flow_field_distance(&field, {4, 4}) != FLOW_UNREACHED,
 		"open ground on the far side of the pillar still fills",
 	)
+}
+
+@(test)
+test_flow_field_prefers_a_diagonal_across_open_ground :: proc(t: ^testing.T) {
+	// the reason for weighting the steps rather than counting them: a
+	// uniform-cost eight-neighbour flood would price this at one step and
+	// make a diagonal free, and `distance` would stop being a distance
+	tilemap := fixture_room({"...", "...", "..."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {2, 2}) == 2 * FLOW_COST_DIAGONAL,
+		"expected two diagonals (%v), got %v",
+		2 * FLOW_COST_DIAGONAL,
+		flow_field_distance(&field, {2, 2}),
+	)
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {2, 0}) == 2 * FLOW_COST_ORTHOGONAL,
+		"a straight run along a row stays orthogonal, got %v",
+		flow_field_distance(&field, {2, 0}),
+	)
+
+	cell, _ := flow_field_cell(&field, {2, 2})
+	testing.expectf(t, cell.step == .Up_Left, "expected a diagonal step home, got %v", cell.step)
+}
+
+@(test)
+test_flow_field_never_cuts_a_corner_between_two_walls :: proc(t: ^testing.T) {
+	// two walls touching corner to corner leave a diagonal gap that a body
+	// with width cannot pass. Allowing the diagonal would draw a route
+	// through it and walk every enemy into the corner.
+	tilemap := fixture_room({".#.", "#..", "..."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({0, 0}), 0)
+
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {1, 1}) == FLOW_UNREACHED,
+		"the diagonal between two walls is not a route, got distance %v",
+		flow_field_distance(&field, {1, 1}),
+	)
+	testing.expectf(t, field.filled_count == 1, "the source is walled in, so nothing else fills; got %v", field.filled_count)
 }
 
 // -- steering lookups ------------------------------------------------------
@@ -618,7 +687,12 @@ test_flow_field_rebuild_clears_the_previous_map_out_of_its_cells :: proc(t: ^tes
 
 	cell, _ := flow_field_cell(&field, {1, 1})
 	testing.expect(t, !cell.collides, "the previous map's wall must not survive the rebuild")
-	testing.expect(t, cell.distance == 2, "the cell the wall occupied is now ordinary floor")
+	testing.expectf(
+		t,
+		cell.distance == FLOW_COST_DIAGONAL,
+		"the cell the wall occupied is now ordinary floor, one diagonal from the source; got %v",
+		cell.distance,
+	)
 }
 
 @(test)

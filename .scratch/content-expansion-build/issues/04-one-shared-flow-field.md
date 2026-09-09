@@ -74,6 +74,22 @@ becomes 54x49 and fills 1552 cells, and an enemy at `player_start` reads a step
 again where it previously read nothing. The one case left unanswered is a player
 standing inside a wall, which still fills nothing.
 
+**The flood is eight-neighbour and weighted**, a third amendment to the ADR,
+which specified four. Four neighbours walked bodies in L-shapes across open
+ground and priced routes 11% above the true shortest path at the median on
+Desert Dungeon — 43% at worst, and long on 81% of its cells. A diagonal now
+costs 14 against an orthogonal 10, integers approximating sqrt(2) to within 1%,
+which is why `distance` is counted in cost units rather than cells (divide by
+`FLOW_COST_ORTHOGONAL` to read it as cells). Weighted rather than uniform on
+purpose: a free diagonal would make `distance` a Chebyshev distance, and
+[05](05-swarmers-surround-by-contour.md)'s ring would come out square. A
+diagonal is refused unless both cells it passes between are enterable, so no
+route threads the corner gap between two walls. Reachability is untouched — the
+same 1498 cells fill from `player_start` — but the longest route drops from 56
+cells to 47.8. The flood is Dial's bucket queue rather than a plain FIFO, since
+two edge weights no longer come out in order from one; the buckets live on the
+`Flow_Field` so a rebuild allocates nothing.
+
 **Two shipped leaks went with the deletion.**
 `build_inflated_collision_map` allocated a heap `map` every frame and never freed
 it, and `reset_enemies` only `clear`s `game.enemies`, so every live enemy's

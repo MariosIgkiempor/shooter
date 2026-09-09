@@ -1222,7 +1222,7 @@ draw_game :: proc() {
 	}
 
 	// the flow field overlay's palette: a near->far ramp for the step stubs,
-	// a brighter band every FLOW_FIELD_DEBUG_BAND steps of path distance, and
+	// a brighter band every FLOW_FIELD_DEBUG_BAND cells of path distance, and
 	// two distinct washes for the two reasons a cell can be unfilled
 	FLOW_FIELD_DEBUG_BAND :: 8
 	FLOW_FIELD_DEBUG_NEAR :: Color{255, 232, 120, 220}
@@ -1286,7 +1286,7 @@ draw_game :: proc() {
 				}
 
 				tint :=
-					cell.distance % FLOW_FIELD_DEBUG_BAND == 0 \
+					(cell.distance / FLOW_COST_ORTHOGONAL) % FLOW_FIELD_DEBUG_BAND == 0 \
 					? FLOW_FIELD_DEBUG_BAND_TINT \
 					: color_lerp(FLOW_FIELD_DEBUG_NEAR, FLOW_FIELD_DEBUG_FAR, f32(cell.distance) / ramp)
 

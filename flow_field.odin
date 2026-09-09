@@ -1,6 +1,6 @@
 package shooter
 
-import "core:container/queue"
+
 
 // The shared flow field: one flood outward from the player's cell that every
 // terrain-colliding enemy reads, replacing the per-enemy BFS every Grounded
@@ -18,36 +18,89 @@ import "core:container/queue"
 // fixtures with no ODIN_TEST_THREADS=1 pinning - keep it that way.
 
 // which neighbour a cell's flood parent is - the direction to step to get
-// closer to the source. Four-neighbour, matching the get_neighbours the
-// deleted find_path used, so route shapes are unchanged. `.None` covers both
-// "the source itself" and "never filled": neither has anywhere to step.
+// closer to the source. Eight-neighbour: the four-neighbour flood the deleted
+// find_path used walked bodies in L-shapes through open ground, and its routes
+// came out 11% longer than the true shortest path at the median on Desert
+// Dungeon (43% at worst, and longer than optimal on 81% of its cells).
+// `.None` covers both "the source itself" and "never filled": neither has
+// anywhere to step.
 Flow_Step :: enum u8 {
 	None,
 	Left,
 	Right,
 	Up,
 	Down,
+	Up_Left,
+	Up_Right,
+	Down_Left,
+	Down_Right,
 }
 
 FLOW_STEP_OFFSET := [Flow_Step]Vec2i {
-	.None  = {0, 0},
-	.Left  = {-1, 0},
-	.Right = {1, 0},
-	.Up    = {0, -1},
-	.Down  = {0, 1},
+	.None       = {0, 0},
+	.Left       = {-1, 0},
+	.Right      = {1, 0},
+	.Up         = {0, -1},
+	.Down       = {0, 1},
+	.Up_Left    = {-1, -1},
+	.Up_Right   = {1, -1},
+	.Down_Left  = {-1, 1},
+	.Down_Right = {1, 1},
 }
 
 FLOW_STEP_OPPOSITE := [Flow_Step]Flow_Step {
-	.None  = .None,
-	.Left  = .Right,
-	.Right = .Left,
-	.Up    = .Down,
-	.Down  = .Up,
+	.None       = .None,
+	.Left       = .Right,
+	.Right      = .Left,
+	.Up         = .Down,
+	.Down       = .Up,
+	.Up_Left    = .Down_Right,
+	.Up_Right   = .Down_Left,
+	.Down_Left  = .Up_Right,
+	.Down_Right = .Up_Left,
 }
 
-// expansion order, matching the deleted find_path's get_neighbours exactly, so
-// tie-breaking (and therefore route shape through open ground) is unchanged
-FLOW_NEIGHBOUR_STEPS := [4]Flow_Step{.Left, .Right, .Up, .Down}
+// A diagonal costs what a diagonal is worth. 14/10 approximates sqrt(2) to
+// within 1%, in integers, which is the whole reason distance is counted in
+// these units rather than in cells: a uniform-cost eight-neighbour flood would
+// make a diagonal free, and `distance` would stop being a distance - a ring at
+// a fixed path-distance would come out square, which is exactly what ticket
+// 05's Swarmer contour cannot use. Divide by FLOW_COST_ORTHOGONAL for a
+// human-readable cell count.
+FLOW_COST_ORTHOGONAL :: 10
+FLOW_COST_DIAGONAL :: 14
+
+// Dial's bucket queue needs one bucket per distinct distance in flight, and
+// with a largest edge of FLOW_COST_DIAGONAL nothing queued is ever more than
+// that far ahead of the distance being swept. Two edge weights is what makes
+// this worth it over a binary heap: the heap was ~1.1ms of a 1.2ms rebuild on
+// Desert Dungeon, almost all of it indirect calls through its comparison and
+// swap procs.
+FLOW_BUCKET_COUNT :: FLOW_COST_DIAGONAL + 1
+
+FLOW_STEP_COST := [Flow_Step]u32 {
+	.None       = 0,
+	.Left       = FLOW_COST_ORTHOGONAL,
+	.Right      = FLOW_COST_ORTHOGONAL,
+	.Up         = FLOW_COST_ORTHOGONAL,
+	.Down       = FLOW_COST_ORTHOGONAL,
+	.Up_Left    = FLOW_COST_DIAGONAL,
+	.Up_Right   = FLOW_COST_DIAGONAL,
+	.Down_Left  = FLOW_COST_DIAGONAL,
+	.Down_Right = FLOW_COST_DIAGONAL,
+}
+
+// every direction the flood expands in, `.None` excluded
+FLOW_NEIGHBOUR_STEPS := [8]Flow_Step {
+	.Left,
+	.Right,
+	.Up,
+	.Down,
+	.Up_Left,
+	.Up_Right,
+	.Down_Left,
+	.Down_Right,
+}
 
 // a cell the flood never reached. A sentinel distance rather than a separate
 // `filled` bool so the fallback's "best-valued neighbour" scan is a plain
@@ -56,7 +109,7 @@ FLOW_NEIGHBOUR_STEPS := [4]Flow_Step{.Left, .Right, .Up, .Down}
 FLOW_UNREACHED :: max(u32)
 
 Flow_Cell :: struct {
-	distance: u32,       // flood steps from the source cell; FLOW_UNREACHED if never filled
+	distance: u32,       // path cost from the source cell in FLOW_COST_* units; FLOW_UNREACHED if never filled
 	step:     Flow_Step, // toward distance-1; .None at the source and in unfilled cells
 	collides: bool,      // an authored colliding Tile sits here
 	inflated: bool,      // inside some wall's (2r+1)^2 envelope at `radius`
@@ -80,9 +133,13 @@ Flow_Field :: struct {
 	// edited beneath us - this is belt-and-braces, not a supported
 	// edit-while-playing path.
 	tile_count:    int,
-	max_distance:  u32, // largest filled distance - the debug shading ramp, and ticket 05's contour math
+	max_distance:  u32, // largest filled distance, in cost units - the debug shading ramp, and ticket 05's contour math
 	filled_count:  int, // cells the flood reached
 	cells:         [dynamic]Flow_Cell, // row-major: (cell.y-origin.y)*size.x + (cell.x-origin.x)
+	// the flood's frontier, bucketed by distance (see FLOW_BUCKET_COUNT).
+	// Owned by the field rather than made per rebuild so the backing arrays
+	// are allocated once and reused for the life of the map.
+	buckets:       [FLOW_BUCKET_COUNT][dynamic]Vec2i,
 }
 
 // how far a wall's influence is stamped outward, in cells, so a body with
@@ -186,6 +243,9 @@ flow_field_invalidate :: proc(field: ^Flow_Field) {
 
 flow_field_destroy :: proc(field: ^Flow_Field) {
 	delete(field.cells)
+	for &bucket in field.buckets {
+		delete(bucket)
+	}
 	field^ = {}
 }
 
@@ -265,55 +325,96 @@ flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: 
 		return
 	}
 
-	frontier: queue.Queue(Vec2i)
-	queue.init(&frontier)
-	defer queue.destroy(&frontier)
-
+	for &bucket in field.buckets {
+		clear(&bucket)
+	}
 	field.cells[source_index].distance = 0
-	field.filled_count = 1
-	queue.push(&frontier, field.source)
+	append(&field.buckets[0], field.source)
 
-	for queue.len(frontier) != 0 {
-		current := queue.pop_front(&frontier)
-		current_index, _ := flow_field_index(field, current)
+	// Dial's algorithm: a bucket queue rather than the plain FIFO a
+	// uniform-cost flood allowed, because a diagonal costs more than an
+	// orthogonal step and cells must still come out in increasing distance
+	// order. `sweep` only ever moves forward, so a cell whose distance was
+	// improved after being queued is recognised by its stored distance no
+	// longer matching the bucket it was found in, and dropped.
+	pending := 1
+	sweep := u32(0)
+	for pending > 0 {
+		bucket := &field.buckets[sweep % FLOW_BUCKET_COUNT]
+		if len(bucket) == 0 {
+			sweep += 1
+			continue
+		}
+
+		cell_coord := pop(bucket)
+		pending -= 1
+		current_index, _ := flow_field_index(field, cell_coord)
 		current_cell := field.cells[current_index]
+		if current_cell.distance != sweep {
+			continue
+		}
 
 		for step in FLOW_NEIGHBOUR_STEPS {
-			neighbour := current + FLOW_STEP_OFFSET[step]
-			index, in_bounds := flow_field_index(field, neighbour)
-			if !in_bounds {
+			offset := FLOW_STEP_OFFSET[step]
+			neighbour := cell_coord + offset
+			if !flow_can_enter(field, neighbour, current_cell) {
+				continue
+			}
+			// a diagonal squeezes between two cells, and a body with width
+			// cannot pass a corner those two block. Requiring both flanks
+			// keeps the field honest about what an actor can walk, and is
+			// what stops a route being drawn through the gap where two walls
+			// touch corner to corner.
+			if offset.x != 0 && offset.y != 0 {
+				if !flow_can_enter(field, cell_coord + {offset.x, 0}, current_cell) ||
+				   !flow_can_enter(field, cell_coord + {0, offset.y}, current_cell) {
+					continue
+				}
+			}
+
+			index, _ := flow_field_index(field, neighbour)
+			next := current_cell.distance + FLOW_STEP_COST[step]
+			if next >= field.cells[index].distance {
 				continue
 			}
 
-			cell := field.cells[index]
-			if cell.distance != FLOW_UNREACHED || cell.collides {
-				continue
-			}
-			// An inflated cell is enterable only *from* an inflated cell, and
-			// the source is the only inflated cell ever seeded - so the flood
-			// walks out of whatever envelope pocket the player is standing in,
-			// and can never step back into the envelope once it reaches open
-			// ground. This generalises find_path's "endpoints always allowed"
-			// exemption, and it is load-bearing rather than defensive.
-			// Measured on Desert Dungeon at radius 1: 741 of its 2239
-			// standable cells are inside the envelope, and 101 have no free
-			// orthogonal neighbour at all - so a flood that refused to leave
-			// the envelope would collapse to a single cell whenever the
-			// player stood on one of those 101. With this rule, every one of
-			// the 2239 floods (player_start's reaches 1498 cells at a maximum
-			// path distance of 56, well past the 1024-node cap the deleted
-			// search truncated at).
-			if cell.inflated && !current_cell.inflated {
-				continue
-			}
-
-			field.cells[index].distance = current_cell.distance + 1
+			field.cells[index].distance = next
 			field.cells[index].step = FLOW_STEP_OPPOSITE[step]
-			field.filled_count += 1
-			field.max_distance = max(field.max_distance, current_cell.distance + 1)
-			queue.push(&frontier, neighbour)
+			append(&field.buckets[next % FLOW_BUCKET_COUNT], neighbour)
+			pending += 1
 		}
 	}
+
+	// counted after the flood rather than during it: a cell's distance can be
+	// improved after it is first reached, so a running maximum could be left
+	// holding a value no cell ends up carrying
+	for cell in field.cells {
+		if cell.distance == FLOW_UNREACHED {
+			continue
+		}
+		field.filled_count += 1
+		field.max_distance = max(field.max_distance, cell.distance)
+	}
+}
+
+// whether the flood may step into `cell` from a cell whose record is `from`.
+// An inflated cell is enterable only *from* an inflated cell, and the source
+// is the only inflated cell ever seeded - so the flood walks out of whatever
+// envelope pocket the player is standing in, and can never step back into the
+// envelope once it reaches open ground. This generalises the deleted
+// find_path's "endpoints always allowed" exemption, and it is load-bearing
+// rather than defensive. Measured on Desert Dungeon at radius 1: 741 of its
+// 2239 standable cells are inside the envelope, and 101 have no free
+// orthogonal neighbour at all - so a flood that refused to leave the envelope
+// would collapse to a single cell whenever the player stood on one of those
+// 101.
+@(private = "file")
+flow_can_enter :: proc(field: ^Flow_Field, cell: Vec2i, from: Flow_Cell) -> bool {
+	target, in_bounds := flow_field_cell(field, cell)
+	if !in_bounds || target.collides {
+		return false
+	}
+	return !target.inflated || from.inflated
 }
 
 // the world point a field-steered enemy at world_pos should head for: the
