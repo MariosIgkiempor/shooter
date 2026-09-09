@@ -7,9 +7,9 @@ value that quietly resolves to whatever now sits at ordinal zero.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] One parametric helper pair converts any enum to and from its identity string; the hand-written per-enum converters collapse into it
-- [ ] Reading an unrecognised name fails loudly instead of returning the zero value
-- [ ] Every enum currently persisted by ordinal round-trips by name
-- [ ] Existing saved data still loads
+- [x] One parametric helper pair converts any enum to and from its identity string; the hand-written per-enum converters collapse into it
+- [x] Reading an unrecognised name fails loudly instead of returning the zero value
+- [x] Every enum currently persisted by ordinal round-trips by name
+- [x] Existing saved data still loads

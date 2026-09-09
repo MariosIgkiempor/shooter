@@ -1,6 +1,9 @@
 package shooter
 
+import "core:encoding/json"
+import "core:log"
 import "core:math/linalg"
+import "core:strings"
 import "core:testing"
 
 // Every test drives try_use_weapon/update_weapon/resolve_weapon_action
@@ -150,14 +153,21 @@ test_total_cycle_length_unaffected_by_windup :: proc(t: ^testing.T) {
 	}
 }
 
-@(test)
-test_empty_clip_never_starts_windup_or_cooldown :: proc(t: ^testing.T) {
-	weapon := weapon_create(.Pistol)
+// drains a Gun's clip in place. A non-Gun is left alone - the callers that
+// need one are the ones testing what an empty clip does, and a Melee_Weapon
+// has no clip to empty.
+empty_the_clip :: proc(weapon: ^Weapon) {
 	switch &v in weapon.variant {
 	case Gun:
 		v.ammo_in_clip = 0
 	case Melee_Weapon, Magic:
 	}
+}
+
+@(test)
+test_empty_clip_never_starts_windup_or_cooldown :: proc(t: ^testing.T) {
+	weapon := weapon_create(.Pistol)
+	empty_the_clip(&weapon)
 
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
 
@@ -375,4 +385,112 @@ test_fireball_spawns_at_the_magic_orb_not_the_player_anchor :: proc(t: ^testing.
 		expected,
 		game.bullets[0].position,
 	)
+}
+
+// The reserve is gone, so a reload has nothing left to run out of: every
+// reload comes back to a full clip, however many times the gun runs dry.
+// This locks in behaviour rather than catching a past bug - the old reserve
+// was pinned open by an absurd starting constant, so ten dry cycles would
+// have passed against it too. What it guards is the future: a reload that
+// starts drawing from any pool again fails here on the first cycle that
+// pool cannot cover.
+@(test)
+test_a_gun_reloads_to_a_full_clip_however_many_times_it_runs_dry :: proc(t: ^testing.T) {
+	clear(&game.bullets)
+	defer clear(&game.bullets)
+	clear(&game.particles)
+	defer clear(&game.particles)
+
+	dt: f32 = 1.0 / 60.0
+	weapon := weapon_create(.Pistol)
+
+	for cycle in 1 ..= 10 {
+		// empty the clip, then let the reload try_fire_gun started run out
+		empty_the_clip(&weapon)
+		try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+		for weapon.variant.(Gun).reload_timer > 0 {
+			update_weapon(&weapon, dt, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+		}
+
+		gun := weapon.variant.(Gun)
+		testing.expectf(
+			t,
+			gun.ammo_in_clip == gun.clip_size,
+			"reload %v should have refilled the clip outright, got %v/%v",
+			cycle,
+			gun.ammo_in_clip,
+			gun.clip_size,
+		)
+	}
+}
+
+// -- Identity strings (ADR-0028) ----------------------------------------
+// Weapon.kind, Weapon.fire_mode and Magic.spell_kind persist as their enum
+// case names rather than ordinals, so reordering any of those enums can't
+// silently hand a saved player a different weapon. Magic's pair is the odd
+// one out: it converts inside weapon_variant_to_save/_from_save, because
+// Magic is only ever persisted through Weapon_Variant_Save.
+
+@(test)
+test_weapon_variant_save_carries_the_spell_kind_by_name :: proc(t: ^testing.T) {
+	save := weapon_variant_to_save(Magic{spell_kind = .Poison_Cloud, cloud_radius = 40})
+	testing.expect_value(t, save.kind, "Magic")
+	magic, has_magic := save.magic.?
+	testing.expect(t, has_magic, "a Magic variant should be saved under `magic`")
+	testing.expect_value(t, magic.spell_kind_save, "Poison_Cloud")
+
+	// through the wire, not just the converter - that's what proves the
+	// json:"-" field and its identity-string sibling actually pair up
+	encoded, marshal_error := json.marshal(save, allocator = context.temp_allocator)
+	testing.expect(t, marshal_error == nil, "the variant save should marshal")
+	text := string(encoded)
+	testing.expect(t, strings.contains(text, "Poison_Cloud"), "the spell kind should be written by name")
+	testing.expect(t, !strings.contains(text, `"spell_kind":`), "the enum field itself should not be written")
+
+	decoded: Weapon_Variant_Save
+	testing.expect(t, json.unmarshal(encoded, &decoded) == nil, "the variant save should unmarshal")
+	variant, ok := weapon_variant_from_save(decoded)
+	testing.expect(t, ok, "a Magic variant naming a real spell should resolve")
+	round_tripped, is_magic := variant.(Magic)
+	testing.expect(t, is_magic, "the variant should come back as Magic")
+	testing.expect_value(t, round_tripped.spell_kind, Spell_Kind.Poison_Cloud)
+	testing.expect_value(t, round_tripped.cloud_radius, f32(40))
+}
+
+// The nil case is a real state, not an impossibility:
+// initialize_default_game_state leaves the player with no weapon, so quitting
+// from the Main Menu on a fresh install saves one. This used to reach
+// unreachable() and abort.
+@(test)
+test_weapon_variant_to_save_names_an_unequipped_weapon :: proc(t: ^testing.T) {
+	save := weapon_variant_to_save(nil)
+	testing.expect_value(t, save.kind, "None")
+
+	variant, ok := weapon_variant_from_save(save)
+	testing.expect(t, ok, "an unequipped weapon should round-trip")
+	testing.expect(t, variant == nil, "an unequipped weapon should come back unequipped")
+}
+
+// Second checkbox of
+// .scratch/content-expansion-build/issues/03-enums-persist-by-identity-string.md,
+// for the weapon side: a renamed case is reported, never resolved
+// to whatever now sits at ordinal zero (which for Weapon_Variant_Kind used to
+// be Gun, and for Spell_Kind is Fireball).
+@(test)
+test_weapon_variant_from_save_reports_names_this_build_does_not_know :: proc(t: ^testing.T) {
+	reporting := context.logger
+	context.logger = log.nil_logger()
+	defer context.logger = reporting
+
+	_, unknown_variant_ok := weapon_variant_from_save({kind = "Gunn"})
+	testing.expect(t, !unknown_variant_ok, "an unknown variant kind should fail rather than resolve to Gun")
+
+	_, absent_variant_ok := weapon_variant_from_save({})
+	testing.expect(t, !absent_variant_ok, "an absent variant kind should fail rather than resolve to None")
+
+	_, unknown_spell_ok := weapon_variant_from_save(
+		{kind = "Magic", magic = Magic{spell_kind_save = "Frostbolt"}},
+	)
+	testing.expect(t, !unknown_spell_ok, "an unknown spell kind should fail rather than resolve to Fireball")
 }
