@@ -491,13 +491,6 @@ register_weapon_tunables :: proc() {
 
 	register_tunable(.Weapon_Common, "weapon.common.visual_scale", "Visual Scale", &weapon_visual_scale, WEAPON_VISUAL_SCALE_MIN, WEAPON_VISUAL_SCALE_MAX)
 	register_tunable(.Weapon_Common, "weapon.common.pivot_height", "Pivot Height", &WEAPON_PIVOT_HEIGHT, 0, 32)
-	// the range has to reach the authored Default or the value is unreachable
-	// once you touch the slider, and that Default is 69420 - a placeholder that
-	// means "reserve-ammo scarcity is off" rather than a tuned number. The
-	// slider is correspondingly coarse; the fix is to pick a real starting
-	// reserve, which is a balance decision rather than a plumbing one.
-	register_tunable(.Weapon_Common, "weapon.common.starting_reserve_clips", "Starting Reserve Clips", &WEAPON_STARTING_RESERVE_CLIPS, 0, 70000)
-	register_tunable(.Weapon_Common, "weapon.common.refill_reserve_clips", "Refill Reserve Clips", &WEAPON_REFILL_RESERVE_CLIPS, 0, 20)
 
 	register_tunable(.Bullets, "bullet.radius", "Radius", &BULLET_RADIUS, 0.5, 10)
 	register_tunable(.Bullets, "bullet.streak_length", "Streak Length", &BULLET_STREAK_LENGTH, 0, 40)

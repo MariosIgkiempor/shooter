@@ -365,8 +365,13 @@ icon_health :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_bar_v(f, 0.5, 0.16, 0.68, 0.24, c)
 }
 
+// three stacked cartridges. Every other pickup glyph borrows its world
+// object's color; this one has no world object left to borrow from once the
+// Ammo pickup retired with the Gun reserve, so it falls back to the Ammo
+// indicator's own bar color - a fallback its only caller never reaches, since
+// the indicator always passes a tint.
 icon_ammo :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
-	c := icon_color(PICKUP_AMMO_COLOR, tint, alpha)
+	c := icon_color(RESOURCE_AMMO_COLOR, tint, alpha)
 	for i in 0 ..< 3 {
 		icon_bar_v(f, 0.22 + f32(i) * 0.28, 0.18, 0.64, 0.16, c)
 	}
@@ -435,8 +440,8 @@ icon_upgrade_damage :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_tri(f, 0.5, 0.12, 0.86, 0.84, 0.14, 0.84, icon_color(ICON_NEUTRAL_COLOR, tint, alpha))
 }
 
-// three rapid ticks of rising height - countable, and distinct from Ammo's
-// three equal bars by the ramp
+// three rapid ticks of rising height - countable, and distinct from the Ammo
+// indicator's three equal bars by the ramp
 icon_upgrade_action_rate :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	c := icon_color(ICON_NEUTRAL_COLOR, tint, alpha)
 	for i in 0 ..< 3 {
@@ -445,7 +450,7 @@ icon_upgrade_action_rate :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) 
 	}
 }
 
-// a magazine: Ammo's stacked bars inside an outline box
+// a magazine: the Ammo indicator's stacked bars inside an outline box
 icon_upgrade_clip_size :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	c := icon_color(ICON_NEUTRAL_COLOR, tint, alpha)
 	t: f32 = 0.09

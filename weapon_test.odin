@@ -150,14 +150,21 @@ test_total_cycle_length_unaffected_by_windup :: proc(t: ^testing.T) {
 	}
 }
 
-@(test)
-test_empty_clip_never_starts_windup_or_cooldown :: proc(t: ^testing.T) {
-	weapon := weapon_create(.Pistol)
+// drains a Gun's clip in place. A non-Gun is left alone - the callers that
+// need one are the ones testing what an empty clip does, and a Melee_Weapon
+// has no clip to empty.
+empty_the_clip :: proc(weapon: ^Weapon) {
 	switch &v in weapon.variant {
 	case Gun:
 		v.ammo_in_clip = 0
 	case Melee_Weapon, Magic:
 	}
+}
+
+@(test)
+test_empty_clip_never_starts_windup_or_cooldown :: proc(t: ^testing.T) {
+	weapon := weapon_create(.Pistol)
+	empty_the_clip(&weapon)
 
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
 
@@ -375,4 +382,42 @@ test_fireball_spawns_at_the_magic_orb_not_the_player_anchor :: proc(t: ^testing.
 		expected,
 		game.bullets[0].position,
 	)
+}
+
+// The reserve is gone, so a reload has nothing left to run out of: every
+// reload comes back to a full clip, however many times the gun runs dry.
+// This locks in behaviour rather than catching a past bug - the old reserve
+// was pinned open by an absurd starting constant, so ten dry cycles would
+// have passed against it too. What it guards is the future: a reload that
+// starts drawing from any pool again fails here on the first cycle that
+// pool cannot cover.
+@(test)
+test_a_gun_reloads_to_a_full_clip_however_many_times_it_runs_dry :: proc(t: ^testing.T) {
+	clear(&game.bullets)
+	defer clear(&game.bullets)
+	clear(&game.particles)
+	defer clear(&game.particles)
+
+	dt: f32 = 1.0 / 60.0
+	weapon := weapon_create(.Pistol)
+
+	for cycle in 1 ..= 10 {
+		// empty the clip, then let the reload try_fire_gun started run out
+		empty_the_clip(&weapon)
+		try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+		for weapon.variant.(Gun).reload_timer > 0 {
+			update_weapon(&weapon, dt, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+		}
+
+		gun := weapon.variant.(Gun)
+		testing.expectf(
+			t,
+			gun.ammo_in_clip == gun.clip_size,
+			"reload %v should have refilled the clip outright, got %v/%v",
+			cycle,
+			gun.ammo_in_clip,
+			gun.clip_size,
+		)
+	}
 }
