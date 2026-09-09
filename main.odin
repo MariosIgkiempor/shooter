@@ -6,7 +6,6 @@ import "core:encoding/json"
 import "core:math"
 import "core:math/linalg"
 import "core:os"
-import "core:reflect"
 import rl "vendor:raylib"
 
 Vec2 :: rl.Vector2
@@ -79,7 +78,7 @@ game: struct {
 	// file with data that's never read back on load.
 	current_map:            Map `json:"-"`,
 	// game_save.json's pointer to the active map's identity (a Map_Name's
-	// enum-case name - see map_identity_string), read by apply_chosen_map to
+	// enum-case name - see persistence.odin), read by apply_chosen_map to
 	// decide resume-vs-reset player positioning on the next map choice
 	active_map_pointer:     string,
 
@@ -183,7 +182,28 @@ load_game :: proc() {
 		return
 	}
 
-	game.player.weapon.variant = weapon_variant_from_save(game.player.weapon_variant_save)
+	// resolved before apply_upgrades below, which indexes weapon_presets by
+	// weapon.kind and reads magic.spell_kind - a stale value here would be
+	// baked into the re-derived stats. A name this build doesn't have is a
+	// load failure, not a value to guess at (ADR-0028), and lands on the
+	// same default-state fallback the unmarshal error above does.
+	variant, variant_ok := weapon_variant_from_save(game.player.weapon_variant_save)
+	kind, kind_ok := enum_from_identity_string(Weapon_Kind, game.player.weapon.kind_save)
+	fire_mode, fire_mode_ok := enum_from_identity_string(Fire_Mode, game.player.weapon.fire_mode_save)
+	if !variant_ok || !kind_ok || !fire_mode_ok {
+		log_error(
+			"Save file at `{}` names a weapon this build doesn't have (kind `{}`, fire mode `{}`)",
+			SAVE_GAME_PATH,
+			game.player.weapon.kind_save,
+			game.player.weapon.fire_mode_save,
+		)
+		log_info("Initialising new game state instead.")
+		initialize_default_game_state()
+		return
+	}
+	game.player.weapon.variant = variant
+	game.player.weapon.kind = kind
+	game.player.weapon.fire_mode = fire_mode
 
 	// re-derive the loaded Weapon's stats, and move_speed/max_health, from
 	// their preset/base-constant baselines plus the just-loaded
@@ -235,6 +255,8 @@ load_game :: proc() {
 save_game :: proc() {
 	log_info("Saving game to save file `{}`", SAVE_GAME_PATH)
 
+	game.player.weapon.kind_save = enum_identity_string(game.player.weapon.kind)
+	game.player.weapon.fire_mode_save = enum_identity_string(game.player.weapon.fire_mode)
 	game.player.weapon_variant_save = weapon_variant_to_save(game.player.weapon.variant)
 
 	json_data, json_error := json.marshal(game, allocator = context.temp_allocator)
@@ -331,7 +353,7 @@ update_game :: proc() {
 			// repeated F1 toggles leak one copy of the old map each time.
 			delete_map(game.editing_map)
 			game.editing_map = clone_map(game.current_map)
-			if name, ok := reflect.enum_from_name(Map_Name, game.active_map_pointer); ok {
+			if name, ok := enum_from_identity_string(Map_Name, game.active_map_pointer); ok {
 				game.editing_map_path = map_path_for_name(name)
 			}
 			clear(&editor.expanded_spawn_triggers)

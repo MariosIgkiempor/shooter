@@ -42,10 +42,19 @@ Spell_Kind :: enum {
 // switch/type-assertion to read any field at all. Type-specific state lives
 // behind `variant`. See ADR-0001.
 Weapon :: struct {
-	kind:        Weapon_Kind,
-	fire_mode:   Fire_Mode,
-	damage:      f32, // per bullet/pellet/swing/cast
-	action_rate: f32, // actions/sec; cooldown between actions is 1/action_rate
+	// kind/fire_mode keep their enum types - they're read directly all over
+	// (apply_upgrades, weapon_family_for_kind, the renderer) - but are
+	// tagged json:"-" and mirrored by the identity strings beside them. An
+	// enum written as a bare ordinal is silently rewritten by any reorder of
+	// its cases and read back as whatever then sits at ordinal zero;
+	// save_game/load_game convert at the boundary instead. See
+	// persistence.odin and ADR-0028.
+	kind:           Weapon_Kind `json:"-"`,
+	kind_save:      string,
+	fire_mode:      Fire_Mode `json:"-"`,
+	fire_mode_save: string,
+	damage:         f32, // per bullet/pellet/swing/cast
+	action_rate:    f32, // actions/sec; cooldown between actions is 1/action_rate
 	// runtime countdown, not persisted (json:"-") - unlike windup_timer below,
 	// cooldown_timer crossing zero has no side effect of its own, but it's
 	// excluded for the same reason: it's transient/frame-driven state, not
@@ -126,7 +135,12 @@ Melee_Weapon :: struct {
 // the fields its spell_kind actually uses (mirrors Gun's pellet_count/
 // spread_angle being pistol/SMG-irrelevant but shotgun-relevant)
 Magic :: struct {
-	spell_kind: Spell_Kind,
+	// json:"-" + an identity string beside it, same reason as Weapon.kind -
+	// except this pair converts inside weapon_variant_to_save/_from_save
+	// rather than at the save_game/load_game boundary, because Magic is only
+	// ever persisted through Weapon_Variant_Save.
+	spell_kind:      Spell_Kind `json:"-"`,
+	spell_kind_save: string,
 
 	// Fireball: travels like a Bullet (bullet.odin's cast_fireball), explodes
 	// into an AoE on impact instead of a single-target hit
@@ -159,6 +173,13 @@ Magic :: struct {
 // discriminant for Weapon_Variant_Save; internal to persistence, unrelated
 // to the gameplay Weapon_Kind enum (Pistol/SMG/Shotgun/...)
 Weapon_Variant_Kind :: enum {
+	// no weapon equipped yet - what initialize_default_game_state leaves
+	// behind, and what quitting from the Main Menu on a fresh install saves.
+	// weapon_variant_to_save used to hit unreachable() on that path; the
+	// four other *_to_save procs all name their nil case (Inert), and now
+	// this one does too. Declaring it first is free precisely because
+	// nothing is keyed by ordinal any more.
+	None,
 	Gun,
 	Melee,
 	Magic,
@@ -170,7 +191,8 @@ Weapon_Variant_Kind :: enum {
 // weapon_variant_to_save/weapon_variant_from_save, switching on the decoded
 // `kind` field.
 Weapon_Variant_Save :: struct {
-	kind:  Weapon_Variant_Kind,
+	// identity string, not ordinal - see persistence.odin and ADR-0028
+	kind:  string,
 	gun:   Maybe(Gun) `json:"gun,omitempty"`,
 	melee: Maybe(Melee_Weapon) `json:"melee,omitempty"`,
 	magic: Maybe(Magic) `json:"magic,omitempty"`,
@@ -179,28 +201,35 @@ Weapon_Variant_Save :: struct {
 weapon_variant_to_save :: proc(variant: Weapon_Variant) -> Weapon_Variant_Save {
 	switch v in variant {
 	case Gun:
-		return {kind = .Gun, gun = v}
+		return {kind = enum_identity_string(Weapon_Variant_Kind.Gun), gun = v}
 	case Melee_Weapon:
-		return {kind = .Melee, melee = v}
+		return {kind = enum_identity_string(Weapon_Variant_Kind.Melee), melee = v}
 	case Magic:
-		return {kind = .Magic, magic = v}
+		magic := v
+		magic.spell_kind_save = enum_identity_string(v.spell_kind)
+		return {kind = enum_identity_string(Weapon_Variant_Kind.Magic), magic = magic}
 	}
-	unreachable()
+	return {kind = enum_identity_string(Weapon_Variant_Kind.None)}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
 // union-variant-guessing loop run, since a Weapon_Variant is never the
 // direct target of json.unmarshal; only Weapon_Variant_Save is.
-weapon_variant_from_save :: proc(s: Weapon_Variant_Save) -> Weapon_Variant {
-	switch s.kind {
+weapon_variant_from_save :: proc(s: Weapon_Variant_Save) -> (variant: Weapon_Variant, ok: bool) {
+	kind := enum_from_identity_string(Weapon_Variant_Kind, s.kind) or_return
+	switch kind {
+	case .None:
+		return nil, true
 	case .Gun:
-		return s.gun.? or_else Gun{}
+		return s.gun.? or_else Gun{}, true
 	case .Melee:
-		return s.melee.? or_else Melee_Weapon{}
+		return s.melee.? or_else Melee_Weapon{}, true
 	case .Magic:
-		return s.magic.? or_else Magic{}
+		magic := s.magic.? or_else Magic{}
+		magic.spell_kind = enum_from_identity_string(Spell_Kind, magic.spell_kind_save) or_return
+		return magic, true
 	}
-	return Gun{} // unreachable: s.kind is always one of the above
+	return nil, false // unreachable: kind is always one of the above
 }
 
 weapon_presets: [Weapon_Kind]Weapon = {
