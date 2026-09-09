@@ -904,9 +904,13 @@ enemy_body_color :: proc(kind: Movement_Style_Kind, health_frac: f32) -> Color {
 WEAPON_WINDUP_PULLBACK: f32 = 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
 WEAPON_RECOIL_KICK: f32 = 8.0 // px kicked back along -aim_dir during Gun's Automatic Follow-through (SMG)
 FLAME_STAFF_PULSE_SCALE: f32 = 0.35 // extra scale at the start of a Follow-through pulse, decaying to 0
-SWORD_SWING_OUT_TIME: f32 = 0.07 // seconds, ease-out draw-back angle -> follow-through extreme
-SWORD_SWING_RETURN_TIME: f32 = 0.11 // seconds, ease-out extreme -> neutral
-SWORD_ECHO_STEP: f32 = 0.025 // seconds between each sampled echo
+// how far back along the swing curve each motion-trail echo is sampled, as a
+// fraction of the Follow-through window. A fraction rather than the 0.025s it
+// used to be, for the same reason SWING_OUT_FRACTION is one: the swing's shape
+// is now expressed relative to its own window, so a kind with a different
+// follow_through_time trails its echoes over the same portion of its swing
+// instead of a fixed slice of somebody else's.
+SWORD_ECHO_STEP: f32 = 0.14
 SWORD_ECHO_FADE: f32 = 0.5 // alpha multiplier on an echo's already-faded color
 
 ACTOR_SQUASH_RATE: f32 = 12.0 // exp_approach rate, 1/s
@@ -1247,31 +1251,19 @@ draw_game :: proc() {
 	// which the min() further down clamps against this capacity.
 	SWORD_ECHO_COUNT :: 3
 
-	// angle offset (added to the pre-swing base angle) at `time_since_resolve`
-	// seconds into Sword's Resolve swing-through - a two-phase eased curve (a
-	// spring was prototyped and rejected as feeling wrong). Factored out so
-	// both the live blade and its motion-trail echoes sample the same curve.
-	sword_swing_offset :: proc(arc_degrees, time_since_resolve: f32) -> f32 {
-		draw_back := -(arc_degrees / 2)
-		extreme := arc_degrees / 2
-
-		if time_since_resolve < SWORD_SWING_OUT_TIME {
-			t := ease_out_cubic(time_since_resolve / SWORD_SWING_OUT_TIME)
-			return draw_back + (extreme - draw_back) * t
-		}
-
-		t := ease_out_cubic((time_since_resolve - SWORD_SWING_OUT_TIME) / SWORD_SWING_RETURN_TIME)
-		return extreme - extreme * t
-	}
-
 	// draws the player's weapon as a shape by family (art-revamp ticket 02):
-	// Gun = rod, Melee = wedge, Magic = rod+orb; pivoting at roughly chest
+	// Gun = rod, Melee = blade, Magic = rod+orb; pivoting at roughly chest
 	// height, rotated to face the player's current aim direction.
-	// Windup/Follow-through motion below is transform-only animation on that
-	// shape; the "punch" beyond transform comes from the enhanced particle
-	// effects spawned during update (spawn_muzzle_flash/spawn_streak_burst,
-	// weapon.odin) and Sword's motion-trail echoes drawn below, not from the
-	// shape itself.
+	//
+	// For a Gun or a Magic weapon the Windup/Follow-through motion here is
+	// transform-only animation, and the "punch" beyond transform comes from
+	// particle effects spawned during update (spawn_muzzle_flash/
+	// spawn_streak_burst, weapon.odin). For a melee weapon it is not
+	// decoration at all: the pose this computes is the pose its Hit volume
+	// rides (hit_volume.odin), so the blade the player watches and the blade
+	// that damages are one object. Both read melee_swing_angle_offset and one
+	// timer - draw_weapon used to reconstruct the swing's window here from
+	// cooldown arithmetic, which is exactly how the two drifted apart.
 	draw_weapon :: proc(player: Player) {
 		weapon := player.weapon
 
@@ -1288,7 +1280,7 @@ draw_game :: proc() {
 
 			switch v in weapon.variant {
 			case Melee_Weapon:
-				angle -= (v.arc_degrees / 2) * progress
+				angle -= (weapon_visuals[weapon.kind].swing_arc_degrees / 2) * progress
 			case Gun, Magic:
 				pivot -= player.aim_dir * WEAPON_WINDUP_PULLBACK * progress
 			}
@@ -1304,37 +1296,29 @@ draw_game :: proc() {
 		echo_angles: [SWORD_ECHO_COUNT]f32
 		echo_count := 0
 
-		if v, is_melee := weapon.variant.(Melee_Weapon); is_melee && weapon.windup_fraction > 0 {
-			windup_duration := weapon.windup_fraction / weapon.action_rate
-			cycle := 1.0 / weapon.action_rate
-			time_since_resolve := (cycle - windup_duration) - weapon.cooldown_timer
-			swing_total := f32(SWORD_SWING_OUT_TIME + SWORD_SWING_RETURN_TIME)
-
-			if time_since_resolve >= 0 && time_since_resolve < swing_total {
-				base_angle := angle
-				angle += sword_swing_offset(v.arc_degrees, time_since_resolve)
-
-				wanted := min(weapon_visuals[weapon.kind].swing_echo_count, SWORD_ECHO_COUNT)
-				for i in 1 ..= wanted {
-					t := time_since_resolve - f32(i) * SWORD_ECHO_STEP
-					if t < 0 || t >= swing_total {
-						continue
-					}
-					echo_angles[echo_count] = base_angle + sword_swing_offset(v.arc_degrees, t)
-					echo_count += 1
-				}
-			}
-		}
-
-		// Follow-through (Automatic): Dagger's post-hit sweep (unchanged from
-		// the old swing_time/swing_timer, now the Weapon-level generalized
-		// fields - ticket 01), SMG's recoil-kick, Flame_Staff's per-tick pulse
-		if weapon.follow_through_timer > 0 && weapon.follow_through_time > 0 {
-			progress := 1 - weapon.follow_through_timer / weapon.follow_through_time // 0 -> 1
-
+		// Follow-through, both fire modes: a melee weapon's swing (and the
+		// window its Hit volume is live for), SMG's recoil-kick,
+		// Flame_Staff's per-tick pulse
+		if progress, swinging := weapon_follow_through_progress(weapon); swinging {
 			switch v in weapon.variant {
 			case Melee_Weapon:
-				angle += (progress - 0.5) * v.arc_degrees
+				arc := weapon_visuals[weapon.kind].swing_arc_degrees
+				base_angle := angle
+				angle += melee_swing_angle_offset(arc, progress)
+
+				// motion-trail echoes: the same blade sampled at slightly
+				// earlier points on the same curve, not a new particle
+				// primitive. How many a weapon leaves is per-kind, so Dagger
+				// stays a quick jab and Sword reads as a heavy sweep.
+				wanted := min(weapon_visuals[weapon.kind].swing_echo_count, SWORD_ECHO_COUNT)
+				for i in 1 ..= wanted {
+					p := progress - f32(i) * SWORD_ECHO_STEP
+					if p < 0 {
+						continue
+					}
+					echo_angles[echo_count] = base_angle + melee_swing_angle_offset(arc, p)
+					echo_count += 1
+				}
 			case Gun:
 				pivot -= player.aim_dir * WEAPON_RECOIL_KICK * (1 - progress)
 			case Magic:
@@ -1349,19 +1333,18 @@ draw_game :: proc() {
 		// (ADR-0018). All the pivot/angle/pulse work above is unchanged; it
 		// just feeds the frame now instead of three hand-rolled shape calls.
 		glyph := weapon_icons[weapon.kind]
-		size := weapon_world_frame_size(weapon) * pulse_scale
 
 		// echoes first, so the live blade draws over its own trail
 		for i in 0 ..< echo_count {
 			fade := 1 - f32(i + 1) / f32(SWORD_ECHO_COUNT + 1)
 			glyph(
-				icon_frame_pivot(pivot, echo_angles[i], size),
+				weapon_pose_frame(weapon, pivot, echo_angles[i], pulse_scale),
 				rl.Fade(WEAPON_MELEE_COLOR, fade * SWORD_ECHO_FADE),
 				1,
 			)
 		}
 
-		glyph(icon_frame_pivot(pivot, angle, size), nil, 1)
+		glyph(weapon_pose_frame(weapon, pivot, angle, pulse_scale), nil, 1)
 	}
 
 	// F8 debug panel visualizer: outlines the player's and every enemy's actual collision
@@ -1417,13 +1400,21 @@ draw_game :: proc() {
 	}
 
 	// F8 debug panel visualizer: the equipped weapon's hit area, shown continuously
-	// (unlike Flamethrower's held-only cone particles) so range/arc tuning
-	// doesn't require attacking to see it. Gun has no player-relative area to
-	// show; fireball's AoE lands wherever it hits, not around the player, so
-	// it's skipped too.
+	// (unlike Flamethrower's held-only cone particles) so tuning doesn't
+	// require attacking to see it. Gun has no player-relative area to show;
+	// fireball's AoE lands wherever it hits, not around the player, so it's
+	// skipped too.
+	//
+	// A melee weapon's area is its Hit volume (hit_volume.odin) - the polygons
+	// themselves, on the pose they actually ride, rather than a cone drawn from
+	// the player's feet that nothing has measured from since ADR-0026. While a
+	// swing is live it outlines the volume where it is; at rest it outlines
+	// both ends of the arc the swing will travel, so the extent is still
+	// readable without attacking. Magic keeps the cone, which is genuinely its
+	// shape.
 	draw_debug_weapon_area :: proc(player: Player) {
 		center := Vec2{player.x, player.y}
-		angle := math.to_degrees(math.atan2(player.aim_dir.y, player.aim_dir.x))
+		angle := aim_angle_degrees(player.aim_dir)
 
 		draw_cone :: proc(center: Vec2, range, arc_degrees, angle: f32) {
 			start := angle - arc_degrees / 2
@@ -1431,9 +1422,29 @@ draw_game :: proc() {
 			rl.DrawCircleSectorLines(center, range, start, end, 16, rl.SKYBLUE)
 		}
 
+		draw_volume :: proc(weapon: Weapon, pivot: Vec2, angle_deg: f32, color: Color) {
+			frame := weapon_pose_frame(weapon, pivot, angle_deg, 1)
+			points: [MAX_HIT_POLY_POINTS]Vec2
+			for poly in weapon_hit_volumes[weapon.kind] {
+				world := hit_poly_to_world(frame, poly, points[:])
+				for i in 0 ..< len(world) {
+					rl.DrawLineV(world[i], world[(i + 1) % len(world)], color)
+				}
+			}
+		}
+
 		switch v in player.weapon.variant {
 		case Melee_Weapon:
-			draw_cone(center, v.range, v.arc_degrees, angle)
+			weapon := player.weapon
+			pivot := weapon_pivot_position(center)
+			arc := weapon_visuals[weapon.kind].swing_arc_degrees
+
+			if progress, swinging := weapon_follow_through_progress(weapon); swinging {
+				draw_volume(weapon, pivot, angle + melee_swing_angle_offset(arc, progress), rl.SKYBLUE)
+				return
+			}
+			draw_volume(weapon, pivot, angle - arc / 2, rl.Fade(rl.SKYBLUE, 0.5))
+			draw_volume(weapon, pivot, angle + arc / 2, rl.Fade(rl.SKYBLUE, 0.5))
 		case Magic:
 			switch v.spell_kind {
 			case .Flamethrower:

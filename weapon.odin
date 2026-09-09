@@ -52,24 +52,35 @@ Weapon :: struct {
 	// saved content
 	cooldown_timer: f32 `json:"-"`,
 
-	// Windup/Follow-through (see CONTEXT.md, ADR-0003/0004): exactly one of
-	// these two pairs is ever nonzero for a given Weapon_Kind, decided
-	// entirely by fire_mode. windup_fraction is a proportion of the cycle,
-	// not a fixed duration, so it stays nested inside 1/action_rate no
-	// matter how much action_rate has grown from upgrades (ADR-0004) -
-	// windup_timer's actual seconds are derived fresh at Trigger as
-	// windup_fraction/action_rate. follow_through_time has no equivalent
-	// invariant to protect (purely cosmetic), so it stays a fixed duration -
-	// the generalized, Weapon-level successor to Melee_Weapon's old
-	// swing_time/swing_timer. windup_timer/follow_through_timer are tagged
-	// json:"-": unlike cooldown_timer, windup_timer crossing zero now has a
-	// real side effect (resolve_weapon_action) - restoring a positive
-	// windup_timer from a save would fire that weapon on its own on the
-	// first post-load frame, with no Trigger from the player.
+	// Windup/Follow-through (see CONTEXT.md, ADR-0003/0004/0026).
+	// windup_fraction is a proportion of the cycle, not a fixed duration, so
+	// it stays nested inside 1/action_rate no matter how much action_rate has
+	// grown from upgrades (ADR-0004) - windup_timer's actual seconds are
+	// derived fresh at Trigger as windup_fraction/action_rate. Fire mode still
+	// decides whether a weapon Windups (Semi_Automatic only), but it no longer
+	// decides Follow-through: **both** fire modes carry one, because for
+	// anything that swings, Follow-through *is* the window its Hit volume is
+	// live for (hit_volume.odin, ADR-0026). A Sword Windups and then swings.
+	// follow_through_time has no proportionality invariant to protect the way
+	// windup_fraction does, so it stays a fixed duration - the generalized,
+	// Weapon-level successor to Melee_Weapon's old swing_time/swing_timer.
+	// windup_timer/follow_through_timer are tagged json:"-": unlike
+	// cooldown_timer, windup_timer crossing zero has a real side effect
+	// (resolve_weapon_action) - restoring a positive windup_timer from a save
+	// would fire that weapon on its own on the first post-load frame, with no
+	// Trigger from the player. follow_through_timer is now load-bearing for the
+	// same reason and excluded for the same reason.
 	windup_fraction:      f32, // 0..1, Semi_Automatic only
 	windup_timer:         f32 `json:"-"`,
-	follow_through_time:  f32, // seconds, Automatic only
+	follow_through_time:  f32, // seconds; both fire modes
 	follow_through_timer: f32 `json:"-"`,
+
+	// identity of the swing currently in flight, matched against
+	// Enemy.last_hit_swing_id so one swing damages a given body at most once
+	// however long its Hit volume overlaps (hit_volume.odin). Transient
+	// runtime state, never saved - a restored id would dedupe against bodies
+	// from a previous session.
+	swing_id: u32 `json:"-"`,
 
 	// tagged json:"-": core:encoding/json decodes a union by trying each
 	// variant in declaration order and keeping the first one that parses
@@ -101,9 +112,15 @@ Gun :: struct {
 	bullet_lifetime:  f32,
 }
 
+// One field, deliberately: a swing's shape is its Hit volume (hit_volume.odin),
+// authored per kind alongside its glyph, and the arc that volume sweeps through
+// is per-kind too (Weapon_Visual.swing_arc_degrees). `range` is the only thing
+// left that an Upgrade can scale, and scaling it scales the drawn blade and its
+// volume together - see weapon_world_frame_size. The retired `arc_degrees` was
+// the width of a cone measured from the player's feet; there is no cone here
+// any more (ADR-0026).
 Melee_Weapon :: struct {
-	range:       f32, // max distance from origin a swing's arc reaches
-	arc_degrees: f32, // total cone width, centered on aim_dir
+	range: f32, // how far from the grip the weapon's tip reaches
 }
 
 // fields cover all three Spell_Kinds; each weapon_presets entry only sets
@@ -240,8 +257,9 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		fire_mode = .Automatic, // hold to spam quick swings
 		damage = 15,
 		action_rate = 4,
-		follow_through_time = 0.15, // carried over unchanged from the old swing_time
-		variant = Melee_Weapon{range = 40, arc_degrees = 70},
+		// the window its blade is live for, not just a flourish after the fact
+		follow_through_time = 0.15,
+		variant = Melee_Weapon{range = 40},
 	},
 	.Sword = {
 		kind = .Sword,
@@ -249,7 +267,12 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		damage = 30,
 		action_rate = 1.8,
 		windup_fraction = 0.37,
-		variant = Melee_Weapon{range = 60, arc_degrees = 110},
+		// Semi_Automatic weapons never carried a Follow-through before
+		// ADR-0026; the Sword's swing was reconstructed inside draw_weapon
+		// from cooldown arithmetic and lasted exactly this long. Now it is
+		// the swing, and the window its blade damages through.
+		follow_through_time = 0.18,
+		variant = Melee_Weapon{range = 60},
 	},
 	.Fire_Wand = {
 		kind = .Fire_Wand,
@@ -325,6 +348,15 @@ Weapon_Visual :: struct {
 	muzzle_streak_count:   int,
 	muzzle_spread_degrees: f32,
 	muzzle_flash_radius:   f32,
+	// total sweep a swing travels, centered on aim_dir - drawn back to
+	// -arc/2 at Resolve and out to +arc/2 (melee_swing_angle_offset,
+	// hit_volume.odin). Moved here from the deleted Melee_Weapon.arc_degrees,
+	// which is what makes Weapon_Visual no longer cosmetic-only: it now drives
+	// where the Hit volume goes, not just what the swing looks like. That is
+	// the honest price of the volume *being* the silhouette, and it buys a
+	// real thing - an arc near zero is a thrust rather than a broken sweep, so
+	// a thrusting weapon needs no machinery of its own (ADR-0026).
+	swing_arc_degrees:     f32,
 	// motion-trail echoes behind a melee swing: several fading copies of the
 	// same blade sampled earlier on the swing curve. Zero for a weapon that
 	// shouldn't leave one, which is how Dagger stays a quick jab while Sword
@@ -341,8 +373,8 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 	.Shotgun      = {length = 38, muzzle_streak_count = 7, muzzle_spread_degrees = 34, muzzle_flash_radius = 18},
 
 	// Melee: `length` unused (range supplies it). Only Sword trails echoes.
-	.Dagger       = {swing_echo_count = 0},
-	.Sword        = {swing_echo_count = 3},
+	.Dagger       = {swing_arc_degrees = 70, swing_echo_count = 0},
+	.Sword        = {swing_arc_degrees = 110, swing_echo_count = 3},
 
 	// Magic: the flash is a cast effect rather than a muzzle report, so the
 	// streak burst stays at zero for all three - their family vocabulary is
@@ -355,8 +387,11 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 // global multiplier on every weapon's drawn size, driven live by the F8
 // debug panel's slider so silhouettes can be judged in motion at gameplay
 // zoom rather than argued about statically (ADR-0018). Applies to Gun and
-// Magic only: scaling a melee blade would decouple its drawn length from
-// the reach it is reporting, making the silhouette lie about its hit arc.
+// Magic only, and melee's exclusion now has the opposite reason to the one it
+// was written with: a blade's drawn length and its reach used to be two
+// quantities the slider could decouple, and since ADR-0026 they are one - the
+// blade *is* the Hit volume. Scaling it here would be a live reach cheat, not
+// a silhouette tool.
 weapon_visual_scale: f32 = 1
 // alpha of the one-shot muzzle flash disc, 0..1
 MUZZLE_FLASH_ALPHA: f32 = 0.8
@@ -418,13 +453,39 @@ weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
 // before, ticks windup_timer down and calls resolve_weapon_action the
 // instant it crosses to <=0 (exactly once - the `> 0` guard only lets a
 // weapon in Winding Up reach the inner check at all), and ticks
-// follow_through_timer down with no side effect (purely cosmetic). Callers
-// must pass this frame's freshly-computed origin/aim_dir/mouse_world so a
-// Resolve on Windup completion always fires against current-frame aim state,
-// not whatever was live at Trigger.
+// follow_through_timer down. That last one is no longer side-effect-free: for
+// anything that swings it is the swing's active window, so every frame of it
+// re-tests the weapon's Hit volume against the world (ADR-0026). Callers must
+// pass this frame's freshly-computed origin/aim_dir/mouse_world so both a
+// Resolve on Windup completion and each frame of a swing act against
+// current-frame aim state, not whatever was live at Trigger.
 update_weapon :: proc(weapon: ^Weapon, dt: f32, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) {
 	if weapon.cooldown_timer > 0 {
 		weapon.cooldown_timer -= dt
+	}
+
+	// Ahead of the Windup block below, so a swing always gets its whole window.
+	// A Semi_Automatic weapon Resolves from inside that block, and ticking a
+	// freshly-set follow_through_timer down by the same frame's dt would eat
+	// the front of the swing it just started - the more so the longer the
+	// frame. This ordering makes both fire modes agree: the timer is set at
+	// the end of a frame and the next frame is the swing's first, exactly as
+	// an Automatic weapon already behaved by resolving from try_use_weapon
+	// after update_weapon had run.
+	//
+	// `was_swinging` is captured before the tick so the swing's last frame -
+	// the one taking the timer to <= 0 - is still tested rather than dropped.
+	was_swinging := weapon.follow_through_timer > 0
+	if weapon.follow_through_timer > 0 {
+		weapon.follow_through_timer -= dt
+	}
+
+	if was_swinging {
+		// the previous pose is recomputed from the timer rather than stored
+		// (ADR-0007): the swing's angle is a pure function of how far into the
+		// window it is, so there is nothing to keep in sync
+		elapsed_now := weapon.follow_through_time - max(weapon.follow_through_timer, 0)
+		swing_hit_check(weapon, origin, aim_dir, elapsed_now - dt, elapsed_now, enemies)
 	}
 
 	if weapon.windup_timer > 0 {
@@ -432,10 +493,6 @@ update_weapon :: proc(weapon: ^Weapon, dt: f32, origin, aim_dir, mouse_world: Ve
 		if weapon.windup_timer <= 0 {
 			resolve_weapon_action(weapon, origin, aim_dir, mouse_world, enemies)
 		}
-	}
-
-	if weapon.follow_through_timer > 0 {
-		weapon.follow_through_timer -= dt
 	}
 
 	switch &v in weapon.variant {
@@ -497,8 +554,8 @@ weapon_ready_fraction :: proc(weapon: Weapon) -> f32 {
 // (cooldown_timer/windup_timer, both from the same instant - "nested inside
 // cooldown" requires they start together, not staggered) and return without
 // resolving; Automatic weapons resolve immediately via resolve_weapon_action,
-// unchanged from pre-Windup behavior, and start Follow-through if the action
-// succeeded. Once a Windup starts it always completes into Resolve - there is
+// unchanged from pre-Windup behavior. Follow-through is started by
+// resolve_weapon_action itself now, for both fire modes. Once a Windup starts it always completes into Resolve - there is
 // no cancel-by-releasing-early path (see CONTEXT.md's Windup entry).
 try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) {
 	if weapon.cooldown_timer > 0 {
@@ -537,7 +594,6 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enem
 
 	if resolve_weapon_action(weapon, origin, aim_dir, mouse_world, enemies) {
 		weapon.cooldown_timer = 1.0 / weapon.action_rate
-		weapon.follow_through_timer = weapon.follow_through_time
 	}
 }
 
@@ -550,24 +606,43 @@ try_use_weapon :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enem
 // whiff if the target moved or died since Trigger.
 resolve_weapon_action :: proc(weapon: ^Weapon, origin, aim_dir, mouse_world: Vec2, enemies: []Enemy) -> bool {
 	// projectiles and muzzle effects come out of the weapon's far end, not
-	// the player's feet anchor - see weapon_muzzle_position. Hit-checks below
-	// (melee arc, flamethrower cone, Poison_Cloud range) keep using `origin`,
-	// so reach is unchanged.
+	// the player's feet anchor - see weapon_muzzle_position. The flamethrower
+	// cone and Poison_Cloud's range clamp still measure from `origin`; melee
+	// no longer measures anything from it at all, since its Hit volume hangs
+	// off the pivot with the blade (hit_volume.odin).
 	muzzle := weapon_muzzle_position(weapon^, origin, aim_dir)
 
+	acted := false
 	switch &v in weapon.variant {
 	case Gun:
-		return try_fire_gun(weapon, &v, muzzle, aim_dir)
+		acted = try_fire_gun(weapon, &v, muzzle, aim_dir)
 	case Melee_Weapon:
-		return try_swing_melee(&v, weapon.damage, origin, aim_dir, enemies)
+		acted = start_melee_swing(weapon)
 	case Magic:
 		target := mouse_world
 		if v.spell_kind == .Poison_Cloud {
 			target = v.locked_target
 		}
-		return try_cast_magic(&v, weapon_visuals[weapon.kind], weapon.damage, origin, aim_dir, muzzle, target, enemies)
+		acted = try_cast_magic(
+			&v,
+			weapon_visuals[weapon.kind],
+			weapon.damage,
+			origin,
+			aim_dir,
+			muzzle,
+			target,
+			enemies,
+		)
 	}
-	return false
+
+	// Follow-through starts here rather than in try_use_weapon's Automatic
+	// branch, because this is the one point both fire modes pass through and
+	// both now carry one (ADR-0026). Gated on the action having succeeded, so
+	// a Gun that found an empty clip still plays nothing.
+	if acted {
+		weapon.follow_through_timer = weapon.follow_through_time
+	}
+	return acted
 }
 
 // captures mouse_world into Magic's locked_target the instant Windup starts,
@@ -607,6 +682,21 @@ weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
 	return clamp(1 - weapon.windup_timer / windup_duration, 0, 1)
 }
 
+// 0 at Resolve -> 1 when the Follow-through ends, and `active` false whenever
+// there is no Follow-through in flight. Sibling of weapon_windup_progress
+// above, and the single reader of the swing's active window: for anything that
+// swings this is not a cosmetic curve but the window its Hit volume is live
+// for (hit_volume.odin), which is why draw_weapon and swing_hit_check both
+// read it rather than each deriving one. draw_weapon used to reconstruct this
+// from (cycle - windup_duration) - cooldown_timer, which is exactly how the
+// swing the player watched and the swing that damaged drifted apart.
+weapon_follow_through_progress :: proc(weapon: Weapon) -> (progress: f32, active: bool) {
+	if weapon.follow_through_timer <= 0 || weapon.follow_through_time <= 0 {
+		return 0, false
+	}
+	return clamp(1 - weapon.follow_through_timer / weapon.follow_through_time, 0, 1), true
+}
+
 // -- muzzle geometry -------------------------------------------------------
 //
 // The `origin` threaded through try_use_weapon/update_weapon is the player's
@@ -614,9 +704,16 @@ weapon_windup_progress :: proc(weapon: Weapon) -> f32 {
 // main.odin), not where the weapon *points from*. Anything that visually comes
 // out of the weapon (bullets, fireballs, muzzle flash/streaks, cast particles)
 // must spawn at the far end of the drawn shape instead, or it reads as firing
-// out of the player's feet. Gameplay hit-checks (melee/flamethrower arcs,
-// Poison_Cloud range clamping) deliberately keep using `origin`, so moving the
-// visuals never quietly changes reach.
+// out of the player's feet. The flamethrower's cone and Poison_Cloud's range
+// clamp still measure from `origin` - an emitted effect starts at the caster,
+// and neither is a drawn shape whose position could disagree with its reach.
+//
+// Melee used to be on that list, on the reasoning that keeping hit-checks at
+// the feet meant "moving the visuals never quietly changes reach". That
+// reasoning inverted the moment a blade's Hit volume became the blade itself
+// (ADR-0026): its volume hangs off the pivot with the silhouette, and being
+// unable to move one without the other is now the safety property rather than
+// the hazard.
 //
 // Deliberately animation-free: draw_weapon's Windup pullback and
 // Follow-through recoil displace the drawn pivot on top of this, but both are
@@ -708,41 +805,50 @@ try_fire_gun :: proc(weapon: ^Weapon, gun: ^Gun, muzzle, aim_dir: Vec2) -> bool 
 	return true
 }
 
-// true if enemy is within melee's arc/cone: inside range (plus a fudge for
-// the enemy's own collision size, derived from its existing collision rect -
-// Enemy has no dedicated radius field) and within arc_degrees/2 of aim_dir.
-// Mirrors Gun.spread_angle's cone-around-aim_dir idea, reused for hit
-// detection instead of pellet fan-out.
-enemy_in_melee_arc :: proc(melee: Melee_Weapon, origin, aim_dir: Vec2, enemy: Enemy) -> bool {
+// true if enemy is within a cone: inside range (plus a fudge for the enemy's
+// own collision size, derived from its existing collision rect - Enemy has no
+// dedicated radius field) and within arc_degrees/2 of aim_dir. Mirrors
+// Gun.spread_angle's cone-around-aim_dir idea, reused for hit detection
+// instead of pellet fan-out.
+//
+// This is Magic's own test now. It used to be melee's, borrowed by the
+// flamethrower via a fabricated Melee_Weapon; the borrowing ended with the
+// field it borrowed. The cone was never wrong in general - it was wrong for
+// *blades*, which are thin things pretending to be wedges, and which now hit
+// with their own shape (hit_volume.odin, ADR-0026). An emitted flame really is
+// a spreading wedge, so it keeps the shape it always had.
+enemy_in_magic_cone :: proc(range, arc_degrees: f32, origin, aim_dir: Vec2, enemy: Enemy) -> bool {
 	enemy_box := actor_collision_rect(enemy.rect)
 	enemy_radius := max(enemy_box.width, enemy_box.height) / 2
 
 	to_enemy := Vec2{enemy.x, enemy.y} - origin
 	dist := linalg.length(to_enemy)
-	if dist > melee.range + enemy_radius {
+	if dist > range + enemy_radius {
 		return false
 	}
 
 	direction_to_enemy := linalg.normalize0(to_enemy)
 	angle_to_enemy := math.to_degrees(math.acos(clamp(linalg.dot(aim_dir, direction_to_enemy), -1, 1)))
 
-	return angle_to_enemy <= melee.arc_degrees / 2
+	return angle_to_enemy <= arc_degrees / 2
 }
 
-// resolves the swing instantly and synchronously - no active-frame window to
-// guard, so there's no per-swing "already hit" flag to manage. A single pass
-// gathers every enemy in the arc (cleave), applying the hit to each via the
-// same apply_hit_to_enemy pipeline bullets use, so death handling is never
-// duplicated between weapon types. Always "acts" once triggered - no
-// ammo-style failure case like Gun's empty-clip. `enemies` is threaded in
-// explicitly rather than read from game.enemies, for consistency with
-// origin/aim_dir already being explicit params (ticket 01).
-try_swing_melee :: proc(melee: ^Melee_Weapon, damage: f32, origin, aim_dir: Vec2, enemies: []Enemy) -> bool {
-	#reverse for enemy, i in enemies {
-		if !enemy_in_melee_arc(melee^, origin, aim_dir, enemy) do continue
-		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
-	}
-
+// A swing damages nothing here. Resolve is where a swing's Hit volume goes
+// *live*, not where its hit-check finishes: the blade is then tested every
+// frame until the Follow-through ends (swing_hit_check, driven from
+// update_weapon), so a body entering the arc after Resolve is still hit and a
+// body leaving before the blade arrives is not.
+//
+// That is the whole point. The predecessor resolved instantly and cleaved
+// everything inside a cone measured from the player's feet - on the exact
+// frame a Sword's blade is drawn back at -arc/2, pointing away from most of
+// what it had just killed.
+//
+// All this does is claim a fresh swing identity, which is what stops the
+// frames that follow damaging the same body over and over. Always "acts" once
+// triggered - no ammo-style failure case like Gun's empty-clip.
+start_melee_swing :: proc(weapon: ^Weapon) -> bool {
+	weapon.swing_id = next_swing_identity()
 	return true
 }
 
@@ -785,17 +891,15 @@ try_cast_magic :: proc(
 }
 
 // re-run every Automatic-mode trigger while the mouse is held (try_use_weapon's
-// existing cooldown/action_rate gate controls tick rate) - reuses the same
-// arc/cone hit-check as melee (ticket 03), just against Magic's own
-// range/arc_degrees, hitting every enemy in the cone each tick (cleave, no
+// existing cooldown/action_rate gate controls tick rate) - tests Magic's own
+// cone (enemy_in_magic_cone) against its own range/arc_degrees, hitting every
+// enemy in it each tick (cleave, no
 // single-target cap). Also fires a cosmetic per-tick particle burst (ticket
 // 06's confirmed finding - see spawn_flame_tick_burst) whether or not it hit
 // anything, same as the always-on flamethrower cone draw.
 cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir, muzzle: Vec2, enemies: []Enemy) {
-	cone := Melee_Weapon{range = magic.range, arc_degrees = magic.arc_degrees}
-
 	#reverse for enemy, i in enemies {
-		if !enemy_in_melee_arc(cone, origin, aim_dir, enemy) do continue
+		if !enemy_in_magic_cone(magic.range, magic.arc_degrees, origin, aim_dir, enemy) do continue
 		apply_hit_to_enemy(i, damage, Vec2{enemy.x, enemy.y})
 	}
 

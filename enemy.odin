@@ -27,6 +27,13 @@ Enemy :: struct {
 	path:       Path,
 	health:     f32,
 	kind:       Enemy_Kind,
+	// which swing last damaged this body (hit_volume.odin's monotonic swing
+	// identity; 0 means none has). A melee weapon's Hit volume is tested every
+	// frame of its swing and may carry several shapes, so without this a body
+	// standing in the arc would be damaged once per frame per shape. Zero on a
+	// fresh Enemy, and ids never repeat, so a stamped-from-preset spawn needs
+	// no initialization of its own.
+	last_hit_swing_id: u32,
 }
 
 // an enemy's per-frame steering archetype - orthogonal to Attack_Style; nil
@@ -760,7 +767,13 @@ update_enemies :: proc(dt: f32) {
 
 		switch &a in enemy.attack {
 		case Melee:
-			dist_to_player := linalg.distance(pos, player_pos)
+			// surface to surface, both half-extents subtracted, the way the
+			// retired melee arc already allowed for an enemy's own collision
+			// size. Centre-to-centre made attack_range mean something
+			// different for every body size - a wide enemy with a small
+			// uniform range could not reach the player at all, because the
+			// two bodies collided before their centres ever got that close.
+			dist_to_player := linalg.distance(pos, player_pos) - ACTOR_SIZE.x
 			a.attack_timer -= dt
 
 			if dist_to_player <= a.attack_range {

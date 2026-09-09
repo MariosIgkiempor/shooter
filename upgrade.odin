@@ -14,7 +14,7 @@ Upgrade_Kind :: enum {
 	Damage,
 	Action_Rate,
 	Clip_Size, // Ranged only - Gun.clip_size/ammo_in_clip
-	Arc_Width, // Melee only - Melee_Weapon.arc_degrees
+	Arc_Width, // Melee only - Melee_Weapon.range (see the rename to Reach)
 	Range, // Magic only - Magic.range/cast_range/bullet_lifetime, per spell_kind (see apply_magic_range_upgrade)
 }
 
@@ -158,7 +158,14 @@ apply_upgrades :: proc(weapon: ^Weapon, upgrade_stacks: [Upgrade_Kind]int, accou
 		v.clip_size = base.clip_size + int(apply_upgrade_effect(0, .Clip_Size, upgrade_stacks[.Clip_Size]))
 	case Melee_Weapon:
 		base := preset.variant.(Melee_Weapon)
-		v.arc_degrees = apply_upgrade_effect(base.arc_degrees, .Arc_Width, upgrade_stacks[.Arc_Width])
+		// repointed from the deleted Melee_Weapon.arc_degrees. Scaling `range`
+		// scales weapon_world_frame_size, so the blade grows and its Hit volume
+		// grows with it, honestly; widening an arc instead would sweep the same
+		// volume through more ground and buy nothing under a blade collider
+		// (ADR-0026). The member is still called Arc_Width - the rename to
+		// Reach is its own change, because a name outliving its mechanism is
+		// how a retired concept walks back in.
+		v.range = apply_upgrade_effect(base.range, .Arc_Width, upgrade_stacks[.Arc_Width])
 	case Magic:
 		base := preset.variant.(Magic)
 		apply_magic_range_upgrade(&v, base, upgrade_stacks[.Range])

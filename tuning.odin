@@ -416,11 +416,12 @@ register_weapon_tunables :: proc() {
 		register_tunable(group, slug(name, "damage"), "Damage", &preset.damage, 0, 100)
 		register_tunable(group, slug(name, "action_rate"), "Action Rate", &preset.action_rate, 0.1, 15)
 
-		// Windup and Follow-through are mutually exclusive per weapon, gated by
-		// Fire mode (CONTEXT.md's Windup entry) - only register the one this
-		// kind actually uses, so a row can never imply a weapon has both
-		switch preset.fire_mode {
-		case .Semi_Automatic:
+		// Fire mode still gates Windup - Semi_Automatic only - so that row is
+		// registered per fire mode. Follow-through is no longer the other half
+		// of that either/or: both fire modes carry one, because for anything
+		// that swings it is the window its Hit volume is live for (ADR-0026),
+		// and a weapon really can have both rows now.
+		if preset.fire_mode == .Semi_Automatic {
 			register_tunable(
 				group,
 				slug(name, "windup_fraction"),
@@ -429,16 +430,8 @@ register_weapon_tunables :: proc() {
 				0,
 				1, // a fraction of the cycle by definition (ADR-0004) - never above 1
 			)
-		case .Automatic:
-			register_tunable(
-				group,
-				slug(name, "follow_through_time"),
-				"Follow-through",
-				&preset.follow_through_time,
-				0,
-				0.5,
-			)
 		}
+		register_tunable(group, slug(name, "follow_through_time"), "Follow-through", &preset.follow_through_time, 0, 0.5)
 
 		switch &v in preset.variant {
 		case Gun:
@@ -449,8 +442,10 @@ register_weapon_tunables :: proc() {
 			register_tunable(group, slug(name, "spread_angle"), "Spread Angle", &v.spread_angle, 0, 90)
 			register_tunable(group, slug(name, "bullet_lifetime"), "Bullet Lifetime", &v.bullet_lifetime, 0.1, 5)
 		case Melee_Weapon:
+			// `range` is melee's only stat now - the swing's arc moved to the
+			// kind's Weapon_Visual (registered below), since it drives where
+			// the Hit volume travels rather than how wide a cone is
 			register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 150)
-			register_tunable(group, slug(name, "arc_degrees"), "Arc Degrees", &v.arc_degrees, 0, 360)
 		case Magic:
 			// Magic's fields cover all three Spell_Kinds but each preset only
 			// sets the ones its spell uses (weapon.odin) - registering by
@@ -485,6 +480,9 @@ register_weapon_tunables :: proc() {
 			90,
 		)
 		register_tunable(group, slug(name, "muzzle_flash_radius"), "Muzzle Flash Radius", &visual.muzzle_flash_radius, 0, 40)
+		// not a cosmetic row: this is the arc a swing's Hit volume travels
+		// through, as well as the one it's drawn travelling through (ADR-0026)
+		register_tunable(group, slug(name, "swing_arc_degrees"), "Swing Arc", &visual.swing_arc_degrees, 0, 360)
 		// capped by SWORD_ECHO_COUNT, which backs a fixed-size array and so
 		// cannot itself be a Tunable - draw_game already clamps with min()
 		register_tunable(group, slug(name, "swing_echo_count"), "Swing Echoes", &visual.swing_echo_count, 0, 3)
@@ -646,9 +644,14 @@ register_feel_tunables :: proc() {
 	register_tunable(.Weapon_Animation, "weapon_anim.windup_pullback", "Windup Pullback", &WEAPON_WINDUP_PULLBACK, 0, 40)
 	register_tunable(.Weapon_Animation, "weapon_anim.recoil_kick", "Recoil Kick", &WEAPON_RECOIL_KICK, 0, 40)
 	register_tunable(.Weapon_Animation, "weapon_anim.flame_staff_pulse_scale", "Flame Staff Pulse", &FLAME_STAFF_PULSE_SCALE, 0, 2)
-	register_tunable(.Weapon_Animation, "weapon_anim.sword_swing_out_time", "Sword Swing Out", &SWORD_SWING_OUT_TIME, 0.01, 1)
-	register_tunable(.Weapon_Animation, "weapon_anim.sword_swing_return_time", "Sword Swing Return", &SWORD_SWING_RETURN_TIME, 0.01, 1)
-	register_tunable(.Weapon_Animation, "weapon_anim.sword_echo_step", "Sword Echo Step", &SWORD_ECHO_STEP, 0.005, 0.2)
+	// where the swing reaches its extreme, as a fraction of the window rather
+	// than the absolute out/return seconds this used to be a pair of - the
+	// swing's shape is expressed relative to its own follow_through_time now,
+	// which is what keeps the animation and the Hit volume's active window the
+	// same length by construction (ADR-0026). Not a purely cosmetic row for
+	// the same reason: this is where the blade is when it damages.
+	register_tunable(.Weapon_Animation, "weapon_anim.swing_out_fraction", "Swing Out Fraction", &SWING_OUT_FRACTION, 0.05, 0.95)
+	register_tunable(.Weapon_Animation, "weapon_anim.sword_echo_step", "Sword Echo Step", &SWORD_ECHO_STEP, 0.02, 0.5)
 	register_tunable(.Weapon_Animation, "weapon_anim.sword_echo_fade", "Sword Echo Fade", &SWORD_ECHO_FADE, 0, 1)
 
 	register_tunable(.Particles_Common, "particle.drag", "Drag", &PARTICLE_DRAG, 0, 30)
