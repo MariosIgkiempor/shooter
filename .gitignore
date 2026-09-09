@@ -1,3 +1,4 @@
 *.bin
 build/
 vendor/atlas-builder/atlas-builder
+data/game_save.json
