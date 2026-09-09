@@ -7,9 +7,9 @@ The Map Selection screen's swatch is derived from the Map's own wall colour.
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A Map carries rung, floor colour, wall colour and its ambient set
-- [ ] The separate per-Map icon colour table is deleted; the selection swatch derives from the Map
-- [ ] Tile drawing reads the current Map's colours
-- [ ] The existing Map keeps the palette it has today
+- [x] A Map carries rung, floor colour, wall colour and its ambient set
+- [x] The separate per-Map icon colour table is deleted; the selection swatch derives from the Map
+- [x] Tile drawing reads the current Map's colours
+- [x] The existing Map keeps the palette it has today

@@ -1018,15 +1018,16 @@ draw_map_selection_ui :: proc() {
 
 		// a flat swatch in the Map's own color - passed as the icon's tint
 		// rather than baked into a glyph, since a swatch's color *is* its
-		// content (see icon_swatch). A placeholder vocabulary while Map_Name
-		// has one case; worth designing properly at map two.
+		// content (see icon_swatch). Derived from the Map's wall colour
+		// rather than authored beside it, so the menu can't advertise a
+		// colour the world doesn't have (ADR-0024).
 		button_rect := Rect{rect.x + pad, y, w - pad * 2, MENU_ICON_BUTTON_HEIGHT}
 		clicked, _ := draw_menu_button(
 			button_rect,
 			chosen.name,
 			anim,
 			icon = icon_swatch,
-			icon_tint = map_icon_colors[name],
+			icon_tint = map_swatch_color(chosen),
 		)
 		if clicked {
 			// clone_map, never a plain value copy - game.current_map would

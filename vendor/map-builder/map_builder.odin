@@ -36,6 +36,10 @@ MAPS_ODIN_OUTPUT_PATH :: "maps.odin"
 Vec2 :: [2]f32
 Vec2i :: [2]i32
 
+// raylib's Color, mirrored rather than imported like everything else here -
+// an RGBA array, which is the shape it marshals to and out of
+Color :: [4]u8
+
 Tile :: struct {
 	world_coords: Vec2i,
 	collides:     bool,
@@ -138,6 +142,13 @@ Map :: struct {
 	spawn_triggers:     [dynamic]Spawn_Trigger,
 	time_limit:         f32,
 	victory_multiplier: f32,
+	rung:               int,
+	floor_color:        Color,
+	wall_color:         Color,
+	// only the on-disk form is mirrored: the generated literal emits the
+	// shooter package's live `ambient` bit_set from these names, the same way
+	// each Spawn_Trigger's *_save fields become live unions below
+	ambient_save:       []string,
 }
 
 Map_Source :: struct {
@@ -251,6 +262,36 @@ write_map_literal :: proc(f: ^os.File, m: Map) {
 	fmt.fprint(f, ", spawn_triggers = ")
 	write_spawn_triggers_literal(f, m.spawn_triggers)
 	fmt.fprintf(f, ", time_limit = %v, victory_multiplier = %v", m.time_limit, m.victory_multiplier)
+	fmt.fprintf(f, ", rung = %v", m.rung)
+	fmt.fprint(f, ", floor_color = ")
+	write_color_literal(f, m.floor_color)
+	fmt.fprint(f, ", wall_color = ")
+	write_color_literal(f, m.wall_color)
+	fmt.fprint(f, ", ambient = ")
+	write_ambient_literal(f, m.ambient_save)
+	fmt.fprint(f, "}")
+}
+
+write_color_literal :: proc(f: ^os.File, c: Color) {
+	fmt.fprintf(f, "Color{{%v, %v, %v, %v}}", c[0], c[1], c[2], c[3])
+}
+
+// the identity strings become a bit_set literal, so an effect this build
+// doesn't have fails the bake the way an unknown Spawn_Condition_Kind does
+// rather than emitting source that won't compile with nothing to say why
+write_ambient_literal :: proc(f: ^os.File, effects: []string) {
+	fmt.fprint(f, "{")
+	for effect, i in effects {
+		switch effect {
+		case "Motes", "Floor_Patches", "Light_Wash":
+		case:
+			log.panicf("`%s` is not an Ambient_Effect - the map file is stale, or the enum was renamed", effect)
+		}
+		if i > 0 {
+			fmt.fprint(f, ", ")
+		}
+		fmt.fprintf(f, ".%s", effect)
+	}
 	fmt.fprint(f, "}")
 }
 

@@ -871,12 +871,6 @@ Tilemap :: struct {
 	tiles:     [dynamic]Tile,
 }
 
-// warm sand/stone palette (art-revamp ticket 04), distinct from the cool
-// actor/weapon palette
-TILEMAP_FLOOR_COLOR :: rl.Color{56, 48, 40, 255}
-TILEMAP_WALL_COLOR :: rl.Color{124, 110, 90, 255}
-TILEMAP_WALL_BEVEL_COLOR :: rl.Color{74, 64, 52, 255}
-
 // Player renders as a rectangle (ACTOR_SIZE); every enemy renders as a
 // square (see draw_enemy) - colors are a first-pass palette, not separately
 // locked by any ticket.
@@ -1079,7 +1073,7 @@ draw_game :: proc() {
 	// identical content into an offscreen texture instead of straight to the
 	// backbuffer, with zero duplication between the two paths.
 	draw_world_contents :: proc() {
-		draw_tilemap(&game.current_map.tilemap)
+		draw_tilemap(&game.current_map)
 		for &enemy in game.enemies {
 			draw_enemy(enemy)
 			if game.debug.visualizers[.Pathfinding] {
@@ -1185,14 +1179,20 @@ draw_game :: proc() {
 
 	// flat fill for both floor and wall, walls get a darker inset bevel
 	// border for thickness (art-revamp ticket 04) - Tile.collides is the only
-	// signal used.
+	// signal used. Which colours those rules use is the Map's own business
+	// (ADR-0024): it takes the whole Map rather than its Tilemap, and the
+	// warm sand the three TILEMAP_* constants used to hold is now authored in
+	// data/maps/desert_dungeon.json like any other property of that place.
+	// The bevel is derived once here rather than per tile.
 	//
 	// Culled to the camera's visible rect: a ladder rung's map runs to tens of
 	// thousands of tiles, of which a few hundred are ever on screen, and this
 	// runs twice per frame once draw_blurred_world is compositing. Both paths
 	// draw through game.camera, so one bounds query serves them.
-	draw_tilemap :: proc(tilemap: ^Tilemap) {
+	draw_tilemap :: proc(map_data: ^Map) {
 		visible := camera_visible_world_rect(game.camera)
+		tilemap := &map_data.tilemap
+		bevel_color := map_bevel_color(map_data^)
 
 		for tile in tilemap.tiles {
 			world_rect := Rect {
@@ -1206,7 +1206,7 @@ draw_game :: proc() {
 				continue
 			}
 
-			color := TILEMAP_WALL_COLOR if tile.collides else TILEMAP_FLOOR_COLOR
+			color := map_data.wall_color if tile.collides else map_data.floor_color
 			draw_rectangle(world_rect, color)
 
 			if tile.collides {
@@ -1217,7 +1217,7 @@ draw_game :: proc() {
 					world_rect.width - bevel * 2,
 					world_rect.height - bevel * 2,
 				}
-				draw_rectangle_lines(inset, TILEMAP_WALL_BEVEL_COLOR, TILEMAP_WALL_BEVEL_THICKNESS)
+				draw_rectangle_lines(inset, bevel_color, TILEMAP_WALL_BEVEL_THICKNESS)
 			}
 		}
 	}

@@ -410,9 +410,8 @@ icon_level :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 // a flat filled square. The Map Selection screen's swatch: unlike every
 // other glyph its color *is* its content, so callers pass the color through
 // the tint channel (draw_menu_button's icon_tint) rather than it having a
-// world color of its own. Map_Name has exactly one case today, so this is a
-// placeholder vocabulary rather than a designed set - worth replacing with
-// real per-map marks at map two. See map_icon_colors in map.odin.
+// world color of its own. The color a caller passes is the Map's own wall
+// colour - see map_swatch_color in map.odin.
 icon_swatch :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_bar_h(f, 0.12, 0.5, 0.76, 0.76, icon_color(ICON_NEUTRAL_COLOR, tint, alpha))
 }
