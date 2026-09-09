@@ -61,6 +61,19 @@ exemption "without a special case"; that is true of the fallback itself, but the
 build needed the traversal rule below on top of it, which the ADR did not
 anticipate.
 
+**The extent is the tile box unioned with the player's cell, not the tile box
+alone** — a correction made after the first pass, and a second amendment to the
+ADR. Desert Dungeon's bounding box has 48 walkable cells on its border and 648
+cells reachable from `player_start` outside it, so bounding to the authored tiles
+alone meant one walk off the top edge put the player out of bounds, filled
+nothing, and silently reverted every enemy to straight-line chasing — the F8
+overlay going blank is what surfaced it. Growing the box by the source stays
+bounded (it reaches only as far as the player has strayed) and lets the flood
+start under the player and walk back onto the tiles: from cell {34,-1} the box
+becomes 54x49 and fills 1552 cells, and an enemy at `player_start` reads a step
+again where it previously read nothing. The one case left unanswered is a player
+standing inside a wall, which still fills nothing.
+
 **Two shipped leaks went with the deletion.**
 `build_inflated_collision_map` allocated a heap `map` every frame and never freed
 it, and `reset_enemies` only `clear`s `game.enemies`, so every live enemy's

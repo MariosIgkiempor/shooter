@@ -63,9 +63,12 @@ Flow_Cell :: struct {
 }
 
 Flow_Field :: struct {
-	// the authored cell extent. origin may be negative (the editor places
-	// tiles at negative coords), so nothing may assume {0,0}; a zero `size`
-	// means there is no field at all and every lookup answers "unreached".
+	// the cell extent: the authored tile box grown to contain the source
+	// cell (see flow_field_rebuild). origin may be negative - the editor
+	// places tiles at negative coords, and a player standing off the top of
+	// the map pulls the box up past zero - so nothing may assume {0,0}; a
+	// zero `size` means there is no field at all and every lookup answers
+	// "unreached".
 	origin:        Vec2i,
 	size:          Vec2i,
 	tile_size:     Vec2,
@@ -209,8 +212,19 @@ flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: 
 		return
 	}
 
-	field.origin = min_cell
-	field.size = max_cell - min_cell + {1, 1}
+	// the authored tile box, grown to contain the player's own cell. Bounding
+	// to the tiles alone gives the field an off switch: Desert Dungeon's
+	// bounding box has 48 walkable cells on its border and 648 cells reachable
+	// from player_start lie outside it, so one walk off the top edge left the
+	// source out of bounds, filled nothing, and reverted every enemy to
+	// straight-line chasing. Growing by the source keeps the flood bounded -
+	// the box only ever reaches as far as the player has actually strayed -
+	// while letting the flood start under the player and walk back into the
+	// map across the untiled ground around it.
+	extent_min := Vec2i{min(min_cell.x, field.source.x), min(min_cell.y, field.source.y)}
+	extent_max := Vec2i{max(max_cell.x, field.source.x), max(max_cell.y, field.source.y)}
+	field.origin = extent_min
+	field.size = extent_max - extent_min + {1, 1}
 
 	count := int(field.size.x) * int(field.size.y)
 	if len(field.cells) != count {
@@ -241,11 +255,12 @@ flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: 
 	}
 
 	source_index, source_in_bounds := flow_field_index(field, field.source)
-	// a source outside the authored extent (a half-authored editor map lets
-	// the player walk off the tiles) fills nothing rather than clamping into
-	// the extent: clamping would flood from the wrong cell and march every
-	// enemy at a map corner, where filling nothing simply falls every enemy
-	// back to the straight-line chase it had before the field existed.
+	// the extent is grown to contain the source, so out-of-bounds here means
+	// only that there were no tiles to grow from. A source standing inside a
+	// wall is the case that survives, and it fills nothing rather than being
+	// nudged out: nudging would flood from a cell the player is not in, where
+	// filling nothing simply falls every enemy back to the straight-line
+	// chase it had before the field existed.
 	if !source_in_bounds || field.cells[source_index].collides {
 		return
 	}

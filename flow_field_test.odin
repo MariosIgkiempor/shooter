@@ -250,18 +250,50 @@ test_flow_field_treats_a_cell_outside_the_extent_as_unreached :: proc(t: ^testin
 }
 
 @(test)
-test_flow_field_fills_nothing_when_the_player_is_outside_the_extent :: proc(t: ^testing.T) {
-	// half-authored editor maps let the player walk off the tiles. Clamping
-	// the source into the extent would flood from the wrong cell and march
-	// every enemy at a map corner; filling nothing falls every enemy back to
-	// the straight-line chase, which is what they did before the field.
+test_flow_field_grows_its_extent_to_contain_a_player_off_the_tiles :: proc(t: ^testing.T) {
+	// a map's border is not necessarily sealed - Desert Dungeon's bounding box
+	// has 48 walkable cells on it - so the player really can stand off the
+	// authored tiles. Bounding the field to the tiles alone gave it an off
+	// switch there: nothing flooded, and every enemy fell back to
+	// straight-line chasing. The box grows to reach the player instead.
 	tilemap := fixture_room({"..", ".."})
 	defer delete(tilemap.tiles)
 
 	field: Flow_Field
 	defer flow_field_destroy(&field)
 
-	flow_field_rebuild(&field, &tilemap, cell_world_center({9, 9}), 0)
+	source := Vec2i{1, -2}
+	flow_field_rebuild(&field, &tilemap, cell_world_center(source), 0)
+
+	testing.expectf(t, field.origin == Vec2i{0, -2}, "expected the box to reach up to the player, got %v", field.origin)
+	testing.expectf(t, field.size == Vec2i{2, 4}, "expected a 2x4 extent, got %v", field.size)
+	testing.expectf(
+		t,
+		flow_field_distance(&field, source) == 0,
+		"the player's own cell is the source, got distance %v",
+		flow_field_distance(&field, source),
+	)
+	testing.expectf(
+		t,
+		flow_field_distance(&field, {1, 1}) == 3,
+		"the flood must walk back onto the tiles, got distance %v",
+		flow_field_distance(&field, {1, 1}),
+	)
+}
+
+@(test)
+test_flow_field_fills_nothing_when_the_player_stands_inside_a_wall :: proc(t: ^testing.T) {
+	// the case the grown extent cannot answer. Nudging the source to a
+	// walkable cell would flood from somewhere the player is not; filling
+	// nothing falls every enemy back to the straight-line chase, which is
+	// what they did before the field.
+	tilemap := fixture_room({"###", "###"})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	flow_field_rebuild(&field, &tilemap, cell_world_center({1, 0}), 0)
 
 	testing.expectf(t, field.filled_count == 0, "expected 0 filled cells, got %v", field.filled_count)
 	testing.expectf(t, field.max_distance == 0, "max_distance must reset, got %v", field.max_distance)
