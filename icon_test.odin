@@ -174,7 +174,7 @@ test_melee_world_frame_puts_the_blade_tip_at_its_actual_range :: proc(t: ^testin
 	// sized to `range` directly, the tip would land short of it by whatever
 	// fraction of the glyph the blade occupies, and the silhouette would lie
 	// about the hit arc
-	for kind in ([]Weapon_Kind{.Dagger, .Sword}) {
+	for kind in weapon_family_kinds[.Melee] {
 		weapon := weapon_create(kind)
 		melee, is_melee := weapon.variant.(Melee_Weapon)
 		testing.expect(t, is_melee, "expected a Melee_Weapon variant")

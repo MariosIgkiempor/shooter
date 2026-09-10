@@ -417,3 +417,70 @@ test_the_swept_test_catches_what_neither_pose_does :: proc(t: ^testing.T) {
 		"a body clear of the swept region is still missed",
 	)
 }
+
+@(test)
+test_a_thrusting_weapon_still_reaches_what_it_points_at :: proc(t: ^testing.T) {
+	// the Spear's arc is 18 degrees, barely a sweep, so almost nothing about
+	// it is proven by the tests written against a Sword's 110. What has to
+	// hold is that a body straight ahead of a thrust is still touched by it -
+	// the volume is a small head at the far end of a long haft, and if the
+	// pose or the arc were wrong it would simply miss everything.
+	clear(&game.enemies)
+	defer clear(&game.enemies)
+	clear(&game.particles)
+	defer clear(&game.particles)
+	clear(&game.damage_numbers)
+	defer clear(&game.damage_numbers)
+
+	weapon := weapon_create(.Spear)
+	melee := weapon.variant.(Melee_Weapon)
+	append(&game.enemies, test_enemy_centered_at(weapon_pivot_position(TEST_ORIGIN) + TEST_AIM * (melee.range * 0.9), 500))
+
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	for _ in 0 ..< 40 {
+		update_weapon(&weapon, 1.0 / 60.0, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	}
+
+	testing.expect(t, game.enemies[0].health == 500 - weapon.damage, "a thrust should hit the body it is pointed at, exactly once")
+}
+
+@(test)
+test_the_widest_swing_still_catches_a_body_at_its_outer_edge :: proc(t: ^testing.T) {
+	// The Greatsword's whole purchase is space: a 140 degree arc at 80px is
+	// the widest ground any weapon covers, and every other melee test aims
+	// straight down TEST_AIM, where a Dagger would also connect. This is the
+	// one that says the far end of that sweep is real - a body 70 degrees off
+	// the aim line, out near the tip, is inside what this weapon damages.
+	//
+	// It does not pin ADR-0026's chord bound: at this blade's 20px half-width
+	// against a 12px body the swept quads cover the arc's outside with room to
+	// spare, and the tunnelling case itself is already held by
+	// test_a_swing_catches_a_body_it_crosses_between_two_frames. The arithmetic
+	// behind 140/0.26 is recorded on the preset instead.
+	clear(&game.enemies)
+	defer clear(&game.enemies)
+	clear(&game.particles)
+	defer clear(&game.particles)
+	clear(&game.damage_numbers)
+	defer clear(&game.damage_numbers)
+
+	weapon := weapon_create(.Greatsword)
+	melee := weapon.variant.(Melee_Weapon)
+	arc := weapon_visuals[.Greatsword].swing_arc_degrees
+
+	// on the far end of the sweep, out near the blade's tip
+	edge := math.to_radians(aim_angle_degrees(TEST_AIM) + arc / 2)
+	direction := Vec2{math.cos(edge), math.sin(edge)}
+	append(&game.enemies, test_enemy_centered_at(weapon_pivot_position(TEST_ORIGIN) + direction * (melee.range * 0.85), 500))
+
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	for _ in 0 ..< 60 {
+		update_weapon(&weapon, 1.0 / 60.0, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	}
+
+	testing.expect(
+		t,
+		game.enemies[0].health == 500 - weapon.damage,
+		"a body on the outer edge of the widest swing should be caught by the sweep, not tunnelled past",
+	)
+}

@@ -47,6 +47,14 @@ Hit_Poly :: []Vec2
 weapon_hit_volumes: [Weapon_Kind][]Hit_Poly = {
 	.Dagger       = {{{0.44, 0.39}, {0.80, 0.50}, {0.44, 0.61}}},
 	.Sword        = {{{0.28, 0.38}, {0.92, 0.50}, {0.28, 0.62}}},
+	// the head only, and one polygon. A spear kills with its point: the haft
+	// is what you hold, and a volume along it would let a thrust cut down
+	// whatever it passed. This is also what makes it a different weapon from
+	// the Greatsword rather than a longer one - a ~14x16px head at 85px reach
+	// takes about one body per thrust. ADR-0026's "a head and a haft" is
+	// permission to author several shapes, not a requirement to.
+	.Spear        = {{{0.80, 0.41}, {0.96, 0.50}, {0.80, 0.59}}},
+	.Greatsword   = {{{0.22, 0.26}, {0.94, 0.50}, {0.22, 0.74}}},
 
 	// a Gun's reach is its bullet and Magic's is its cone or its cast, so
 	// neither family's silhouette is a hit-check. Spelled out rather than

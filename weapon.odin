@@ -9,12 +9,13 @@ Weapon_Kind :: enum {
 	SMG,
 	Shotgun,
 	Rifle,
-	// placeholder melee content so try_swing_melee (ticket 03) and the
-	// weapon-family cycle below are actually usable for testing - real tier-ladder
-	// naming/stats for Melee are still content-authoring for a later ticket
-	// (map's "Not yet specified")
+	// Melee's tier ladder, four rungs like its siblings: a quick jab, a heavy
+	// sweep, then the two answers its lower rungs cannot give - a Spear's
+	// standoff and a Greatsword's swathe
 	Dagger,
 	Sword,
+	Spear,
+	Greatsword,
 	// Magic tier ladder (ticket 11): each tier is a distinct spell, mirroring
 	// Ranged's Pistol/SMG/Shotgun being three distinct weapons rather than
 	// numeric upgrades of one
@@ -346,6 +347,37 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		follow_through_time = 0.18,
 		variant = Melee_Weapon{range = 60},
 	},
+	.Spear = {
+		kind = .Spear,
+		fire_mode = .Semi_Automatic,
+		// 57 DPS, between the Sword's 54 and the Dagger's 60 - deliberately
+		// not an improvement on either. What a tier purchase buys here is 85px
+		// of standoff against the Sword's 60, and a Hit volume small enough to
+		// take one body per thrust where a Sword sweeps three: it punches
+		// *into* a crowd without entering it, and is the worst weapon in the
+		// family against one.
+		damage = 26,
+		action_rate = 2.2,
+		windup_fraction = 0.22, // a jab, not the Sword's 0.37 heave
+		follow_through_time = 0.12,
+		variant = Melee_Weapon{range = 85},
+	},
+	.Greatsword = {
+		kind = .Greatsword,
+		fire_mode = .Semi_Automatic,
+		// 49.5 DPS - the lowest on the roster, and lower than the cheaper
+		// Spear. Melee's crowd answer was never throughput: it already sweeps
+		// every body in reach with no cap, so what it buys is *space* - a 140
+		// degree arc at 80px with a blade 20px across.
+		damage = 55,
+		action_rate = 0.9,
+		windup_fraction = 0.42, // 0.47s of real telegraph at the base rate
+		// the longest swing window in the catalog, and not only for feel: a
+		// wide arc crossed in fewer frames is exactly the tunnelling case
+		// ADR-0026's swept quads exist for. See swing_arc_degrees below.
+		follow_through_time = 0.26,
+		variant = Melee_Weapon{range = 80},
+	},
 	.Fire_Wand = {
 		kind = .Fire_Wand,
 		fire_mode = .Semi_Automatic,
@@ -469,6 +501,21 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 	// Melee: `length` unused (range supplies it). Only Sword trails echoes.
 	.Dagger       = {swing_arc_degrees = 70, swing_echo_count = 0},
 	.Sword        = {swing_arc_degrees = 110, swing_echo_count = 3},
+	// ADR-0026 promised a near-zero arc would be a thrust needing no machinery
+	// of its own. That is true of the hit-check and false of the animation:
+	// melee_swing_angle_offset(0, p) is 0 for every p, and draw_weapon
+	// displaces the pivot along aim_dir for Gun and Magic only - a 0-degree
+	// Spear would sit perfectly still for its whole Follow-through. 18 degrees
+	// moves the head ~27px at an 88px frame, which reads as a jab.
+	.Spear        = {swing_arc_degrees = 18, swing_echo_count = 0},
+	// 140 rather than a rounder 150, and 0.26s rather than 0.24: ADR-0026's
+	// known bound is that interpolating the swept quads linearly chords the
+	// rotation arc, under-covering the outside of a fast turn by
+	// r*(1 - cos(angle/2)). At 150/0.24 the opening frame turns 66.8 degrees
+	// for 13.2px of under-coverage against a 12px body radius - a body centred
+	// on the arc could be missed. At 140/0.26 it is 58.4 degrees and 10.2px,
+	// with the blade's own 20px half-width covering the rest.
+	.Greatsword   = {swing_arc_degrees = 140, swing_echo_count = 3},
 
 	// Magic: the flash is a cast effect rather than a muzzle report, so the
 	// streak burst stays at zero for all three - their family vocabulary is
@@ -521,6 +568,8 @@ weapon_display_name: [Weapon_Kind]string = {
 	.Rifle        = "Rifle",
 	.Dagger       = "Dagger",
 	.Sword        = "Sword",
+	.Spear        = "Spear",
+	.Greatsword   = "Greatsword",
 	.Fire_Wand    = "Fire Wand",
 	.Flame_Staff  = "Flame Staff",
 	.Poison_Staff = "Poison Staff",
@@ -1104,6 +1153,8 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 	.Rifle   = .Ranged,
 	.Dagger  = .Melee,
 	.Sword   = .Melee,
+	.Spear      = .Melee,
+	.Greatsword = .Melee,
 	.Fire_Wand    = .Magic,
 	.Flame_Staff  = .Magic,
 	.Poison_Staff = .Magic,
@@ -1129,7 +1180,7 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 // test_every_weapon_kind_sits_on_exactly_one_family_ladder is for.
 weapon_family_kinds: [Weapon_Family][]Weapon_Kind = {
 	.Ranged = {.Pistol, .SMG, .Shotgun, .Rifle},
-	.Melee  = {.Dagger, .Sword},
+	.Melee  = {.Dagger, .Sword, .Spear, .Greatsword},
 	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff, .Lightning_Staff},
 }
 

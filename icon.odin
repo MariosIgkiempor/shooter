@@ -238,6 +238,8 @@ weapon_icon_reach: [Weapon_Kind]f32 = {
 	.Rifle        = 0.92,
 	.Dagger       = 0.80,
 	.Sword        = 0.92,
+	.Spear        = 0.96,
+	.Greatsword   = 0.94,
 	.Fire_Wand    = 0.87,
 	.Flame_Staff  = 0.86,
 	.Poison_Staff = 0.82,
@@ -312,6 +314,28 @@ icon_sword :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_blade(f, tint, alpha, 0.92, 0.28, 0.32, 0.24, true)
 }
 
+// a long haft with a short head, and its own proc rather than icon_blade's:
+// a spear has no crossguard, no hilt and no pommel, and that absence is what
+// makes it not a sword. The two countable axes Melee gains are haft length and
+// how much of the whole the head is.
+icon_spear :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(WEAPON_MELEE_COLOR, tint, alpha)
+	icon_bar_h(f, 0.04, 0.5, 0.76, 0.06, c) // haft
+	icon_bar_v(f, 0.80, 0.44, 0.12, 0.06, c) // collar where the head meets it
+	icon_tri(f, 0.80, 0.41, 0.96, 0.5, 0.80, 0.59, c) // head
+}
+
+// a double-width blade plus a second crossguard. The width is what reads at a
+// glance; the guard count is what survives ADR-0018's countable rule, since a
+// 0.24 blade and a 0.48 blade are two wedges with nothing beside them to
+// measure against. Same shape as icon_smg: call the shared base, then add the
+// one extra mark.
+icon_greatsword :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(WEAPON_MELEE_COLOR, tint, alpha)
+	icon_blade(f, tint, alpha, 0.94, 0.22, 0.40, 0.48, true)
+	icon_bar_v(f, 0.29, 0.30, 0.40, 0.09, c) // second crossguard
+}
+
 @(private = "file")
 icon_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32, rod_x, rod_len: f32) -> (tip_x: f32) {
 	icon_bar_h(f, rod_x, 0.5, rod_len, 0.12, icon_color(WEAPON_MAGIC_ROD_COLOR, tint, alpha))
@@ -359,6 +383,8 @@ weapon_icons: [Weapon_Kind]Icon_Proc = {
 	.Rifle        = icon_rifle,
 	.Dagger       = icon_dagger,
 	.Sword        = icon_sword,
+	.Spear        = icon_spear,
+	.Greatsword   = icon_greatsword,
 	.Fire_Wand    = icon_fire_wand,
 	.Flame_Staff  = icon_flame_staff,
 	.Poison_Staff = icon_poison_staff,

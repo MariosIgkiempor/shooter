@@ -681,3 +681,18 @@ test_the_bolt_stops_at_the_end_of_its_range :: proc(t: ^testing.T) {
 		500 - game.enemies[0].health,
 	)
 }
+
+@(test)
+test_every_family_ladder_holds_four_weapons :: proc(t: ^testing.T) {
+	// four rungs each, so a Run's weapon choice keeps mattering into its late
+	// Shop rather than running out at Melee's two
+	for family in Weapon_Family {
+		testing.expectf(
+			t,
+			len(weapon_family_kinds[family]) == 4,
+			"%v's ladder holds %v weapons, expected four",
+			family,
+			len(weapon_family_kinds[family]),
+		)
+	}
+}
