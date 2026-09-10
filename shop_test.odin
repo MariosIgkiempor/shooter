@@ -234,12 +234,19 @@ test_try_buy_next_weapon_tier_fails_at_top_tier :: proc(t: ^testing.T) {
 		game.player.weapon = previous_weapon
 	}
 
-	game.player.weapon = weapon_create(.Shotgun) // Ranged's top tier
+	// walked rather than named, so a ladder gaining a rung moves this test with
+	// it instead of quietly leaving it asserting about a mid-ladder weapon
+	top := weapon_family_starter(.Ranged)
+	for next, has_next := weapon_next_tier(top).?; has_next; next, has_next = weapon_next_tier(top).? {
+		top = next
+	}
+
+	game.player.weapon = weapon_create(top)
 	game.player.gold = 999999
 
 	bought := try_buy_next_weapon_tier()
 
-	testing.expect(t, !bought, "a weapon already at the top tier should have no next tier to buy")
+	testing.expectf(t, !bought, "%v is Ranged's top tier and should have no next tier to buy", top)
 	testing.expect(t, game.player.gold == 999999, "a failed (no next tier) purchase should not deduct gold")
 }
 

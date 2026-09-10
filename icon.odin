@@ -235,6 +235,7 @@ weapon_icon_reach: [Weapon_Kind]f32 = {
 	.Pistol       = 0.76,
 	.SMG          = 0.80,
 	.Shotgun      = 0.88,
+	.Rifle        = 0.92,
 	.Dagger       = 0.80,
 	.Sword        = 0.92,
 	.Fire_Wand    = 0.87,
@@ -269,6 +270,16 @@ icon_shotgun :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_bar_h(f, 0.14, 0.34, 0.74, 0.12, c)
 	icon_bar_h(f, 0.14, 0.50, 0.74, 0.12, c)
 	icon_bar_v(f, 0.22, 0.42, 0.30, 0.15, c) // grip
+}
+
+// the longest barrel plus a stock - a bar behind the grip, and the only mark
+// any gun in the catalog puts *behind* its own grip. Countable against the
+// SMG's second vertical and the Shotgun's second barrel, both of which sit
+// forward of theirs.
+icon_rifle :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(WEAPON_GUN_COLOR, tint, alpha)
+	icon_gun_base(f, tint, alpha, 0.16, 0.76, 0.12)
+	icon_bar_h(f, 0.02, 0.56, 0.22, 0.16, c) // stock
 }
 
 // Melee is the one family whose frame is sized by gameplay (`range`, 40-60px)
@@ -345,6 +356,7 @@ weapon_icons: [Weapon_Kind]Icon_Proc = {
 	.Pistol       = icon_pistol,
 	.SMG          = icon_smg,
 	.Shotgun      = icon_shotgun,
+	.Rifle        = icon_rifle,
 	.Dagger       = icon_dagger,
 	.Sword        = icon_sword,
 	.Fire_Wand    = icon_fire_wand,

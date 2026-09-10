@@ -240,3 +240,42 @@ test_a_fireball_still_explodes_on_the_first_body_it_touches :: proc(t: ^testing.
 	)
 	testing.expect(t, len(game.bullets) == 0, "a Fireball that exploded should be spent")
 }
+
+@(test)
+test_the_rifle_is_the_only_weapon_the_catalog_authors_a_pierce_for :: proc(t: ^testing.T) {
+	// pierce_count defaults to 0, which is exactly the behaviour every gun had
+	// before it existed - so this pins that adding the field changed nothing
+	// for the seven weapons that are not Ranged's top tier
+	for kind in Weapon_Kind {
+		gun, is_gun := weapon_presets[kind].variant.(Gun)
+		if !is_gun {
+			continue
+		}
+		expected := kind == .Rifle
+		testing.expectf(
+			t,
+			(gun.pierce_count > 0) == expected,
+			"%v authors pierce_count %v - Ranged's crowd answer is the Rifle's line and nothing else's",
+			kind,
+			gun.pierce_count,
+		)
+	}
+}
+
+@(test)
+test_the_rifle_passes_its_shot_through_a_line_of_bodies :: proc(t: ^testing.T) {
+	// the whole reason the Rifle exists: every other Gun bullet stops on the
+	// first body it touches, which left Ranged with no answer to a crowd
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Rifle)
+	gun := weapon.variant.(Gun)
+	test_body_line(gun.pierce_count + 1, 40, 40, 500)
+	fire_pellets(weapon, gun, TEST_ORIGIN, TEST_AIM)
+	test_fly()
+
+	for enemy, i in game.enemies {
+		testing.expectf(t, enemy.health == 500 - weapon.damage, "body %v should be on the Rifle's line, took %v", i, 500 - enemy.health)
+	}
+}

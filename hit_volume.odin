@@ -55,6 +55,7 @@ weapon_hit_volumes: [Weapon_Kind][]Hit_Poly = {
 	.Pistol       = {},
 	.SMG          = {},
 	.Shotgun      = {},
+	.Rifle        = {},
 	.Fire_Wand    = {},
 	.Flame_Staff  = {},
 	.Poison_Staff = {},

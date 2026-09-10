@@ -8,6 +8,7 @@ Weapon_Kind :: enum {
 	Pistol,
 	SMG,
 	Shotgun,
+	Rifle,
 	// placeholder melee content so try_swing_melee (ticket 03) and the
 	// weapon-family cycle below are actually usable for testing - real tier-ladder
 	// naming/stats for Melee are still content-authoring for a later ticket
@@ -292,6 +293,37 @@ weapon_presets: [Weapon_Kind]Weapon = {
 			bullet_lifetime = 0.6,
 		},
 	},
+	.Rifle = {
+		kind = .Rifle,
+		fire_mode = .Semi_Automatic,
+		// 64 DPS against a single body - *below* the Pistol's 75 and half the
+		// SMG's 120. Against a line of four it is 256, which nothing else in
+		// Ranged can approach. Climbing to it buys a different question, not a
+		// bigger number.
+		damage = 40,
+		action_rate = 1.6,
+		// the heaviest commitment in the catalog, ahead of the Shotgun's 0.26:
+		// a shot you line a crowd up for is a shot you should have to plan
+		windup_fraction = 0.30,
+		// a Gun's Follow-through is draw_weapon's recoil kick and nothing
+		// else, and this is the one gun that should visibly buck
+		follow_through_time = 0.10,
+		variant = Gun {
+			projectile_speed = 700, // fastest on the roster - a line that reads as instant without being one
+			// the floor test_every_clip_size_stack_grows_every_gun_s_clip
+			// allows: at 4, the second Clip_Size stack rounds back to 5 and
+			// buys the player nothing they just paid for
+			clip_size = 5,
+			reload_time = 2.0,
+			pellet_count = 1,
+			spread_angle = 0,
+			bullet_lifetime = 1.2, // 840px of travel
+			// the first and only authored pierce: the first body plus three
+			// more. Ranged was the family structurally locked out of a crowd
+			// (bullet.odin), and this is what unlocks it.
+			pierce_count = 3,
+		},
+	},
 	.Dagger = {
 		kind = .Dagger,
 		fire_mode = .Automatic, // hold to spam quick swings
@@ -429,6 +461,10 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 	.Pistol       = {length = 30, muzzle_streak_count = 3, muzzle_spread_degrees = 16, muzzle_flash_radius = 10},
 	.SMG          = {length = 34, muzzle_streak_count = 4, muzzle_spread_degrees = 22, muzzle_flash_radius = 12},
 	.Shotgun      = {length = 38, muzzle_streak_count = 7, muzzle_spread_degrees = 34, muzzle_flash_radius = 18},
+	// the longest gun and the tightest fan in the catalog (8 degrees against
+	// the Pistol's 16 and the Shotgun's 34), so its muzzle effect reads as a
+	// lance rather than a spray - the family's own shape at its own magnitude
+	.Rifle        = {length = 42, muzzle_streak_count = 5, muzzle_spread_degrees = 8, muzzle_flash_radius = 16},
 
 	// Melee: `length` unused (range supplies it). Only Sword trails echoes.
 	.Dagger       = {swing_arc_degrees = 70, swing_echo_count = 0},
@@ -482,6 +518,7 @@ weapon_display_name: [Weapon_Kind]string = {
 	.Pistol       = "Pistol",
 	.SMG          = "SMG",
 	.Shotgun      = "Shotgun",
+	.Rifle        = "Rifle",
 	.Dagger       = "Dagger",
 	.Sword        = "Sword",
 	.Fire_Wand    = "Fire Wand",
@@ -1064,6 +1101,7 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 	.Pistol  = .Ranged,
 	.SMG     = .Ranged,
 	.Shotgun = .Ranged,
+	.Rifle   = .Ranged,
 	.Dagger  = .Melee,
 	.Sword   = .Melee,
 	.Fire_Wand    = .Magic,
@@ -1090,7 +1128,7 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 // back to tier 0 in weapon_tier_index. That is what
 // test_every_weapon_kind_sits_on_exactly_one_family_ladder is for.
 weapon_family_kinds: [Weapon_Family][]Weapon_Kind = {
-	.Ranged = {.Pistol, .SMG, .Shotgun},
+	.Ranged = {.Pistol, .SMG, .Shotgun, .Rifle},
 	.Melee  = {.Dagger, .Sword},
 	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff, .Lightning_Staff},
 }
