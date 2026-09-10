@@ -782,14 +782,23 @@ pick_offscreen_spawn_point :: proc(
 	half_h := (visible_rect.max_y - visible_rect.min_y) / 2
 	dist := math.hypot(half_w, half_h) + OFFSCREEN_SPAWN_MARGIN
 
+	// tilemap_world_bounds' max is the far edge of the last tile, which belongs
+	// to the *next* cell along: a candidate clamped exactly onto it lands one
+	// cell outside the authored map, where the flood has nothing to say and an
+	// enemy falls back to straight-line chasing. Half a tile in is inside the
+	// last cell whatever the arithmetic rounds to.
+	inset := tilemap.tile_size * 0.5
+	max_x := max(map_bounds.min_x, map_bounds.max_x - inset.x)
+	max_y := max(map_bounds.min_y, map_bounds.max_y - inset.y)
+
 	point: Vec2
 	first_reachable: Vec2
 	found_reachable := false
 	for _ in 0 ..< OFFSCREEN_SPAWN_MAX_RETRIES {
 		angle := rand.float32_range(0, math.TAU)
 		point = player_pos + Vec2{math.cos(angle), math.sin(angle)} * dist
-		point.x = clamp(point.x, map_bounds.min_x, map_bounds.max_x)
-		point.y = clamp(point.y, map_bounds.min_y, map_bounds.max_y)
+		point.x = clamp(point.x, map_bounds.min_x, max_x)
+		point.y = clamp(point.y, map_bounds.min_y, max_y)
 
 		if !flow_field_reaches(field, point) {
 			continue

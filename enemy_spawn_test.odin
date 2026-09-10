@@ -383,3 +383,37 @@ test_pick_offscreen_spawn_point_takes_a_reachable_candidate_over_an_offscreen_on
 		)
 	}
 }
+
+@(test)
+test_pick_offscreen_spawn_point_clamps_inside_the_last_authored_cell :: proc(t: ^testing.T) {
+	// tilemap_world_bounds' max is the far *edge* of the last tile, which is
+	// the near edge of the next cell along. A candidate clamped straight onto
+	// it lands one cell outside the authored map, where the flood has nothing
+	// and every enemy reverts to straight-line chasing. No field here on
+	// purpose: with one, the reachability filter would reject that cell and
+	// hide the clamp behind its own fallback.
+	tilemap := fixture_room({"....", "....", "....", "...."})
+	defer delete(tilemap.tiles)
+
+	min_cell, max_cell, has_tiles := tilemap_cell_bounds(&tilemap)
+	testing.expect(t, has_tiles, "the fixture should have tiles")
+
+	// a rect far larger than the map, so every candidate is thrown well past
+	// its edges and the clamp is what decides where it lands
+	visible_rect := World_Bounds{-1000, 1000, -1000, 1000}
+	map_bounds := tilemap_world_bounds(&tilemap)
+
+	for _ in 0 ..< 100 {
+		point := pick_offscreen_spawn_point({8, 8}, visible_rect, map_bounds, &tilemap, nil)
+		cell := world_to_cell_coord(point, tilemap.tile_size)
+		testing.expectf(
+			t,
+			cell.x >= min_cell.x && cell.x <= max_cell.x && cell.y >= min_cell.y && cell.y <= max_cell.y,
+			"spawn point %v is on cell %v, outside the authored cells %v..%v",
+			point,
+			cell,
+			min_cell,
+			max_cell,
+		)
+	}
+}
