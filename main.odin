@@ -883,18 +883,16 @@ Tilemap :: struct {
 }
 
 // Player renders as a rectangle (ACTOR_SIZE); every enemy renders as a
-// square (see draw_enemy) - colors are a first-pass palette, not separately
-// locked by any ticket.
+// square (see draw_enemy), in its own Kind's authored colour - see the
+// movement-family palette in enemy.odin.
 ACTOR_PLAYER_COLOR :: rl.SKYBLUE
-ENEMY_GROUNDED_COLOR :: rl.RED
-ENEMY_FLOATER_COLOR :: rl.VIOLET
-ENEMY_SWARMER_COLOR :: rl.ORANGE
 
-// enemy square size grows with max_health, capped at ENEMY_SIZE_MAX so a
-// high-health enemy never grows unreasonably huge. Tuned so today's uniform
-// ENEMY_MAX_HEALTH (50) lands at the old fixed ACTOR_SIZE (24) - enemy
-// variety with different max_health per kind will differentiate sizes once
-// it exists.
+// enemy square size grows with the Kind's own max_health, capped at
+// ENEMY_SIZE_MAX so a high-health enemy never grows unreasonably huge.
+// Tuned so a 50-health body (the Grunt, the roster's baseline) lands at the
+// old fixed ACTOR_SIZE of 24, which is what makes size read as toughness:
+// it is derived from health rather than authored, so nothing can be drawn
+// heavier than it actually is.
 ENEMY_SIZE_MIN: f32 = 10.0
 ENEMY_SIZE_MAX: f32 = 48.0
 ENEMY_SIZE_PER_MAX_HEALTH: f32 = 0.28
@@ -911,17 +909,11 @@ enemy_body_size :: proc(max_health: f32) -> f32 {
 // enemy visibly reads as weakened at a glance, not just via a health bar
 ENEMY_MIN_OPACITY: f32 = 0.25
 
-enemy_body_color :: proc(kind: Movement_Style_Kind, health_frac: f32) -> Color {
-	base: Color
-	switch kind {
-	case .Grounded, .Inert:
-		base = ENEMY_GROUNDED_COLOR
-	case .Floater:
-		base = ENEMY_FLOATER_COLOR
-	case .Swarmer:
-		base = ENEMY_SWARMER_COLOR
-	}
-
+// `base` is the Kind's own authored colour (Enemy_Preset.color), which the
+// preset table takes from the movement-family palette - so the hue says
+// which family the body belongs to and the fade says how hurt it is,
+// without either channel having to carry the other's meaning.
+enemy_body_color :: proc(base: Color, health_frac: f32) -> Color {
 	alpha := ENEMY_MIN_OPACITY + (1 - ENEMY_MIN_OPACITY) * clamp(health_frac, 0, 1)
 	return rl.Fade(base, alpha)
 }
@@ -1183,15 +1175,22 @@ draw_game :: proc() {
 		draw_rectangle(dest, ACTOR_PLAYER_COLOR, origin, 0)
 	}
 
-	// every enemy is a square: sized by its max health (enemy_body_size),
-	// continuously squashed in place while moving like the player, and faded
-	// toward ENEMY_MIN_OPACITY as its remaining health drops - replaces the
-	// old per-movement-style shape (rect/circle/triangle) and the separate
-	// enemy Health bar, which the fade now stands in for
+	// every enemy is a square: sized by its Kind's max health
+	// (enemy_body_size), coloured by its Kind's own hue, continuously
+	// squashed in place while moving like the player, and faded toward
+	// ENEMY_MIN_OPACITY as its remaining health drops - replaces the old
+	// per-movement-style shape (rect/circle/triangle) and the separate enemy
+	// Health bar, which the fade now stands in for. Size reads the body's own
+	// stamped ceiling rather than its Kind's current one, so a Kind retuned
+	// mid-Run cannot shrink a body that is still carrying the health it
+	// spawned with - only the next wave picks the change up, exactly as
+	// ADR-0020 (Tunables) describes for everything else copied at spawn.
 	draw_enemy :: proc(enemy: Enemy) {
-		size := enemy_body_size(ENEMY_MAX_HEALTH)
-		health_frac := clamp(enemy.health / ENEMY_MAX_HEALTH, 0, 1)
-		color := enemy_body_color(movement_style_kind(enemy.movement), health_frac)
+		size := enemy_body_size(enemy.max_health)
+		// a Kind authored with no health would divide by zero here; it reads
+		// as a full bar rather than a NaN that propagates into rl.Fade
+		health_frac := enemy.max_health > 0 ? clamp(enemy.health / enemy.max_health, 0, 1) : 1
+		color := enemy_body_color(enemy_presets[enemy.kind].color, health_frac)
 
 		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
 		origin := Vec2{dest.width / 2, dest.height}

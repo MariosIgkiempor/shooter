@@ -9,18 +9,30 @@ import "core:testing"
 // reset/restore it around each test the same way upgrade_test.odin's suite
 // does (see weapon_test.odin's header comment on ODIN_TEST_THREADS=1).
 
+// the payout now lives on the Kind's own Enemy_Preset rather than in a
+// parallel table, so what this pins is that the Pickup is priced from the
+// preset the enemy was stamped from - not from a second table that could
+// drift out of step with it
 @(test)
-test_enemy_gold_value_applies_the_presets_multiplier :: proc(t: ^testing.T) {
-	preset := enemy_gold_presets[.Basic]
-	expected := int(f32(preset.base_gold) * preset.gold_multiplier)
-	testing.expectf(t, enemy_gold_value(.Basic) == expected, "expected %v, got %v", expected, enemy_gold_value(.Basic))
+test_enemy_gold_value_reads_the_kinds_own_preset :: proc(t: ^testing.T) {
+	for kind in Enemy_Kind {
+		testing.expectf(
+			t,
+			enemy_gold_value(kind) == enemy_presets[kind].gold,
+			"%v should be worth its preset's %v Gold, got %v",
+			kind,
+			enemy_presets[kind].gold,
+			enemy_gold_value(kind),
+		)
+	}
 }
 
 @(test)
 test_total_kills_sums_across_every_enemy_kind :: proc(t: ^testing.T) {
 	kills: [Enemy_Kind]int
-	kills[.Basic] = 7
-	testing.expect(t, total_kills(kills) == 7, "total_kills should sum every Enemy_Kind's count")
+	kills[.Grunt] = 7
+	kills[.Mite] = 5
+	testing.expect(t, total_kills(kills) == 12, "total_kills should sum every Enemy_Kind's count")
 }
 
 @(test)

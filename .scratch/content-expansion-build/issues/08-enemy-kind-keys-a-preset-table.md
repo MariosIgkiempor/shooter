@@ -13,11 +13,11 @@ leave the roster mid-repaint.
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A preset table keyed by Kind holds every authored enemy parameter
-- [ ] A composition entry is a Kind and a count; the movement/attack template fields and their save mirrors are deleted
-- [ ] The map generator no longer writes movement/attack literals
-- [ ] The existing Map file is rewritten to the new composition shape and still plays
-- [ ] The editor's composition UI collapses to picking a Kind and a count
-- [ ] Movement-family colour constants are authored to match the families they name
+- [x] A preset table keyed by Kind holds every authored enemy parameter
+- [x] A composition entry is a Kind and a count; the movement/attack template fields and their save mirrors are deleted
+- [x] The map generator no longer writes movement/attack literals
+- [x] The existing Map file is rewritten to the new composition shape and still plays
+- [x] The editor's composition UI collapses to picking a Kind and a count
+- [x] Movement-family colour constants are authored to match the families they name

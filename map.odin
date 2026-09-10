@@ -143,18 +143,17 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 		// the identity strings have done their job. Unlike the ones
 		// *_to_save writes (which point into static type info), these were
 		// allocated by json.unmarshal out of the file, and nothing reads
-		// them again - save_map rebuilds all four from the live unions
-		// before it marshals. Freeing them here keeps a map switch from
+		// them again - save_map rebuilds each of them from the live value
+		// beside it before it marshals. Freeing them here keeps a map switch from
 		// leaking one string per trigger and per composition entry.
 		delete_identity_string(&trigger.condition_save.kind)
 		delete_identity_string(&trigger.mode_save.kind)
 
 		for &entry, entry_index in trigger.composition {
-			movement, movement_ok := movement_style_from_save(entry.movement_template_save)
-			attack, attack_ok := attack_style_from_save(entry.attack_template_save)
-			if !movement_ok || !attack_ok {
+			kind, kind_ok := enum_from_identity_string(Enemy_Kind, entry.kind_save)
+			if !kind_ok {
 				log_error(
-					"Composition entry {} of spawn trigger {} in `{}` names something this build doesn't have",
+					"Composition entry {} of spawn trigger {} in `{}` names an Enemy Kind this build doesn't have",
 					entry_index,
 					trigger_index,
 					path,
@@ -162,10 +161,8 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 				delete_map(map_data)
 				return {}, false
 			}
-			entry.movement_template = movement
-			entry.attack_template = attack
-			delete_identity_string(&entry.movement_template_save.kind)
-			delete_identity_string(&entry.attack_template_save.kind)
+			entry.kind = kind
+			delete_identity_string(&entry.kind_save)
 		}
 	}
 
@@ -180,8 +177,7 @@ save_map :: proc(path: string, map_data: Map) -> bool {
 		trigger.condition_save = spawn_condition_to_save(trigger.condition)
 		trigger.mode_save = spawn_mode_to_save(trigger.mode)
 		for &entry in trigger.composition {
-			entry.movement_template_save = movement_style_to_save(entry.movement_template)
-			entry.attack_template_save = attack_style_to_save(entry.attack_template)
+			entry.kind_save = enum_identity_string(entry.kind)
 		}
 	}
 

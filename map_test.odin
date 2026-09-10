@@ -1,5 +1,6 @@
 package shooter
 
+import "core:fmt"
 import "core:log"
 import "core:os"
 import "core:slice"
@@ -23,7 +24,7 @@ test_clone_map_composition_does_not_alias_the_template :: proc(t: ^testing.T) {
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 0},
 			mode = One_Shot{},
-			composition = slice.clone([]Spawn_Composition_Entry{{movement_template = Grounded{speed = 40}, count = 1}}),
+			composition = slice.clone([]Spawn_Composition_Entry{{kind = .Grunt, count = 1}}),
 		},
 	)
 	defer delete_map(template)
@@ -79,10 +80,7 @@ test_a_saved_map_names_every_discriminant_and_loads_back :: proc(t: ^testing.T) 
 			condition = Kills_Reached{count = 15},
 			mode = Repeating{interval = 3, duration = 120},
 			composition = slice.clone(
-				[]Spawn_Composition_Entry {
-					{movement_template = Floater{speed = 30}, attack_template = Ranged{max_range = 120}, count = 2},
-					{movement_template = Swarmer{speed = 50}, attack_template = nil, count = 1},
-				},
+				[]Spawn_Composition_Entry{{kind = .Gazer, count = 2}, {kind = .Mite, count = 1}},
 			),
 		},
 	)
@@ -91,9 +89,7 @@ test_a_saved_map_names_every_discriminant_and_loads_back :: proc(t: ^testing.T) 
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 10},
 			mode = One_Shot{},
-			composition = slice.clone(
-				[]Spawn_Composition_Entry{{movement_template = Grounded{speed = 40}, attack_template = Melee{attack_damage = 10}, count = 3}},
-			),
+			composition = slice.clone([]Spawn_Composition_Entry{{kind = .Grunt, count = 3}}),
 		},
 	)
 	defer delete_map(template)
@@ -109,21 +105,23 @@ test_a_saved_map_names_every_discriminant_and_loads_back :: proc(t: ^testing.T) 
 		"Repeating",
 		"Time_Elapsed",
 		"One_Shot",
-		"Grounded",
-		"Floater",
-		"Swarmer",
-		"Melee",
-		"Ranged",
-		"Inert",
+		"Gazer",
+		"Mite",
+		"Grunt",
 	}
 	for name in expected_names {
 		testing.expectf(t, strings.contains(text, name), "the saved map should name `{}`", name)
 	}
-	testing.expect(
-		t,
-		!strings.contains(text, `"kind":0`) && !strings.contains(text, `"kind": 0`),
-		"no discriminant should still be written as an ordinal",
-	)
+	ordinal_prone_fields := []string{"kind", "kind_save"}
+	for field in ordinal_prone_fields {
+		testing.expectf(
+			t,
+			!strings.contains(text, fmt.tprintf(`"%s":0`, field)) &&
+			!strings.contains(text, fmt.tprintf(`"%s": 0`, field)),
+			"no `{}` should still be written as an ordinal",
+			field,
+		)
+	}
 
 	loaded, load_ok := load_map(ROUND_TRIP_MAP_PATH)
 	testing.expect(t, load_ok, "the saved map should load back")
@@ -137,21 +135,15 @@ test_a_saved_map_names_every_discriminant_and_loads_back :: proc(t: ^testing.T) 
 	testing.expect(t, repeating_ok, "trigger 0's mode should come back as Repeating")
 	testing.expect_value(t, repeating.interval, f32(3))
 
-	floater, floater_ok := loaded.spawn_triggers[0].composition[0].movement_template.(Floater)
-	testing.expect(t, floater_ok, "entry 0's movement should come back as Floater")
-	testing.expect_value(t, floater.speed, f32(30))
-	_, ranged_ok := loaded.spawn_triggers[0].composition[0].attack_template.(Ranged)
-	testing.expect(t, ranged_ok, "entry 0's attack should come back as Ranged")
-	_, swarmer_ok := loaded.spawn_triggers[0].composition[1].movement_template.(Swarmer)
-	testing.expect(t, swarmer_ok, "entry 1's movement should come back as Swarmer")
-	testing.expect(t, loaded.spawn_triggers[0].composition[1].attack_template == nil, "entry 1 should have no attack")
+	testing.expect_value(t, loaded.spawn_triggers[0].composition[0].kind, Enemy_Kind.Gazer)
+	testing.expect_value(t, loaded.spawn_triggers[0].composition[0].count, 2)
+	testing.expect_value(t, loaded.spawn_triggers[0].composition[1].kind, Enemy_Kind.Mite)
 
 	_, time_ok := loaded.spawn_triggers[1].condition.(Time_Elapsed)
 	testing.expect(t, time_ok, "trigger 1's condition should come back as Time_Elapsed")
 	_, one_shot_ok := loaded.spawn_triggers[1].mode.(One_Shot)
 	testing.expect(t, one_shot_ok, "trigger 1's mode should come back as One_Shot")
-	_, grounded_ok := loaded.spawn_triggers[1].composition[0].movement_template.(Grounded)
-	testing.expect(t, grounded_ok, "entry 0's movement should come back as Grounded")
+	testing.expect_value(t, loaded.spawn_triggers[1].composition[0].kind, Enemy_Kind.Grunt)
 }
 
 // The central case of
@@ -197,16 +189,10 @@ test_the_committed_desert_dungeon_map_still_loads :: proc(t: ^testing.T) {
 	testing.expect(t, kills_ok, "trigger 1 should still be Kills_Reached")
 	testing.expect_value(t, kills.count, 15)
 
-	_, grounded_ok := loaded.spawn_triggers[0].composition[0].movement_template.(Grounded)
-	testing.expect(t, grounded_ok, "trigger 0's first entry should still be Grounded")
-	_, melee_ok := loaded.spawn_triggers[0].composition[0].attack_template.(Melee)
-	testing.expect(t, melee_ok, "trigger 0's first entry should still be Melee")
-	_, floater_ok := loaded.spawn_triggers[1].composition[0].movement_template.(Floater)
-	testing.expect(t, floater_ok, "trigger 1's first entry should still be Floater")
-	_, swarmer_ok := loaded.spawn_triggers[2].composition[0].movement_template.(Swarmer)
-	testing.expect(t, swarmer_ok, "trigger 2's first entry should still be Swarmer")
-	_, ranged_ok := loaded.spawn_triggers[1].composition[1].attack_template.(Ranged)
-	testing.expect(t, ranged_ok, "trigger 1's second entry should still be Ranged")
+	testing.expect_value(t, loaded.spawn_triggers[0].composition[0].kind, Enemy_Kind.Grunt)
+	testing.expect_value(t, loaded.spawn_triggers[0].composition[1].kind, Enemy_Kind.Spitter)
+	testing.expect_value(t, loaded.spawn_triggers[1].composition[0].kind, Enemy_Kind.Wraith)
+	testing.expect_value(t, loaded.spawn_triggers[2].composition[0].kind, Enemy_Kind.Mite)
 }
 
 // -- The Map's own look (ADR-0024) --------------------------------------
