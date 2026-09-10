@@ -54,7 +54,7 @@ weapon_hit_volumes: [Weapon_Kind][]Hit_Poly = {
 	// takes about one body per thrust. ADR-0026's "a head and a haft" is
 	// permission to author several shapes, not a requirement to.
 	.Spear        = {{{0.80, 0.41}, {0.96, 0.50}, {0.80, 0.59}}},
-	.Greatsword   = {{{0.22, 0.26}, {0.94, 0.50}, {0.22, 0.74}}},
+	.Greatsword   = {{{0.22, 0.33}, {0.94, 0.50}, {0.22, 0.67}}},
 
 	// a Gun's reach is its bullet and Magic's is its cone or its cast, so
 	// neither family's silhouette is a hit-check. Spelled out rather than

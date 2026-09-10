@@ -39,8 +39,10 @@ write_save_file :: proc(t: ^testing.T, contents: string) {
 }
 
 // Flame_Staff is the most demanding subject on the roster: Weapon_Kind
-// ordinal 6, Fire_Mode.Automatic ordinal 1, Spell_Kind.Flamethrower ordinal
+// ordinal 9, Fire_Mode.Automatic ordinal 1, Spell_Kind.Flamethrower ordinal
 // 1 - all three nonzero, so a silent collapse to ordinal zero is visible.
+// (It was ordinal 6 until the ladders grew to four rungs each, which is
+// precisely the reordering ADR-0028 exists to survive.)
 @(test)
 test_save_game_round_trips_the_weapon_by_name :: proc(t: ^testing.T) {
 	snapshot, existed := snapshot_save_file()

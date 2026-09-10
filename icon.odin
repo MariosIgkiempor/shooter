@@ -223,7 +223,7 @@ icon_sector :: proc(f: Icon_Frame, cx, cy, radius, start_deg, end_deg: f32, colo
 
 // -- weapon glyphs -----------------------------------------------------------
 //
-// All eight point along +u and share one vocabulary: a rod down the middle,
+// All twelve point along +u and share one vocabulary: a rod down the middle,
 // a grip hanging below its back, and per-kind countable additions. These are
 // the glyphs draw_weapon renders in the world (through icon_frame_pivot) as
 // well as the ones the Shop and Run Start screens render in a box.
@@ -332,8 +332,13 @@ icon_spear :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 // one extra mark.
 icon_greatsword :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	c := icon_color(WEAPON_MELEE_COLOR, tint, alpha)
-	icon_blade(f, tint, alpha, 0.94, 0.22, 0.40, 0.48, true)
-	icon_bar_v(f, 0.29, 0.30, 0.40, 0.09, c) // second crossguard
+	// 0.34 across against the Sword's 0.24: broad enough to read as the heavy
+	// one, and no broader - at half the box it stops being a blade and becomes
+	// a wedge filling its own frame.
+	icon_blade(f, tint, alpha, 0.94, 0.22, 0.46, 0.34, true)
+	// the second crossguard sits *behind* the first, on the hilt, where it is
+	// actually visible - drawn ahead of it, the blade simply swallows it
+	icon_bar_v(f, 0.14, 0.5 - 0.34 / 2, 0.34, 0.09, c)
 }
 
 @(private = "file")
@@ -379,8 +384,12 @@ icon_poison_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 icon_lightning_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	c := icon_color(ICON_LIGHTNING_COLOR, tint, alpha)
 	tip := icon_staff(f, tint, alpha, 0.06, 0.62)
-	icon_tri(f, tip, 0.50, 0.86, 0.36, 0.90, 0.50, c)
-	icon_tri(f, tip, 0.50, 0.86, 0.64, 0.90, 0.50, c)
+	// two facets meeting at a point, widest just past the rod and converging
+	// on the reach - a spearpoint of light rather than a chevron. Authored as
+	// two triangles rather than one so the two halves read as facets of a cut
+	// stone, which is what makes it a tip rather than a blade.
+	icon_tri(f, tip, 0.50, tip + 0.06, 0.34, 0.90, 0.50, c)
+	icon_tri(f, tip, 0.50, tip + 0.06, 0.66, 0.90, 0.50, c)
 }
 
 weapon_icons: [Weapon_Kind]Icon_Proc = {

@@ -452,7 +452,7 @@ test_the_widest_swing_still_catches_a_body_at_its_outer_edge :: proc(t: ^testing
 	// one that says the far end of that sweep is real - a body 70 degrees off
 	// the aim line, out near the tip, is inside what this weapon damages.
 	//
-	// It does not pin ADR-0026's chord bound: at this blade's 20px half-width
+	// It does not pin ADR-0026's chord bound: at this blade's ~15px half-width
 	// against a 12px body the swept quads cover the arc's outside with room to
 	// spare, and the tunnelling case itself is already held by
 	// test_a_swing_catches_a_body_it_crosses_between_two_frames. The arithmetic

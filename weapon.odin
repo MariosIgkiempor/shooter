@@ -16,9 +16,10 @@ Weapon_Kind :: enum {
 	Sword,
 	Spear,
 	Greatsword,
-	// Magic tier ladder (ticket 11): each tier is a distinct spell, mirroring
-	// Ranged's Pistol/SMG/Shotgun being three distinct weapons rather than
-	// numeric upgrades of one
+	// Magic's tier ladder: each rung is a distinct spell rather than a numeric
+	// upgrade of one, mirroring Ranged's four distinct weapons. Three of them
+	// place an area; the fourth resolves along a line and places nothing,
+	// which is the whole of what makes it Magic's answer to a single body.
 	Fire_Wand,
 	Flame_Staff,
 	Poison_Staff,
@@ -368,7 +369,8 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		// 49.5 DPS - the lowest on the roster, and lower than the cheaper
 		// Spear. Melee's crowd answer was never throughput: it already sweeps
 		// every body in reach with no cap, so what it buys is *space* - a 140
-		// degree arc at 80px with a blade 20px across.
+		// degree arc at 80px with a blade ~29px across, against the Sword's
+		// 110 degrees at 60px and ~16px.
 		damage = 55,
 		action_rate = 0.9,
 		windup_fraction = 0.42, // 0.47s of real telegraph at the base rate
@@ -447,7 +449,7 @@ WEAPON_MAGIC_ORB_COLOR :: rl.Color{255, 205, 90, 255}
 
 // -- per-kind visual identity (ADR-0018) ------------------------------------
 //
-// The eight weapons are eight distinct silhouettes, in the world as well as
+// The twelve weapons are twelve distinct silhouettes, in the world as well as
 // in the UI, and their effects share the family's *shapes* while varying in
 // *magnitude* per kind - a Pistol's muzzle flash is smaller than a
 // Shotgun's. The geometry itself lives in icon.odin (weapon_icons); this
@@ -512,9 +514,10 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 	// known bound is that interpolating the swept quads linearly chords the
 	// rotation arc, under-covering the outside of a fast turn by
 	// r*(1 - cos(angle/2)). At 150/0.24 the opening frame turns 66.8 degrees
-	// for 13.2px of under-coverage against a 12px body radius - a body centred
-	// on the arc could be missed. At 140/0.26 it is 58.4 degrees and 10.2px,
-	// with the blade's own 20px half-width covering the rest.
+	// for 13.2px of under-coverage at the tip - past a 12px body radius, so a
+	// body centred on the arc could be missed outright. At 140/0.26 it is
+	// 58.4 degrees and 10.2px, inside that radius with the blade's own ~15px
+	// half-width to spare.
 	.Greatsword   = {swing_arc_degrees = 140, swing_echo_count = 3},
 
 	// Magic: the flash is a cast effect rather than a muzzle report, so the
