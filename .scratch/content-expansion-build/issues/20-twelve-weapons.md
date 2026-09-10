@@ -110,6 +110,43 @@ against a 220-health boss. The arithmetic is recorded on the preset for issue
 whole roster rather than against this one weapon - at 10 Damage stacks nothing
 in the catalog leaves a 220-health boss alive for three phases.
 
+**Two deviations from the design ticket's letter, both deliberate.**
+
+- **The Greatsword's countable axis is a second crossguard, not "blade count".**
+  Issue 08 named Melee's new axes as "haft length and blade count - the Spear a
+  long haft with a short head, the Greatsword a **double-width blade**". The
+  Spear's haft is as specified. The Greatsword's width alone is precisely the
+  proportional distinction ADR-0018 forbids ("a 20px rod and a 24px rod are
+  indistinguishable with nothing alongside them"), so the countable mark is two
+  crossguards against the Sword's one, with the blade at 0.34 against 0.24 as
+  the thing that reads at a glance. Double width was tried first and produced a
+  wedge filling its own frame, not a blade.
+- **Magic's `range` tuning bound widened from 150 to 300 for both spells**, not
+  just the bolt - the registry's rule is one range per *field*, not per
+  field-per-kind, so the Flamethrower's slider got coarser. It is the only
+  change in the branch that reaches an untouched weapon.
+
+**Found in review.** `segment_first_wall_hit` marched `travelled <= length` and
+never sampled the segment's far end. The half-tile stride already covers any
+wall the line passes *through*; what escaped was a wall the line merely ends
+*inside* - the last sample can sit ~11px short of a tile edge with the endpoint
+1px past it, and a Range stack moves the bolt's length off every step multiple,
+so it was reachable the moment a player bought one. The far end is now tested
+separately, pinned by a test that fails against the old loop.
+
+Also corrected in review: CONTEXT.md's **Windup** entry enumerates the weapons
+that track aim live "(Gun, Melee_Weapon, Fireball, Flamethrower)", and
+`Lightning_Bolt` belongs in that list - leaving it out read as ADR-0005
+lock-at-Trigger behaviour, which is not what `cast_lightning_bolt` does. That
+is a correction to a now-false existing entry rather than one of the new
+entries ruled out below. ADR-0020's "two constants cannot be Tunables" is
+likewise now three.
+
+**Left standing, flagged not fixed:** ADR-0026's claim that a near-zero arc
+needs no machinery of its own, and its 50-90px Greatsword tunnelling figure
+which the preset's own chord arithmetic supersedes. The branch's precedent is
+to amend (ADR-0008 carries one), so this is the obvious follow-up.
+
 **Out of scope by decision:** CONTEXT.md glossary entries for Pierce and Bolt,
 and an ADR-0026 amendment recording the second id space. ADR-0008's amendment
 and CONTEXT.md's Weapon tier ladder entry already carried the tier-0-only rule,

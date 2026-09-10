@@ -35,36 +35,12 @@ test_body_line :: proc(count: int, first_x, spacing, health: f32) {
 	}
 }
 
-@(test)
-test_a_shot_with_no_pierce_still_stops_at_the_first_body :: proc(t: ^testing.T) {
-	// today's behaviour, pinned before pierce exists so it stays true after:
-	// pierce_count defaults to 0 and 0 means "stop where you land"
-	test_reset_bullet_world()
-	defer test_reset_bullet_world()
-
-	test_body_line(2, 40, 40, 500)
-	test_fire(0)
-
-	for _ in 0 ..< 60 {
-		update_bullets(TEST_FRAME)
-	}
-
-	testing.expect_value(t, game.enemies[0].health, 500 - 25)
-	testing.expectf(
-		t,
-		game.enemies[1].health == 500,
-		"a shot with no pierce should never reach the second body, but it took %v damage",
-		500 - game.enemies[1].health,
-	)
-	testing.expect(t, len(game.bullets) == 0, "a shot that landed should be spent")
-}
-
 // a single shot from TEST_ORIGIN along TEST_AIM, through the same spawn path
 // every weapon uses so it carries a real shot identity. Spawning a bare
 // Bullet{} instead would leave id 0 - the "no shot has hit me" value every
 // fresh body already carries - and the shot would pass through the world
 // touching nothing.
-test_fire :: proc(pierces: int, damage: f32 = 25) {
+test_fire_one_shot :: proc(pierces: int, damage: f32 = 25) {
 	spawn_bullet(
 		Bullet {
 			position = TEST_ORIGIN,
@@ -76,10 +52,31 @@ test_fire :: proc(pierces: int, damage: f32 = 25) {
 	)
 }
 
-test_fly :: proc(frames := 60) {
+test_advance_bullets :: proc(frames := 60) {
 	for _ in 0 ..< frames {
 		update_bullets(TEST_FRAME)
 	}
+}
+
+@(test)
+test_a_shot_with_no_pierce_still_stops_at_the_first_body :: proc(t: ^testing.T) {
+	// today's behaviour, pinned before pierce exists so it stays true after:
+	// pierce_count defaults to 0 and 0 means "stop where you land"
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	test_body_line(2, 40, 40, 500)
+	test_fire_one_shot(0)
+	test_advance_bullets()
+
+	testing.expect_value(t, game.enemies[0].health, 500 - 25)
+	testing.expectf(
+		t,
+		game.enemies[1].health == 500,
+		"a shot with no pierce should never reach the second body, but it took %v damage",
+		500 - game.enemies[1].health,
+	)
+	testing.expect(t, len(game.bullets) == 0, "a shot that landed should be spent")
 }
 
 @(test)
@@ -91,8 +88,8 @@ test_a_piercing_shot_damages_a_body_at_most_once :: proc(t: ^testing.T) {
 	defer test_reset_bullet_world()
 
 	test_body_line(1, 40, 40, 500)
-	test_fire(3)
-	test_fly()
+	test_fire_one_shot(3)
+	test_advance_bullets()
 
 	testing.expectf(
 		t,
@@ -108,8 +105,8 @@ test_a_piercing_shot_passes_through_as_many_bodies_as_it_is_authored_for :: proc
 	defer test_reset_bullet_world()
 
 	test_body_line(4, 40, 40, 500)
-	test_fire(3) // the first body plus three more
-	test_fly()
+	test_fire_one_shot(3) // the first body plus three more
+	test_advance_bullets()
 
 	for enemy, i in game.enemies {
 		testing.expectf(t, enemy.health == 500 - 25, "body %v should have been passed through, took %v", i, 500 - enemy.health)
@@ -122,8 +119,8 @@ test_a_piercing_shot_dies_on_the_body_past_its_last_pierce :: proc(t: ^testing.T
 	defer test_reset_bullet_world()
 
 	test_body_line(5, 40, 40, 500)
-	test_fire(3)
-	test_fly()
+	test_fire_one_shot(3)
+	test_advance_bullets()
 
 	for i in 0 ..< 4 {
 		testing.expectf(t, game.enemies[i].health == 500 - 25, "body %v is within the shot's pierce budget", i)
@@ -149,8 +146,8 @@ test_a_body_swapped_into_a_dead_ones_slot_is_not_skipped_by_a_piercing_shot :: p
 
 	append(&game.enemies, test_enemy_centered_at(Vec2{40, 0}, 25)) // dies to one hit
 	append(&game.enemies, test_enemy_centered_at(Vec2{120, 0}, 500))
-	test_fire(3)
-	test_fly()
+	test_fire_one_shot(3)
+	test_advance_bullets()
 
 	testing.expect(t, len(game.enemies) == 1, "sanity check: the front body should have died and been removed")
 	testing.expectf(
@@ -188,9 +185,9 @@ test_a_shot_identity_is_never_reused_across_two_shots :: proc(t: ^testing.T) {
 	test_reset_bullet_world()
 	defer test_reset_bullet_world()
 
-	test_fire(0)
+	test_fire_one_shot(0)
 	first := game.bullets[0].id
-	test_fire(0)
+	test_fire_one_shot(0)
 
 	testing.expect(t, game.bullets[1].id != first, "two shots should never share an identity - the counter is monotonic")
 }
@@ -229,7 +226,7 @@ test_a_fireball_still_explodes_on_the_first_body_it_touches :: proc(t: ^testing.
 			pierces_left = 3, // even authored one, an explosion ends the shot
 		},
 	)
-	test_fly()
+	test_advance_bullets()
 
 	testing.expect(t, game.enemies[0].health == 500 - 35, "the body it landed on should take the blast")
 	testing.expectf(
@@ -273,9 +270,60 @@ test_the_rifle_passes_its_shot_through_a_line_of_bodies :: proc(t: ^testing.T) {
 	gun := weapon.variant.(Gun)
 	test_body_line(gun.pierce_count + 1, 40, 40, 500)
 	fire_pellets(weapon, gun, TEST_ORIGIN, TEST_AIM)
-	test_fly()
+	test_advance_bullets()
 
 	for enemy, i in game.enemies {
 		testing.expectf(t, enemy.health == 500 - weapon.damage, "body %v should be on the Rifle's line, took %v", i, 500 - enemy.health)
 	}
+}
+
+// puts one collidable tile at `coords`, on a tilemap sized so the caller can
+// place it in px. Restores nothing - callers clear game.current_map.tilemap.
+test_wall_at :: proc(coords: Vec2i, tile_size: Vec2 = {32, 32}) {
+	game.current_map.tilemap.tile_size = tile_size
+	append(&game.current_map.tilemap.tiles, Tile{world_coords = coords, collides = true})
+}
+
+@(test)
+test_a_bolt_is_stopped_by_a_wall_in_its_last_partial_step :: proc(t: ^testing.T) {
+	// segment_first_wall_hit marches in fixed steps, and a segment is almost
+	// never a whole number of them. The half-tile stride covers any wall the
+	// line passes *through*, but not one it merely ends *inside*: here the last
+	// sample lands 11px short of the tile's edge and the endpoint is 1px past
+	// it, so without testing the far end separately the bolt draws into a wall.
+	// A Range stack moves the bolt's length off every step multiple, so this is
+	// reachable the moment a player buys one.
+	test_reset_bullet_world()
+	clear(&game.current_map.tilemap.tiles)
+	defer {
+		test_reset_bullet_world()
+		clear(&game.current_map.tilemap.tiles)
+	}
+
+	// tile 3 spans x in [96, 128)
+	test_wall_at({3, 0}, {32, 32})
+	from := Vec2{5, 16} // offset so the 16px stride never lands on the tile edge
+	to := Vec2{97, 16} // 92px of line: strides reach x=85, and 97 is inside the wall
+
+	point, blocked := segment_first_wall_hit(from, to)
+
+	testing.expect(t, blocked, "a segment ending inside a wall should be stopped by it")
+	testing.expect_value(t, point, to)
+}
+
+@(test)
+test_a_bolt_reports_no_wall_on_a_clear_line :: proc(t: ^testing.T) {
+	test_reset_bullet_world()
+	clear(&game.current_map.tilemap.tiles)
+	defer {
+		test_reset_bullet_world()
+		clear(&game.current_map.tilemap.tiles)
+	}
+
+	test_wall_at({8, 0})
+	to := Vec2{100, 16}
+	point, blocked := segment_first_wall_hit(Vec2{0, 16}, to)
+
+	testing.expect(t, !blocked, "a segment that reaches no wall should report none")
+	testing.expect_value(t, point, to)
 }

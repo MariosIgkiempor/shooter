@@ -418,6 +418,12 @@ register_tunables :: proc() {
 // allocation is fine here.
 @(private = "file")
 register_weapon_tunables :: proc() {
+	// Magic's two ranged spells share one bound rather than two literals that
+	// can drift apart, per this registry's rule that a range is authored per
+	// *field* rather than per field-per-kind - a Flamethrower's cone and a
+	// Lightning Bolt's line are the same quantity, px from the caster.
+	MAGIC_RANGE_MAX :: f32(300)
+
 	for kind in Weapon_Kind {
 		group := weapon_tuning_group[kind]
 		name := tuning_slug_part(fmt.tprintf("{}", kind))
@@ -470,15 +476,11 @@ register_weapon_tunables :: proc() {
 				register_tunable(group, slug(name, "projectile_speed"), "Projectile Speed", &v.projectile_speed, 0, 800)
 				register_tunable(group, slug(name, "bullet_lifetime"), "Bullet Lifetime", &v.bullet_lifetime, 0.1, 5)
 				register_tunable(group, slug(name, "explosion_radius"), "Explosion Radius", &v.explosion_radius, 0, 120)
-			// The two spells carrying a `range` share one bound, per this
-			// registry's rule that a range is authored per *field* rather than
-			// per field-per-kind - so the Flamethrower's 50 and the Lightning
-			// Bolt's 240 sit on one slider that reaches both.
 			case .Flamethrower:
-				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 300)
+				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, MAGIC_RANGE_MAX)
 				register_tunable(group, slug(name, "arc_degrees"), "Arc Degrees", &v.arc_degrees, 0, 360)
 			case .Lightning_Bolt:
-				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 300)
+				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, MAGIC_RANGE_MAX)
 			case .Poison_Cloud:
 				register_tunable(group, slug(name, "cast_range"), "Cast Range", &v.cast_range, 0, 250)
 				register_tunable(group, slug(name, "cloud_radius"), "Cloud Radius", &v.cloud_radius, 0, 120)

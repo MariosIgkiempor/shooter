@@ -152,6 +152,12 @@ bullet_hits_wall :: proc(position: Vec2) -> bool {
 // Marched at half a tile so nothing tile-sized is stepped over, with a floor
 // for the case where no Map is loaded and tile_size is 0 - which is every test
 // that does not build one.
+//
+// The far end is tested separately rather than left to the march: a segment is
+// almost never a whole number of steps, so the last partial one would go
+// unsampled and a wall inside it would be missed. That is not a rounding
+// curiosity - a Range stack moves the bolt's length off any step multiple, so
+// the gap would open the moment the player bought one.
 segment_first_wall_hit :: proc(from, to: Vec2) -> (point: Vec2, blocked: bool) {
 	offset := to - from
 	length := linalg.length(offset)
@@ -163,11 +169,15 @@ segment_first_wall_hit :: proc(from, to: Vec2) -> (point: Vec2, blocked: bool) {
 	step := max(min(tile.x, tile.y) / 2, BULLET_RADIUS * 2)
 	direction := offset / length
 
-	for travelled: f32 = 0; travelled <= length; travelled += step {
+	for travelled: f32 = 0; travelled < length; travelled += step {
 		p := from + direction * travelled
 		if bullet_hits_wall(p) {
 			return p, true
 		}
+	}
+
+	if bullet_hits_wall(to) {
+		return to, true
 	}
 
 	return to, false
