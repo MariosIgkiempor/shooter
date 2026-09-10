@@ -96,12 +96,13 @@ test_a_slug_becomes_a_path_under_the_directory_the_bake_globs :: proc(t: ^testin
 
 // -- the New Map stub ------------------------------------------------------
 
-// a stub has to be a *valid* Map from its first frame, because the very next
-// thing that happens to it is a Save: opaque colours (ADR-0024 calls a
-// zero-valued colour invalid), a rung on the ladder (ADR-0022 starts at 1),
-// and an objective that can be met (ADR-0017)
+// a stub carries every property an author would otherwise have to remember to
+// set before drawing: opaque colours (ADR-0024 calls a zero-valued colour
+// invalid), a rung on the ladder (ADR-0022 starts at 1), and an objective a
+// Run can be timed out against (ADR-0017). What it does *not* carry is
+// covered by the test below.
 @(test)
-test_a_new_map_stub_is_valid_before_anything_is_drawn_on_it :: proc(t: ^testing.T) {
+test_a_new_map_stub_carries_a_theme_a_rung_and_an_objective :: proc(t: ^testing.T) {
 	stub := new_map_stub("New Map", {16, 16})
 	defer delete_map(stub)
 
@@ -118,6 +119,20 @@ test_a_new_map_stub_is_valid_before_anything_is_drawn_on_it :: proc(t: ^testing.
 	floor_sum := int(stub.floor_color.r) + int(stub.floor_color.g) + int(stub.floor_color.b)
 	wall_sum := int(stub.wall_color.r) + int(stub.wall_color.g) + int(stub.wall_color.b)
 	testing.expect(t, floor_sum < wall_sum, "a stub's floor should be darker than its wall")
+}
+
+// a stub is emptiness with a palette, not a Map: CONTEXT.md's validity is one
+// connected walkable region, a player start on floor and a reachable
+// off-screen spawn ring, and a Map with no tiles has none of the three.
+// Asserted rather than assumed, because the stub's colours and objective make
+// it look finished and the Save button next to it does not care - ticket 15's
+// sweep over the baked table is what catches one that reached a build.
+@(test)
+test_a_new_map_stub_has_no_floor_until_one_is_drawn_on_it :: proc(t: ^testing.T) {
+	stub := new_map_stub("New Map", {16, 16})
+	defer delete_map(stub)
+
+	testing.expect_value(t, len(stub.tilemap.tiles), 0)
 }
 
 // -- placing the player start ---------------------------------------------

@@ -38,11 +38,20 @@ means tile and collider edits show up in the world for the first time.
 **Save is a save-as for a Map the editor created**, deriving
 `data/maps/<slug>.json` from the name (`"Cold Hall"` -> `cold_hall.json` ->
 `.Cold_Hall`, the round trip `map_builder`'s `strings.to_ada_case` closes). It
-refuses to write where a file already exists: an authored place is only
-recoverable by redrawing it (ADR-0021), and renaming is one field away. The
-bake round trip ADR-0021 calls inherent is unchanged - a new Map has no
-`Map_Name` case, and so appears in neither the switcher nor Map Selection,
-until the next `./build.sh`.
+refuses to write where a file already exists - an authored place is only
+recoverable by redrawing it (ADR-0021), and renaming is one field away - and
+says so in the panel rather than only in the log. The bake round trip ADR-0021
+calls inherent is unchanged: a new Map has no `Map_Name` case, and so appears
+in neither the switcher nor Map Selection, until the next `./build.sh`.
+
+**Deviates from ADR-0021 in one detail, deliberately.** The ADR scopes "a 'New
+map' button *writing a stub file*"; `+ New Map` writes nothing, and the file
+appears on the first Save. Writing on the click would mean naming the file
+before the Map has a name, which is the one thing the author is about to do,
+and would leave a `new_map.json` behind every time the button is pressed by
+mistake - each of which the next bake would turn into a `Map_Name` case. The
+ADR's substance (the button, and `name`/`player_start`/`time_limit`/
+`victory_multiplier` on this panel) stands; only when the file lands moved.
 
 **Renaming an already-saved Map changes the name, not the file.** `Save` keeps
 writing to the path the Map was opened from, so the `Map_Name` case keeps the
@@ -51,6 +60,12 @@ next to the name so the two are never silently apart.
 
 Not covered here, and deliberately: the ambient set is authorable data on the
 Map (ADR-0024) but has no draw layers yet (ticket 22), so it has no control on
-this panel. Ticket 15's validity sweep is what will catch a Map authored with
-an unreachable start or a floor lighter than its wall - `new_map_stub` starts
-valid on both counts, but nothing stops the sliders leaving it otherwise.
+this panel.
+
+**A stub is not yet a valid Map**, in CONTEXT.md's sense - it has no tiles, so
+it has no connected walkable region and its player start is not on floor. It
+carries a theme, a rung and an objective, which is what stops those being
+forgotten; drawing the place is still the next thing that happens, and nothing
+here stops a stub being saved before it is. Ticket 15's sweep over the baked
+table is what catches one that reached a build, and both facts are asserted in
+`editor_test.odin` so that ticket inherits them stated rather than assumed.

@@ -358,19 +358,14 @@ update_game :: proc() {
 			// currently being played (never a plain value copy - see
 			// clone_map's aliasing note), so by default you're editing the
 			// map you're currently playing unless you explicitly switch.
-			// free the previous editing_map's backing arrays first, or
-			// repeated F1 toggles leak one copy of the old map each time.
-			delete_map(game.editing_map)
-			game.editing_map = clone_map(game.current_map)
+			// open_editing_map does the rest of the ritual - the free of the
+			// previous editing_map, the name adopted into the editor's own
+			// buffer so Map mode can type into it, and the per-Map ui state.
+			editing_path: string
 			if name, ok := enum_from_identity_string(Map_Name, game.active_map_pointer); ok {
-				game.editing_map_path = map_path_for_name(name)
+				editing_path = map_path_for_name(name)
 			}
-			// the name becomes a view into the editor's own buffer, which is
-			// what lets Map mode's text field edit it (editor.odin)
-			adopt_editing_map_name()
-			clear(&editor.expanded_spawn_triggers)
-			editor.placing_player_start = false
-			editor.name_field_focused = false
+			open_editing_map(clone_map(game.current_map), editing_path)
 			game.program_mode = .Editing
 		case .Editing:
 			game.program_mode = .Playing
