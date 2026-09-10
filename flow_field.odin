@@ -184,6 +184,15 @@ flow_field_index :: proc(field: ^Flow_Field, cell: Vec2i) -> (index: int, ok: bo
 	return int(local.y) * int(field.size.x) + int(local.x), true
 }
 
+// flow_field_index's inverse, for the one direction that has to walk `cells`
+// rather than ask about a cell it already has: which coord row-major slot
+// `index` holds.
+@(private = "file")
+flow_field_coord :: proc(field: ^Flow_Field, index: int) -> Vec2i {
+	width := int(field.size.x)
+	return field.origin + {i32(index % width), i32(index / width)}
+}
+
 flow_field_cell :: proc(field: ^Flow_Field, cell: Vec2i) -> (Flow_Cell, bool) {
 	index, ok := flow_field_index(field, cell)
 	if !ok {
@@ -606,6 +615,87 @@ flow_field_contour_target :: proc(
 		return {}, false
 	}
 	return cell_center_to_world(best_cell, field.tile_size), true
+}
+
+// whether the field has any answers to give. nil is accepted because the spawn
+// path asks these questions of a body it may have no field for at all - a
+// Floater, which flies over the geometry that would strand anything else. An
+// unusable field (degenerate Map, or none built yet) and a flood that filled
+// nothing (the player is standing inside a wall - see ticket 04) are the other
+// two ways to have no opinion, and all three must read as "no opinion" rather
+// than "nothing is reachable": a filter that vetoes every cell on the map
+// leaves its caller worse off than no filter at all.
+@(private = "file")
+flow_field_has_answers :: proc(field: ^Flow_Field) -> bool {
+	return field != nil && flow_field_is_usable(field) && field.filled_count > 0
+}
+
+// whether a body standing at `world_pos` can get to the player. Because the
+// flood runs outward from the player, that is the same question as "can the
+// player get to it" - which is what ticket 07 tests a spawn candidate against.
+// A field with no answers reaches everywhere; see flow_field_has_answers.
+//
+// Not simply "is this cell filled". The flood only ever *leaves* the inflation
+// envelope, so at the shipped radius of 1 a cell merely adjacent to a wall
+// carries no distance - 741 of Desert Dungeon's 2239 standable cells, measured
+// by ticket 04 - while standing in open ground a body walks out of without
+// noticing. Reading those as unreachable would reject a third of the map for
+// the very styles this test exists to protect.
+//
+// So the question asked is the one steering asks: flow_field_step_target walks
+// a body on an unfilled cell out by the best-valued of its eight neighbours,
+// and a cell with such a neighbour is a cell with somewhere to go. A sealed
+// pocket has none - its neighbours are its own cells and the walls around
+// them - so criterion 1 is unaffected.
+flow_field_reaches :: proc(field: ^Flow_Field, world_pos: Vec2) -> bool {
+	if !flow_field_has_answers(field) {
+		return true
+	}
+
+	cell_coord := world_to_cell_coord(world_pos, field.tile_size)
+	here, in_bounds := flow_field_cell(field, cell_coord)
+	if !in_bounds || here.collides {
+		return false
+	}
+	if here.distance != FLOW_UNREACHED {
+		return true
+	}
+
+	_, has_filled_neighbour := flow_field_extreme_neighbour(field, cell_coord, .Nearest)
+	return has_filled_neighbour
+}
+
+// the filled cell whose centre lies nearest `world_pos` - the answer to "I
+// must put a body somewhere the player can actually reach, and I have run out
+// of candidates of my own". Linear in the field's cells, which is why it is a
+// last resort for a caller whose own retries all failed rather than a
+// placement strategy in its own right.
+//
+// ok=false where the field has no answers - there is genuinely no reachable
+// cell to name then, and the caller must fall back to whatever it did before
+// the field existed.
+flow_field_nearest_reachable :: proc(field: ^Flow_Field, world_pos: Vec2) -> (target: Vec2, ok: bool) {
+	if !flow_field_has_answers(field) {
+		return {}, false
+	}
+
+	best_distance := max(f32)
+	for cell, index in field.cells {
+		if cell.distance == FLOW_UNREACHED {
+			continue
+		}
+
+		center := cell_center_to_world(flow_field_coord(field, index), field.tile_size)
+		// squared, since only the ordering is used
+		offset := center - world_pos
+		distance := offset.x * offset.x + offset.y * offset.y
+		if distance < best_distance {
+			best_distance = distance
+			target = center
+			ok = true
+		}
+	}
+	return target, ok
 }
 
 // which end of the distance ramp a neighbour scan wants: closing on the

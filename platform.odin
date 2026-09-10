@@ -42,3 +42,9 @@ is_mouse_button_pressed :: proc(button: MouseButton) -> bool {
 get_mouse_wheel_move :: proc() -> Vec2 {
 	return rl.GetMouseWheelMoveV()
 }
+// the next character raylib has queued from the keyboard, or 0 when the queue
+// is empty. Layout-aware (a shifted 2 arrives as '@'), unlike is_key_pressed -
+// which is why the editor's text field reads this rather than key codes.
+get_char_pressed :: proc() -> rune {
+	return rl.GetCharPressed()
+}

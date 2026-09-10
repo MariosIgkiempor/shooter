@@ -568,6 +568,7 @@ register_enemy_tunables :: proc() {
 		)
 	}
 	register_tunable(.Enemy_Steering, "enemy.separation.grid_cell_size", "Grid Cell Size", &SEPARATION_GRID_CELL_SIZE, 4, 200)
+	register_tunable(.Enemy_Steering, "enemy.separation.max_neighbours", "Max Neighbours", &SEPARATION_MAX_NEIGHBOURS, 1, 32)
 
 	register_tunable(.Enemy_AI, "enemy.swarmer.fallback_surround_radius", "Swarmer Fallback Radius", &SWARMER_FALLBACK_SURROUND_RADIUS, 0, 300)
 	register_tunable(.Enemy_AI, "enemy.swarmer.drift_speed_scale", "Swarmer Drift Speed", &SWARMER_DRIFT_SPEED_SCALE, 0, 1)

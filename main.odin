@@ -358,14 +358,14 @@ update_game :: proc() {
 			// currently being played (never a plain value copy - see
 			// clone_map's aliasing note), so by default you're editing the
 			// map you're currently playing unless you explicitly switch.
-			// free the previous editing_map's backing arrays first, or
-			// repeated F1 toggles leak one copy of the old map each time.
-			delete_map(game.editing_map)
-			game.editing_map = clone_map(game.current_map)
+			// open_editing_map does the rest of the ritual - the free of the
+			// previous editing_map, the name adopted into the editor's own
+			// buffer so Map mode can type into it, and the per-Map ui state.
+			editing_path: string
 			if name, ok := enum_from_identity_string(Map_Name, game.active_map_pointer); ok {
-				game.editing_map_path = map_path_for_name(name)
+				editing_path = map_path_for_name(name)
 			}
-			clear(&editor.expanded_spawn_triggers)
+			open_editing_map(clone_map(game.current_map), editing_path)
 			game.program_mode = .Editing
 		case .Editing:
 			game.program_mode = .Playing
@@ -1087,7 +1087,14 @@ draw_game :: proc() {
 	// identical content into an offscreen texture instead of straight to the
 	// backbuffer, with zero duplication between the two paths.
 	draw_world_contents :: proc() {
-		draw_tilemap(&game.current_map)
+		// Editing draws the Map it is editing, not the one Playing left
+		// behind: a tile blocked out, a collider marked or a colour moved is
+		// visible in the world the moment it changes, which is what makes
+		// the editor's colour sliders a preview rather than a guess
+		// (content-expansion-build ticket 14). The two are the same place by
+		// default - F1 enters on a clone of current_map - so this only
+		// diverges once an edit or a map switch makes it diverge.
+		draw_tilemap(game.program_mode == .Editing ? &game.editing_map : &game.current_map)
 		// under the bodies rather than over them: the field is terrain
 		// furniture, and it is one drawing for the whole map rather than one
 		// per enemy - there are no per-enemy routes to draw any more

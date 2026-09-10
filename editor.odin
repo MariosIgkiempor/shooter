@@ -3,6 +3,7 @@ package shooter
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "core:os"
 import "core:slice"
 import "core:strings"
 import rl "vendor:raylib"
@@ -23,7 +24,14 @@ import ui "vendor/ui/ui"
 EditorMode :: enum {
 	Tiles,
 	Collisions,
-	// balance/feel numbers rather than map content (tuning.odin). A third mode
+	// the Map's own properties rather than its tiles: name, player start,
+	// time limit, payout multiplier, rung and the two authored colours
+	// (ADR-0021 put the first four here, ADR-0024 the colours). Its own mode
+	// for the same reason Tuning has one - it is mutually exclusive with the
+	// work Tiles/Collisions do, and the pointer means something different in
+	// it while a player start is armed for placing.
+	Map,
+	// balance/feel numbers rather than map content (tuning.odin). A fourth mode
 	// rather than an always-visible section because it's mutually exclusive
 	// with the work Tiles/Collisions do.
 	Tuning,
@@ -62,6 +70,28 @@ editor: struct {
 	// Grown/shrunk in lockstep with spawn_triggers by spawn_trigger_row_add/
 	// spawn_trigger_row_remove so indices always line up.
 	expanded_spawn_triggers: [dynamic]bool,
+	// Map mode's "Place Start" button, armed by a click on it and disarmed by
+	// the world click that places (update_map_mode). One-shot rather than a
+	// sticky tool: a stray click in the world should not silently move where
+	// every Run on this Map begins.
+	placing_player_start:  bool,
+	// the Map's name as it is being typed. game.editing_map.name is a view
+	// into this buffer for as long as a Map is open in the editor (see
+	// adopt_editing_map_name), which is what lets a name be edited at all
+	// without an allocation to own - vendor/ui has no text widget, so the
+	// field is editor.odin's own (see text_field).
+	name_buffer:           Text_Buffer,
+	name_field_focused:    bool,
+	// game.editing_map_path for a Map the editor itself created: derived from
+	// the name on the first Save (see editor_save_editing_map). A buffer
+	// rather than an allocation because the field it feeds otherwise only
+	// ever holds map_path_for_name's static literals, which nothing frees.
+	path_buffer:           Text_Buffer,
+	// whether the last Save was refused because a file already lives where
+	// this Map's name sends it. The log is not the editor's user interface -
+	// a Save button that does nothing and says nothing is a Save button an
+	// author believes. Cleared by anything that could change the answer.
+	save_refused:          bool,
 }
 
 initialize_editor :: proc() {
@@ -133,6 +163,16 @@ update_editor_camera :: proc() {
 		camera.target -= wheel * EDITOR_PAN_SPEED / camera.zoom
 	}
 
+	// a name being typed owns the keyboard: WASD belongs to the field, not to
+	// the view behind it, and the arrow keys go with them rather than staying
+	// live - so a typo is fixed by looking at the field instead of wondering
+	// why the map drifted. The wheel above is deliberately still live: it is
+	// the pointer's, and the pointer is not what is typing.
+	if editor.name_field_focused {
+		ease_camera_towards(&game.camera, editor.camera, rl.GetFrameTime())
+		return
+	}
+
 	key_pan: Vec2
 	if is_key_down(.LEFT) || is_key_down(.A) {
 		key_pan.x -= 1
@@ -168,7 +208,20 @@ ease_camera_towards :: proc(camera: ^Camera, to: Camera, dt: f32) {
 update_editor :: proc() {
 	update_editor_camera()
 
+	// raylib queues typed characters whether or not anything is listening.
+	// Drained in every frame the name field isn't reading them (text_field
+	// does that itself, from the draw phase), so focusing the field never
+	// delivers a burst of whatever was typed while it was closed.
+	if !editor.name_field_focused {
+		for get_char_pressed() != 0 {}
+	}
+
 	hovered_coord := hovered_tile_coords()
+
+	if editor.mode == .Map {
+		update_map_mode(hovered_coord)
+		return
+	}
 
 	if editor.mode == .Collisions {
 		update_collisions_mode(hovered_coord)
@@ -318,6 +371,19 @@ draw_editor_world_overlay :: proc() {
 	// the player's collision box, so collider alignment can be eyeballed
 	draw_rectangle_lines(actor_collision_rect(game.player.rect), rl.SKYBLUE, 1)
 
+	// where every Run on this Map begins, drawn in every mode rather than
+	// only in Map mode: it is map content like a collider is, and blocking
+	// out walls around a start you cannot see is how a start ends up inside
+	// one
+	draw_player_start_marker(tile_size)
+
+	if editor.mode == .Map {
+		if editor.placing_player_start && !ui_hovered {
+			draw_rectangle_lines(tile_world_rect(hovered_tile_coords(), tile_size), rl.GREEN, 1)
+		}
+		return
+	}
+
 	if editor.mode == .Collisions {
 		for tile in game.editing_map.tilemap.tiles {
 			if tile.collides {
@@ -377,6 +443,8 @@ editor_window :: proc() {
 			if ui.button("Switch") {
 				editor.picking_map = !editor.picking_map
 			}
+			ui.spacer()
+			ui.text("{}", editing_map_file_summary())
 		}
 
 		if editor.picking_map {
@@ -387,12 +455,20 @@ editor_window :: proc() {
 						editor.picking_map = false
 					}
 				}
+				// the switcher lists what the bake knows about, so a Map that
+				// does not exist yet belongs at the end of that list rather
+				// than on a row of its own
+				if ui.button("+ New Map") {
+					editor_new_map()
+					editor.picking_map = false
+				}
 			}
 		}
 
 		if ui.row({gap = ui.theme.gap}) {
 			mode_button("Tiles", .Tiles)
 			mode_button("Collisions", .Collisions)
+			mode_button("Map", .Map)
 			mode_button("Tuning", .Tuning)
 		}
 
@@ -401,6 +477,8 @@ editor_window :: proc() {
 			tiles_mode_ui()
 		case .Collisions:
 			collisions_mode_ui()
+		case .Map:
+			map_mode_ui()
 		case .Tuning:
 			tuning_mode_ui()
 		}
@@ -418,8 +496,8 @@ editor_window :: proc() {
 		spawn_triggers_ui()
 
 		if ui.row({gap = ui.theme.gap}) {
-			if ui.button("Save") {
-				save_map(game.editing_map_path, game.editing_map)
+			if ui.button(game.editing_map_path == "" ? "Save New Map" : "Save") {
+				editor_save_editing_map()
 			}
 
 			if ui.button("Clear") {
@@ -428,6 +506,13 @@ editor_window :: proc() {
 
 			ui.spacer()
 			ui.text("Tiles: {}", len(game.editing_map.tilemap.tiles))
+		}
+
+		if editor.save_refused {
+			ui.text(
+				"Not saved: {} already exists. Rename this Map in Map mode.",
+				map_file_path_for_slug(map_file_slug(game.editing_map.name)),
+			)
 		}
 	}
 }
@@ -444,14 +529,18 @@ switch_editing_map :: proc(name: Map_Name) {
 		return
 	}
 
-	// free the map being switched away from, or repeated Switch clicks leak
-	// one copy of each previously-open map
-	delete_map(game.editing_map)
-	game.editing_map = loaded
-	game.editing_map_path = path
-	// row-expand state is keyed by index into the *previous* map's
-	// spawn_triggers - stale once the map underneath it changes
-	clear(&editor.expanded_spawn_triggers)
+	// json.unmarshal allocated this name out of the file, and the adopt inside
+	// open_editing_map replaces the only pointer to it with a view into the
+	// editor's own buffer. Freeing it is the same discipline load_map already
+	// applies to the identity strings it resolves (ADR-0028) - otherwise a
+	// switch leaks one name per switch.
+	loaded_name := loaded.name
+
+	open_editing_map(loaded, path)
+
+	if len(loaded_name) > 0 {
+		delete(loaded_name)
+	}
 }
 
 // blocking out a map is placing and erasing rectangles - there's nothing to
@@ -476,6 +565,522 @@ collisions_mode_ui :: proc() {
 	ui.text("Empty spots never collide.")
 	ui.text("Colliders: {}", collider_count)
 }
+
+// -- Map mode (content-expansion-build ticket 14) --------------------------
+//
+// Everything about the open Map that isn't a tile: its name, where the player
+// starts, the objective numbers a ladder rung tunes (ADR-0017/ADR-0022) and
+// the two colours the place is made of (ADR-0024). Together with the New Map
+// button in the switcher above, this is the whole of authoring a Map without
+// leaving the editor.
+//
+// The colours preview live because Editing draws game.editing_map's tilemap
+// rather than game.current_map's (draw_world_contents) - there is no separate
+// preview path, the world behind the panel simply is the Map being edited.
+
+MAPS_DIR :: "data/maps"
+
+// what a Map with no usable name slugs to: map_builder turns a filename into
+// a Map_Name case, so an empty one would bake as an empty case name
+UNTITLED_MAP_SLUG :: "untitled"
+
+DEFAULT_NEW_MAP_NAME :: "New Map"
+DEFAULT_TILE_SIZE :: Vec2{16, 16}
+
+// a new Map's starting objective and palette. Deliberately not a copy of the
+// open Map's: a stub that looks like the place you were just in is a stub you
+// forget to theme.
+NEW_MAP_TIME_LIMIT :: 300
+NEW_MAP_VICTORY_MULTIPLIER :: 1.5
+NEW_MAP_FLOOR_COLOR :: Color{44, 46, 52, 255}
+NEW_MAP_WALL_COLOR :: Color{96, 102, 116, 255}
+
+// slider ranges. Rung runs past the Maps that exist so a rung can be authored
+// before the rungs below it are; the payout range covers ADR-0022's planned
+// 1.5..2.5 ladder with room either side.
+EDITOR_RUNG_MAX :: 10
+EDITOR_TIME_LIMIT_MAX :: 900
+EDITOR_VICTORY_MULTIPLIER_MAX :: 3
+
+// a Map name is bounded well inside Text_Buffer's capacity, which also has to
+// hold the "data/maps/<slug>.json" the name derives
+MAP_NAME_MAX_LENGTH :: 64
+
+PLAYER_START_MARKER_COLOR :: Color{120, 255, 140, 230}
+PLAYER_START_ANCHOR_COLOR :: Color{120, 255, 140, 140}
+
+// -- a typed-into buffer -----------------------------------------------------
+//
+// vendor/ui has no text widget and no keyboard capture at all, so a Map's name
+// is typed into one of these and the widget that draws it (text_field) is the
+// editor's own. Fixed capacity rather than a [dynamic]u8 because
+// game.editing_map.name is a *view* into the buffer for as long as a Map is
+// open (adopt_editing_map_name): a growing buffer would move out from under
+// it, and a name that owned an allocation would need freeing at every point a
+// Map is replaced - of which there are four, one of them raylib's F1 handler.
+TEXT_BUFFER_CAPACITY :: 96
+
+Text_Buffer :: struct {
+	data:  [TEXT_BUFFER_CAPACITY]u8,
+	count: int,
+}
+
+text_buffer_string :: proc(buf: ^Text_Buffer) -> string {
+	return string(buf.data[:buf.count])
+}
+
+// truncates rather than failing: the callers that type into a buffer are
+// bounded already (a name at MAP_NAME_MAX_LENGTH, and the path derived from
+// one inside the same capacity). The one caller that isn't is
+// adopt_editing_map_name, which takes whatever name a map file carries - so a
+// truncation says so rather than silently shortening a name the next Save
+// would then write back.
+text_buffer_set :: proc(buf: ^Text_Buffer, text: string) {
+	if len(text) > TEXT_BUFFER_CAPACITY {
+		log_error(
+			"`{}` is longer than the {} bytes a text field holds, and is kept truncated",
+			text,
+			TEXT_BUFFER_CAPACITY,
+		)
+	}
+
+	buf.count = min(len(text), TEXT_BUFFER_CAPACITY)
+	copy(buf.data[:buf.count], text[:buf.count])
+}
+
+// printable ASCII only. The name becomes a filename by way of map_file_slug,
+// and a rune that has no byte in a filename would either be dropped there
+// (silently changing the name) or land in a file nobody can name back.
+text_buffer_insert :: proc(buf: ^Text_Buffer, r: rune) -> bool {
+	if buf.count >= TEXT_BUFFER_CAPACITY {
+		return false
+	}
+	if r < ' ' || r > '~' {
+		return false
+	}
+
+	buf.data[buf.count] = u8(r)
+	buf.count += 1
+	return true
+}
+
+text_buffer_backspace :: proc(buf: ^Text_Buffer) -> bool {
+	if buf.count == 0 {
+		return false
+	}
+	buf.count -= 1
+	return true
+}
+
+// -- name, slug and path -----------------------------------------------------
+
+// the filename a Map's name earns: lowercase, one underscore per run of
+// anything that isn't a letter or a digit, and nothing hanging off either
+// end. map_builder runs strings.to_ada_case over exactly this to get the
+// Map_Name case, so "Cold Hall" -> cold_hall.json -> .Cold_Hall round-trips.
+map_file_slug :: proc(name: string, allocator := context.temp_allocator) -> string {
+	sb := strings.builder_make(allocator)
+
+	pending_separator := false
+	for r in name {
+		is_word := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !is_word {
+			// held rather than written, so a trailing run leaves nothing behind
+			pending_separator = strings.builder_len(sb) > 0
+			continue
+		}
+
+		if pending_separator {
+			strings.write_rune(&sb, '_')
+			pending_separator = false
+		}
+
+		lowered := r
+		if r >= 'A' && r <= 'Z' {
+			lowered = r + ('a' - 'A')
+		}
+		strings.write_rune(&sb, lowered)
+	}
+
+	if strings.builder_len(sb) == 0 {
+		return UNTITLED_MAP_SLUG
+	}
+	return strings.to_string(sb)
+}
+
+map_file_path_for_slug :: proc(slug: string, allocator := context.temp_allocator) -> string {
+	return fmt.aprintf("{}/{}.json", MAPS_DIR, slug, allocator = allocator)
+}
+
+// what the Map row says about where a Save lands. A Map the editor created
+// has no path until its first Save, so it advertises the one it would take -
+// and says out loud that the bake, not the Save, is what puts it in the
+// switcher (ADR-0021's inherent round trip).
+editing_map_file_summary :: proc() -> string {
+	if game.editing_map_path != "" {
+		return fmt.tprintf("File: {}", game.editing_map_path)
+	}
+	return fmt.tprintf(
+		"New: {} - rebuild to play it",
+		map_file_path_for_slug(map_file_slug(game.editing_map.name)),
+	)
+}
+
+// re-points game.editing_map.name at the editor's own buffer, so the name can
+// be typed into. Only called by open_editing_map, which is every point a Map
+// arrives in the editor.
+adopt_editing_map_name :: proc() {
+	text_buffer_set(&editor.name_buffer, game.editing_map.name)
+	game.editing_map.name = text_buffer_string(&editor.name_buffer)
+}
+
+// puts a Map in front of the editor, from wherever it came: the F1 clone of
+// the Map being played (main.odin), the switcher's load from disk, or New
+// Map's stub. One proc rather than the same six lines at each of the three,
+// because every one of them is a way to get the ritual half-right - the free
+// before the replace (or the previous Map's tiles leak), the name adopted into
+// the editor's buffer (or Map mode's field edits a string it doesn't own), and
+// the per-Map ui state dropped (or a row-expand index, an armed Place Start or
+// a refused Save outlives the Map it described).
+//
+// `path` empty means the Map has no file yet, and the first Save derives one
+// from its name (editor_save_editing_map).
+open_editing_map :: proc(map_data: Map, path: string) {
+	delete_map(game.editing_map)
+	game.editing_map = map_data
+	game.editing_map_path = path
+	adopt_editing_map_name()
+
+	clear(&editor.expanded_spawn_triggers)
+	editor.placing_player_start = false
+	editor.name_field_focused = false
+	editor.save_refused = false
+}
+
+// -- creating and saving -----------------------------------------------------
+
+// a blank Map carrying everything an author would otherwise have to think of
+// before drawing anything: opaque colours a floor-darker-than-wall apart
+// (ADR-0024 calls a zero-valued colour invalid, and MAP_BEVEL_MIX reads wrong
+// if the floor is the lighter of the two), rung 1, and an objective a Run can
+// actually be timed out against.
+//
+// It is deliberately *not* a valid Map yet, in CONTEXT.md's sense: it has no
+// tiles, so it has no connected walkable region and its player start is not on
+// floor. Blocking those out is what the author does next, and ticket 15's
+// sweep over the baked table is what catches one that never was.
+new_map_stub :: proc(name: string, tile_size: Vec2) -> Map {
+	return Map {
+		name = name,
+		player_start = editor_start_position_for_cell({0, 0}, tile_size),
+		tilemap = Tilemap{tile_size = tile_size},
+		time_limit = NEW_MAP_TIME_LIMIT,
+		victory_multiplier = NEW_MAP_VICTORY_MULTIPLIER,
+		rung = 1,
+		floor_color = NEW_MAP_FLOOR_COLOR,
+		wall_color = NEW_MAP_WALL_COLOR,
+	}
+}
+
+// player_start is the player rect's feet anchor in world units and a click
+// lands anywhere inside a cell, so it snaps to that cell's centre rather than
+// to wherever in the cell the pointer happened to be - which is also what
+// keeps a start authored against the grid the walls are authored against.
+editor_start_position_for_cell :: proc(cell: Vec2i, tile_size: Vec2) -> Vec2 {
+	return cell_center_to_world(cell, tile_size)
+}
+
+// opens a brand-new Map in the editor, unsaved. Inherits only the open Map's
+// tile size, which is a property of the grid rather than of the place.
+editor_new_map :: proc() {
+	tile_size := game.editing_map.tilemap.tile_size
+	if tile_size.x <= 0 || tile_size.y <= 0 {
+		tile_size = DEFAULT_TILE_SIZE
+	}
+
+	// no file yet: the first Save derives one from the name
+	open_editing_map(new_map_stub(DEFAULT_NEW_MAP_NAME, tile_size), "")
+
+	// straight into the panel that names it, with the field already live -
+	// the name is the one field a new Map cannot be left alone with
+	editor.mode = .Map
+	editor.name_field_focused = true
+}
+
+// Save for a Map that already has a file is exactly save_map. For one the
+// editor created it is a save-as: the path comes from the name, and lands only
+// where nothing already lives.
+editor_save_editing_map :: proc() -> bool {
+	if game.editing_map_path != "" {
+		return save_map(game.editing_map_path, game.editing_map)
+	}
+
+	path := map_file_path_for_slug(map_file_slug(game.editing_map.name))
+
+	// an existing file at this path is an authored place, and a blank stub
+	// written over it is only recoverable by redrawing it (ADR-0021). Renaming
+	// is the fix, and it is one field away - which the panel says, because a
+	// refusal only the log knows about is a Save button that lies.
+	if os.exists(path) {
+		log_error("A map already lives at `{}` - rename this Map before saving it", path)
+		editor.save_refused = true
+		return false
+	}
+
+	if !save_map(path, game.editing_map) {
+		return false
+	}
+
+	text_buffer_set(&editor.path_buffer, path)
+	game.editing_map_path = text_buffer_string(&editor.path_buffer)
+	editor.save_refused = false
+	return true
+}
+
+// -- placing the player start ------------------------------------------------
+
+// Map mode's whole world interaction: no tile is placed or erased in it, so a
+// click that isn't placing a start does nothing at all
+update_map_mode :: proc(hovered_coord: Vec2i) {
+	if !editor.placing_player_start || ui_hovered {
+		return
+	}
+
+	if is_mouse_button_pressed(.LEFT) {
+		game.editing_map.player_start = editor_start_position_for_cell(
+			hovered_coord,
+			game.editing_map.tilemap.tile_size,
+		)
+		editor.placing_player_start = false
+	}
+}
+
+// the player's body at the authored start, drawn where the player would stand
+// rather than as a dot at the anchor - a start is only correct if the body it
+// puts there clears the walls around it
+draw_player_start_marker :: proc(tile_size: Vec2) {
+	start := game.editing_map.player_start
+
+	draw_rectangle_lines(actor_collision_rect({start.x, start.y, 0, 0}), PLAYER_START_MARKER_COLOR, 1)
+	draw_rectangle(tile_world_rect(world_to_cell_coord(start, tile_size), tile_size), PLAYER_START_ANCHOR_COLOR)
+}
+
+// -- the panel ---------------------------------------------------------------
+
+map_mode_ui :: proc() {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Name")
+		if text_field("map_name", &editor.name_buffer, MAP_NAME_MAX_LENGTH, &editor.name_field_focused) {
+			// the name is a view into the buffer that just changed length,
+			// so it has to be re-taken rather than left pointing at the old
+			// one
+			game.editing_map.name = text_buffer_string(&editor.name_buffer)
+			// renaming is the fix a refused Save asks for, so the complaint
+			// goes away the moment it is being acted on
+			editor.save_refused = false
+		}
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		if selectable_button("map_place_start", "Place Start", editor.placing_player_start) {
+			editor.placing_player_start = !editor.placing_player_start
+		}
+		ui.text(
+			"Start: {:.0f}, {:.0f}",
+			game.editing_map.player_start.x,
+			game.editing_map.player_start.y,
+		)
+	}
+
+	if editor.placing_player_start {
+		ui.text("Click a cell to start every Run on this Map in it.")
+	}
+
+	map_int_row("map_rung", "Rung", &game.editing_map.rung, 1, EDITOR_RUNG_MAX)
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Time Limit")
+		ui.slider("map_time_limit", &game.editing_map.time_limit, 0, EDITOR_TIME_LIMIT_MAX)
+		ui.text("{:.0f}s", game.editing_map.time_limit)
+	}
+
+	if game.editing_map.time_limit <= 0 {
+		ui.text("Untimed - only clearable if the trigger timeline ends.")
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Victory Multiplier")
+		ui.slider(
+			"map_victory_multiplier",
+			&game.editing_map.victory_multiplier,
+			1,
+			EDITOR_VICTORY_MULTIPLIER_MAX,
+		)
+		ui.text("{:.2f}x", game.editing_map.victory_multiplier)
+	}
+
+	authored_color_rows("map_floor", "Floor", &game.editing_map.floor_color)
+	authored_color_rows("map_wall", "Wall", &game.editing_map.wall_color)
+
+	// derived, never authored (ADR-0024) - shown so the pair can be judged by
+	// the inset they produce rather than by the two swatches alone
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Bevel (derived)")
+		color_swatch("map_bevel_swatch", map_bevel_color(game.editing_map))
+	}
+}
+
+// ui.slider is f32-only, so an int rides an f32 proxy - the same idiom
+// tuning_row and the Kills_Reached count already use
+map_int_row :: proc(key: string, label: string, value: ^int, min_value, max_value: f32) {
+	proxy := f32(value^)
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}", label)
+		if ui.slider(key, &proxy, min_value, max_value) {
+			value^ = int(proxy)
+		}
+		ui.text("{}", value^)
+	}
+}
+
+// one of a Map's two authored colours: a swatch, a readout and a slider per
+// channel. Alpha is held opaque rather than exposed - both are world colours,
+// and a Map that could be saved half-transparent is exactly the invalidity
+// ADR-0024 names. Indexed rather than named (Color is a distinct [4]u8, so a
+// channel's address is an element's) with the names in the labels.
+authored_color_rows :: proc(key_prefix: string, label: string, color: ^Color) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}", label)
+		color_swatch(fmt.tprintf("{}_swatch", key_prefix), color^)
+		ui.text("{} {} {}", color[0], color[1], color[2])
+	}
+
+	color_channel_slider(fmt.tprintf("{}_r", key_prefix), "R", &color[0])
+	color_channel_slider(fmt.tprintf("{}_g", key_prefix), "G", &color[1])
+	color_channel_slider(fmt.tprintf("{}_b", key_prefix), "B", &color[2])
+	color[3] = 255
+}
+
+color_channel_slider :: proc(key: string, label: string, channel: ^u8) {
+	proxy := f32(channel^)
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}", label)
+		if ui.slider(key, &proxy, 0, 255) {
+			channel^ = u8(clamp(proxy, 0, 255))
+		}
+		ui.text("{}", channel^)
+	}
+}
+
+COLOR_SWATCH_SIZE :: Vec2{34, 20}
+
+color_swatch :: proc(key: string, color: Color) {
+	if layout.node(
+		{
+			key = key,
+			size_info = {
+				layout.fixed(COLOR_SWATCH_SIZE.x),
+				layout.fixed(COLOR_SWATCH_SIZE.y),
+			},
+			background_color = layout.Color(color),
+		},
+	) {}
+}
+
+// a floor rather than a width: the box grows with the name so a long one is
+// never clipped by its own field, and an empty one is still wide enough to
+// aim at
+TEXT_FIELD_MIN_WIDTH :: 200
+
+// the editor's own text widget, on the same layout.node escape hatch
+// selectable_button uses. Focus is a bool the caller owns rather than a
+// focused-key registry because the name is the only field in the editor that
+// is typed into; a second one is the moment that stops being true.
+//
+// max_length is a separate bound rather than the buffer's own capacity because
+// what a name is typed into is not the only thing it has to fit: the
+// "data/maps/<slug>.json" it derives goes into a buffer of the same capacity
+// (editor_save_editing_map), and needs the room the difference leaves.
+//
+// Typed characters are read here, in the draw phase, which is where the field
+// knows whether it has focus. update_editor drains raylib's character queue in
+// every frame this doesn't, so focusing the field never delivers a burst of
+// whatever was typed while it was closed.
+text_field :: proc(
+	key: string,
+	buf: ^Text_Buffer,
+	max_length: int,
+	focused: ^bool,
+) -> (
+	changed: bool,
+) {
+	// input is read before the box is declared, so a character typed this
+	// frame is in the box this frame rather than a frame behind the caret.
+	// The focus it reads is last frame's, which is the same one-frame-old
+	// answer ui_hovered gives every other pointer decision in the editor.
+	if focused^ {
+		for r := get_char_pressed(); r != 0; r = get_char_pressed() {
+			if buf.count >= max_length {
+				continue
+			}
+			if text_buffer_insert(buf, r) {
+				changed = true
+			}
+		}
+
+		if is_key_pressed(.BACKSPACE) && text_buffer_backspace(buf) {
+			changed = true
+		}
+
+		// Enter, or a press anywhere else (below). Deliberately not Escape:
+		// nothing calls rl.SetExitKey, so Escape is still raylib's default
+		// exit key and would close the window rather than the field.
+		if is_key_pressed(.ENTER) || is_key_pressed(.KP_ENTER) {
+			focused^ = false
+		}
+	}
+
+	label := text_buffer_string(buf)
+	// a caret while focused, and a space when empty so the box doesn't
+	// collapse to its padding and become hard to aim at
+	shown := label
+	if focused^ {
+		shown = fmt.tprintf("{}|", label)
+	} else if label == "" {
+		shown = " "
+	}
+
+	if layout.node(
+		{
+			key = key,
+			padding = {6, 12, 6, 12},
+			size_info = {layout.fit(TEXT_FIELD_MIN_WIDTH, 0), layout.fit(0, 0)},
+			background_color = focused^ ? ui.theme.button_active : ui.theme.button,
+		},
+	) {
+		hot, _, clicked := layout.get_node_mouse_state()
+
+		if clicked {
+			focused^ = true
+		} else if is_mouse_button_pressed(.LEFT) && !hot {
+			// checked on press rather than on release, so the release that
+			// ends a slider drag elsewhere doesn't have to travel back here
+			focused^ = false
+		}
+
+		layout.text(
+			{
+				kind = .Text,
+				text = shown,
+				font_size = ui.theme.font_size,
+				background_color = ui.theme.button_text,
+			},
+		)
+	}
+
+	return
+}
+
 
 // -- Spawn Trigger authoring (enemy-spawn-revamp map, ticket 04) -----------
 //
@@ -941,6 +1546,11 @@ selectable_button :: proc(key: string, label: string, selected: bool) -> (clicke
 mode_button :: proc(label: string, mode: EditorMode) {
 	if selectable_button(label, label, editor.mode == mode) {
 		editor.mode = mode
+		// the name field only exists in Map mode, and the mode buttons sit
+		// above the switch that draws it - so leaving this way never reaches
+		// text_field's own blur path. Without this the keyboard stays captured
+		// and update_editor_camera keeps refusing to pan.
+		editor.name_field_focused = false
 	}
 }
 
