@@ -357,13 +357,20 @@ icon_flame_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_disc(f, tip + 0.20, 0.68, 0.07, orb)
 }
 
-// orb plus a three-dot cloud, echoing the poison cloud it leaves behind
+// orb plus a three-dot cloud, echoing the poison cloud it leaves behind -
+// countably three against Flame Staff's two. It used to be two as well: the
+// same orb-plus-two-discs as its sibling, separated only by colour and
+// hundredths of placement, which is exactly the proportional-not-countable
+// distinction ADR-0018 rules out. The farthest dot's centre lands on
+// weapon_icon_reach, the convention every staff glyph follows, so nothing
+// downstream moves.
 icon_poison_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	orb := icon_color(ICON_POISON_COLOR, tint, alpha)
-	tip := icon_staff(f, tint, alpha, 0.06, 0.54)
+	tip := icon_staff(f, tint, alpha, 0.06, 0.48)
 	icon_disc(f, tip, 0.5, 0.13, orb)
-	icon_disc(f, tip + 0.16, 0.26, 0.09, orb)
-	icon_disc(f, tip + 0.22, 0.62, 0.10, orb)
+	icon_disc(f, 0.68, 0.30, 0.08, orb)
+	icon_disc(f, 0.73, 0.64, 0.09, orb)
+	icon_disc(f, 0.82, 0.46, 0.07, orb) // farthest centre == weapon_icon_reach
 }
 
 // zero orbs: a bare faceted tip where each of its three siblings carries a
