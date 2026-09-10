@@ -31,6 +31,14 @@ Enemy :: struct {
 	// fresh Enemy, and ids never repeat, so a stamped-from-preset spawn needs
 	// no initialization of its own.
 	last_hit_swing_id: u32,
+	// which shot last damaged this body (bullet.odin's monotonic shot
+	// identity; 0 means none has). The sibling of last_hit_swing_id above and
+	// deliberately a *second* field rather than one shared with it: a piercing
+	// shot and a swing have unrelated lifetimes, and one field would let a
+	// swing's identity dedupe a bullet's (ADR-0026). Same freebie as its
+	// sibling - zero on a fresh Enemy and ids never repeat, so a
+	// stamped-from-preset spawn needs no initialization of its own.
+	last_hit_bullet_id: u32,
 }
 
 // an enemy's per-frame steering archetype - orthogonal to Attack_Style; nil

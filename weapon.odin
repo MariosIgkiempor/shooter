@@ -118,6 +118,12 @@ Gun :: struct {
 	pellet_count:     int, // 1 for pistol/SMG, >1 for shotgun-style spread
 	spread_angle:     f32, // degrees, total cone width across pellets
 	bullet_lifetime:  f32,
+	// bodies past the first a shot passes through; 0 for every gun but the
+	// Rifle. Sits here beside pellet_count/spread_angle - fields only one
+	// weapon uses - rather than on Weapon, because Ranged is the only family
+	// this is a question for: Magic's Fireball ends where it explodes and a
+	// swing already hits everything its Hit volume touches, with no cap.
+	pierce_count:     int,
 }
 
 // One field, deliberately: a swing's shape is its Hit volume (hit_volume.odin),

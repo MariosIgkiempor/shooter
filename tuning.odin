@@ -440,6 +440,7 @@ register_weapon_tunables :: proc() {
 			register_tunable(group, slug(name, "reload_time"), "Reload Time", &v.reload_time, 0.1, 5)
 			register_tunable(group, slug(name, "pellet_count"), "Pellet Count", &v.pellet_count, 1, 20)
 			register_tunable(group, slug(name, "spread_angle"), "Spread Angle", &v.spread_angle, 0, 90)
+			register_tunable(group, slug(name, "pierce_count"), "Pierce Count", &v.pierce_count, 0, 10)
 			register_tunable(group, slug(name, "bullet_lifetime"), "Bullet Lifetime", &v.bullet_lifetime, 0.1, 5)
 		case Melee_Weapon:
 			// `range` is melee's only stat now - the swing's arc moved to the
