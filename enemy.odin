@@ -375,7 +375,44 @@ SEPARATION_STRENGTH := [Movement_Style_Kind]f32 {
 // every style's search radius
 SEPARATION_GRID_CELL_SIZE: f32 = 40
 
-Separation_Grid :: map[Vec2i][dynamic]int
+// the most bodies one enemy looks at while computing its push. This, not the
+// 3x3 bucket sweep, is what makes Separation cost the same per enemy at three
+// hundred as at ten: the sweep bounds the *area* searched and not the count
+// inside it, and with no hard enemy-enemy collision (see the swarm-scale
+// ticket) nothing stops hundreds of bodies sharing one 120px neighbourhood -
+// so the sweep alone degenerates toward O(n^2) at exactly the density it
+// exists for.
+//
+// A sample suffices because the result is normalized before it leaves here -
+// it is a direction, not a magnitude - and because what a body needs from
+// Separation is not to overlap the neighbours it has, which its nearest few
+// already decide. It is not free, though: measured on 300 disordered bodies
+// over a second, a sample of eight recovers about 60% of the spread the whole
+// bucket produces (a mean nearest-neighbour distance of 9.3px going to 14.9
+// rather than 20.0), sixteen about 80%. Eight is the figure ADR-0025 and the
+// swarm-scale ticket both named, and that ticket left the exact cap open as
+// balance work - hence a Tunable rather than a constant, so the trade can be
+// dragged against a live crowd.
+SEPARATION_MAX_NEIGHBOURS: int = 8
+
+// what a bucket is keyed by. The Movement Style is part of the key rather than
+// a filter inside the scan because Separation only ever pushes against the same
+// style: filtering inside the scan would let a Grounded enemy spend its whole
+// budget discarding Floaters in a mixed crowd and come away with no push at
+// all, and rung 4 fields both styles at once.
+//
+// Distance is still a filter, and still spends budget - a body in a ring cell
+// can be 113px away, well past Grounded's radius of 40, and reading it costs
+// what reading a close one costs. That is deliberate: charging only for bodies
+// that turn out to be in range would make a cell full of out-of-range bodies
+// unbounded again, which is the thing being fixed. It is what the
+// centre-cell-first sweep order below mitigates.
+Separation_Key :: struct {
+	cell:  Vec2i,
+	style: Movement_Style_Kind,
+}
+
+Separation_Grid :: map[Separation_Key][dynamic]int
 
 separation_grid_cell :: proc(pos: Vec2) -> Vec2i {
 	return {
@@ -384,22 +421,60 @@ separation_grid_cell :: proc(pos: Vec2) -> Vec2i {
 	}
 }
 
-// buckets every enemy's index by grid cell; allocated on the temp allocator,
-// valid for this frame only (freed by main's per-frame free_all)
+// the 3x3 sweep's own order, centre cell first. With a budget to spend rather
+// than every neighbour to visit, the order stops being arbitrary: the bodies
+// most likely to be closest sit in the reader's own cell, so that is where the
+// budget should go first.
+SEPARATION_NEIGHBOUR_CELLS := [9]Vec2i {
+	{0, 0},
+	{-1, 0},
+	{1, 0},
+	{0, -1},
+	{0, 1},
+	{-1, -1},
+	{1, -1},
+	{-1, 1},
+	{1, 1},
+}
+
+// buckets every enemy's index by (grid cell, Movement Style); allocated on the
+// temp allocator, valid for this frame only (freed by main's per-frame
+// free_all). The buckets are made on that allocator explicitly - a bucket read
+// out of the map zero-valued has no allocator of its own and would take
+// context.allocator's, heap-allocating one array per occupied cell every frame
+// and never freeing it.
+//
+// A style with no Separation radius is never looked up, so it is not bucketed
+// at all.
 build_separation_grid :: proc(enemies: []Enemy) -> Separation_Grid {
 	grid := make(Separation_Grid, context.temp_allocator)
 	for enemy, i in enemies {
-		cell := separation_grid_cell(Vec2{enemy.x, enemy.y})
-		bucket := grid[cell]
+		style := movement_style_kind(enemy.movement)
+		if SEPARATION_RADIUS[style] <= 0 {
+			continue
+		}
+
+		key := Separation_Key{separation_grid_cell(Vec2{enemy.x, enemy.y}), style}
+		bucket, found := grid[key]
+		if !found {
+			bucket = make([dynamic]int, context.temp_allocator)
+		}
 		append(&bucket, i)
-		grid[cell] = bucket
+		grid[key] = bucket
 	}
 	return grid
 }
 
-// sum of away-from-neighbour directions (same Movement Style only, within
-// that style's Separation radius), weighted by closeness then normalized -
-// mirrors the prototype's Steering.separationVector exactly
+// sum of away-from-neighbour directions (same Movement Style only, within that
+// style's Separation radius), weighted by closeness then normalized - mirrors
+// the prototype's Steering.separationVector, sampled rather than summed whole.
+//
+// At most SEPARATION_MAX_NEIGHBOURS bodies are read. Which ones is decided by
+// where in each bucket this enemy starts: every body in one cell reading the
+// same first eight would make the sample systematic - one clique pushed
+// against by the whole cell while the rest of the crowd is invisible to it -
+// so each reader starts at its own index and wraps. That needs no random
+// source and no frame counter, which keeps the answer reproducible for a test.
 compute_separation_direction :: proc(enemies: []Enemy, index: int, grid: Separation_Grid) -> Vec2 {
 	enemy := enemies[index]
 	kind := movement_style_kind(enemy.movement)
@@ -412,31 +487,37 @@ compute_separation_direction :: proc(enemies: []Enemy, index: int, grid: Separat
 	cell := separation_grid_cell(pos)
 
 	push: Vec2
-	for dx in i32(-1) ..= 1 {
-		for dy in i32(-1) ..= 1 {
-			bucket, ok := grid[cell + {dx, dy}]
-			if !ok {
+	budget := SEPARATION_MAX_NEIGHBOURS
+	for offset in SEPARATION_NEIGHBOUR_CELLS {
+		if budget <= 0 {
+			break
+		}
+
+		bucket, ok := grid[Separation_Key{cell + offset, kind}]
+		if !ok || len(bucket) == 0 {
+			continue
+		}
+
+		start := index % len(bucket)
+		for step in 0 ..< len(bucket) {
+			if budget <= 0 {
+				break
+			}
+
+			other_index := bucket[(start + step) % len(bucket)]
+			if other_index == index {
+				continue // reading yourself is not a neighbour, and must not cost budget
+			}
+			budget -= 1
+
+			other := enemies[other_index]
+			offset_to_other := pos - Vec2{other.x, other.y}
+			dist := linalg.length(offset_to_other)
+			if dist <= 0 || dist >= radius {
 				continue
 			}
 
-			for other_index in bucket {
-				if other_index == index {
-					continue
-				}
-
-				other := enemies[other_index]
-				if movement_style_kind(other.movement) != kind {
-					continue
-				}
-
-				offset := pos - Vec2{other.x, other.y}
-				dist := linalg.length(offset)
-				if dist <= 0 || dist >= radius {
-					continue
-				}
-
-				push += linalg.normalize0(offset) * ((radius - dist) / radius)
-			}
+			push += linalg.normalize0(offset_to_other) * ((radius - dist) / radius)
 		}
 	}
 
@@ -578,11 +659,25 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 	map_bounds := tilemap_world_bounds(&game.current_map.tilemap)
 
 	for entry in composition {
+		// geometry can only strand a body that geometry stops, so only those
+		// styles have their candidate tested against the field. Handing a
+		// Floater the field would reject every cell beside every wall - the
+		// flood's inflation envelope, 741 of Desert Dungeon's 2239 standable
+		// cells (ticket 04) - for a style that flies straight over them.
+		style := movement_style_kind(entry.movement_template)
+		field := movement_style_collides_with_terrain[style] ? &game.flow_field : nil
+
 		for _ in 0 ..< entry.count {
 			if len(game.enemies) >= MAX_ENEMIES {
 				return
 			}
-			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.current_map.tilemap)
+			point := pick_offscreen_spawn_point(
+				player_pos,
+				visible_rect,
+				map_bounds,
+				&game.current_map.tilemap,
+				field,
+			)
 			spawn_enemy_at(point, entry.movement_template, entry.attack_template)
 		}
 	}
@@ -656,38 +751,75 @@ tile_blocks_point :: proc(tilemap: ^Tilemap, point: Vec2) -> bool {
 }
 
 // angle-around-player at (visible-rect half-diagonal + margin), retried up
-// to a small cap against still-visible/wall-blocked candidates, then
-// clamped into the map's bounds (map_bounds is a param, not recomputed here,
-// since a caller spawning several enemies in one batch already has it and
-// the tilemap doesn't change mid-batch). Validated live in the prototype (branch
-// prototype/offscreen-spawn-placement, commit 2bebf71) across camera-
+// to a small cap against still-visible/wall-blocked/unreachable candidates,
+// then clamped into the map's bounds (map_bounds is a param, not recomputed
+// here, since a caller spawning several enemies in one batch already has it
+// and the tilemap doesn't change mid-batch). Validated live in the prototype
+// (branch prototype/offscreen-spawn-placement, commit 2bebf71) across camera-
 // panning, wall-collision-retry, and map-edge-clamp scenarios - see the
-// enemy-spawn-revamp map's ticket 02. On exhausted retries, spawns anyway at
-// the last (clamped) candidate rather than dropping the spawn: an enemy
-// occasionally appearing early or in a rare double-wall pocket is a smaller
-// problem than a trigger silently under-spawning.
+// enemy-spawn-revamp map's ticket 02.
+//
+// `field` is the flow field the spawned body must be able to walk out of, or
+// nil for a Movement Style geometry does not stop. It is passed rather than
+// read off `game` so this stays testable against a throwaway field, like every
+// other proc in this file's neighbourhood.
+//
+// On exhausted retries it still spawns rather than dropping the spawn - a
+// trigger that silently under-spawns is the worse failure - but not
+// necessarily at the last candidate. The three tests are not equally serious:
+// appearing on-screen or inside a wall is cosmetic and self-correcting, while
+// landing in a sealed pocket is permanent and takes the Map's Cleared
+// condition with it. So the first candidate that was at least *reachable*
+// beats the last one, which may not have been.
 pick_offscreen_spawn_point :: proc(
 	player_pos: Vec2,
 	visible_rect: World_Bounds,
 	map_bounds: World_Bounds,
 	tilemap: ^Tilemap,
+	field: ^Flow_Field,
 ) -> Vec2 {
 	half_w := (visible_rect.max_x - visible_rect.min_x) / 2
 	half_h := (visible_rect.max_y - visible_rect.min_y) / 2
 	dist := math.hypot(half_w, half_h) + OFFSCREEN_SPAWN_MARGIN
 
 	point: Vec2
+	first_reachable: Vec2
+	found_reachable := false
 	for _ in 0 ..< OFFSCREEN_SPAWN_MAX_RETRIES {
 		angle := rand.float32_range(0, math.TAU)
 		point = player_pos + Vec2{math.cos(angle), math.sin(angle)} * dist
 		point.x = clamp(point.x, map_bounds.min_x, map_bounds.max_x)
 		point.y = clamp(point.y, map_bounds.min_y, map_bounds.max_y)
 
+		if !flow_field_reaches(field, point) {
+			continue
+		}
+		if !found_reachable {
+			first_reachable = point
+			found_reachable = true
+		}
+
 		if !point_in_world_bounds(point, visible_rect) && !tile_blocks_point(tilemap, point) {
-			break
+			return point
 		}
 	}
-	return point
+
+	if found_reachable {
+		return first_reachable
+	}
+
+	// Every candidate was unreachable - a player boxed into a corner of the
+	// map, where the whole ring clamps onto ground they cannot get to. The
+	// field's own filled set is asked instead, which is a scan of its cells
+	// and so is kept to this path. The body may land closer to the player than
+	// the ring wanted, which is a worse spawn than usual and a far better one
+	// than a body sealed in a pocket for the rest of the Run.
+	//
+	// This can only be reached with a field that *has* answers, since
+	// flow_field_reaches accepts everything when it has none - so there is
+	// always a filled cell to name, and the discarded ok is not a case.
+	nearest, _ := flow_field_nearest_reachable(field, point)
+	return nearest
 }
 
 // the flow field is not ensured here: update_game_state re-floods it once a
