@@ -208,3 +208,88 @@ test_the_committed_desert_dungeon_map_still_loads :: proc(t: ^testing.T) {
 	_, ranged_ok := loaded.spawn_triggers[1].composition[1].attack_template.(Ranged)
 	testing.expect(t, ranged_ok, "trigger 1's second entry should still be Ranged")
 }
+
+// -- The Map's own look (ADR-0024) --------------------------------------
+// A Map's ambient set is the fourth thing on it persisted by name rather
+// than by ordinal (ADR-0028), and the one most exposed to reordering: the
+// effects are a decorative roster that will grow and be re-sorted, where a
+// silently-shifted ordinal would swap one effect for another with nothing
+// to notice.
+
+// its own path rather than ROUND_TRIP_MAP_PATH above: two tests writing one
+// file race under the default (parallel) test runner
+@(private = "file")
+AMBIENT_MAP_PATH :: "data/map_ambient_round_trip_test.json"
+
+@(test)
+test_a_saved_maps_ambient_set_round_trips_by_name :: proc(t: ^testing.T) {
+	template: Map
+	template.name = "Ambient"
+	template.ambient = {.Motes, .Light_Wash}
+	append(&template.tilemap.tiles, Tile{world_coords = {0, 0}})
+	defer delete_map(template)
+
+	testing.expect(t, save_map(AMBIENT_MAP_PATH, template), "the template map should save")
+	defer os.remove(AMBIENT_MAP_PATH)
+
+	written, read_err := os.read_entire_file(AMBIENT_MAP_PATH, context.temp_allocator)
+	testing.expect(t, read_err == nil, "the saved map should be readable")
+	text := string(written)
+	testing.expect(t, strings.contains(text, "Motes"), "the saved map should name `Motes`")
+	testing.expect(t, strings.contains(text, "Light_Wash"), "the saved map should name `Light_Wash`")
+
+	loaded, load_ok := load_map(AMBIENT_MAP_PATH)
+	testing.expect(t, load_ok, "the saved map should load back")
+	defer delete_map(loaded)
+	defer delete(loaded.name)
+
+	testing.expect(
+		t,
+		loaded.ambient == {.Motes, .Light_Wash},
+		"the ambient set should come back as the two effects it was saved with",
+	)
+}
+
+@(private = "file")
+STALE_AMBIENT_MAP_PATH :: "data/map_stale_ambient_test.json"
+
+@(test)
+test_load_map_reports_an_ambient_name_this_build_does_not_know :: proc(t: ^testing.T) {
+	STALE :: `{"name":"Stale","tilemap":{"tile_size":[16,16],"tiles":[]},"spawn_triggers":[],"ambient_save":["Motess"]}`
+	write_err := os.write_entire_file(STALE_AMBIENT_MAP_PATH, transmute([]byte)string(STALE))
+	testing.expect(t, write_err == nil, "the stale map should be writable")
+	defer os.remove(STALE_AMBIENT_MAP_PATH)
+
+	// as above: the reported error is the point, but core:testing fails any
+	// test that emits an error-level log
+	reporting := context.logger
+	context.logger = log.nil_logger()
+	defer context.logger = reporting
+
+	_, ok := load_map(STALE_AMBIENT_MAP_PATH)
+	testing.expect(t, !ok, "an ambient effect naming a case this build lacks should fail the load, not be dropped")
+}
+
+// Fourth checkbox of
+// .scratch/content-expansion-build/issues/13-a-map-owns-its-look.md: the
+// palette moved off the TILEMAP_* constants and onto the Map, so the one
+// committed Map has to still render in the sand it renders in today. Reads
+// the baked table rather than the file, since that is what Playing draws.
+// The first assertion over `maps`; ticket 15 grows this into the full
+// validity sweep.
+@(test)
+test_the_baked_desert_dungeon_keeps_todays_palette :: proc(t: ^testing.T) {
+	desert := maps[.Desert_Dungeon]
+
+	testing.expect_value(t, desert.floor_color, Color{56, 48, 40, 255})
+	testing.expect_value(t, desert.wall_color, Color{124, 110, 90, 255})
+	testing.expect_value(t, desert.rung, 1)
+
+	// the swatch the Map Selection screen draws is the wall itself, so the
+	// menu cannot advertise a colour the world does not have
+	testing.expect_value(t, map_swatch_color(desert), desert.wall_color)
+
+	// derived rather than authored, and within one 8-bit step of the
+	// TILEMAP_WALL_BEVEL_COLOR it replaces ({74, 64, 52})
+	testing.expect_value(t, map_bevel_color(desert), Color{74, 64, 53, 255})
+}

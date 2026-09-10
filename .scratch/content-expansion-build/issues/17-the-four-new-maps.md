@@ -12,3 +12,12 @@ new enemies in rooms that suit them, not the same room with bigger numbers.
 - [ ] Each has its own layout, palette, ambient set, time limit and payout multiplier
 - [ ] Each has a composition timeline that introduces its rung's debuting Kinds
 - [ ] All five pass the Map validity test
+
+## Comments
+
+Rung two is currently occupied by `data/maps/cold_hall.json`, a second Map
+added while building ticket 13 so per-Map theming had two Maps to be tested
+against. Its layout is generated (a colonnaded hall) rather than hand-drawn
+and its timeline is the Desert Dungeon's re-paced, so it is a fixture, not
+one of this ticket's four. Replace or rebuild it here rather than authoring
+around it.

@@ -23,17 +23,74 @@ Map :: struct {
 	// Authored per Map so a later, harder rung of the ladder can pay more
 	// for the risk it asks the player to carry.
 	victory_multiplier: f32,
+	// -- ladder position (ADR-0022) ---------------------------------------
+	// where this Map sits on the Map ladder, 1..N with no gaps and no
+	// duplicates. Authored here rather than taken from Map_Name's order,
+	// which the map_builder derives from a filename-sorted directory listing
+	// and is therefore nobody's chosen ordering.
+	rung:               int,
+	// -- theme (ADR-0024) -------------------------------------------------
+	// the two authored colours of the place. Everything else derives:
+	// map_bevel_color mixes between them and map_swatch_color is the wall
+	// itself, so the Map Selection screen cannot advertise a colour the
+	// world does not have.
+	floor_color:        Color,
+	wall_color:         Color,
+	// the decorative layers this Map runs continuously. Empty is a valid
+	// authoring choice and means the Map looks exactly as its tiles do.
+	ambient:            Ambient_Set `json:"-"`,
+	// the on-disk form of `ambient`: one identity string per effect
+	// (ADR-0028), resolved by load_map and rebuilt by save_map. Nil at
+	// runtime, so clone_map and delete_map have nothing to do with it.
+	ambient_save:       []string,
 }
 
-// the swatch color the Map Selection screen's icon draws in (icon.odin's
-// icon_map_swatch). Presentation only, so it lives here rather than on Map
-// itself: Map round-trips through data/maps/*.json and the map_builder, and
-// a color baked into that format would need the level editor to grow a
-// color picker to author it. Promote it onto Map if maps ever gain real
-// per-map theming. Kept out of the generated maps.odin - build.sh re-runs
-// the map_builder every build and would wipe it.
-map_icon_colors: [Map_Name]Color = {
-	.Desert_Dungeon = {214, 178, 108, 255}, // warm sand, matching the tilemap palette
+// the decorative layers a Map theme can run - drifting motes above the
+// actors, off-grid patches on the floor beneath them, a directional wash of
+// light across the screen. No vignette: the screen edges are where enemies
+// enter, and an ambient effect may never occlude information (ADR-0024).
+// Authored per Map rather than fixed, because five Maps differing only in
+// hue read as five palettes rather than five places.
+Ambient_Effect :: enum {
+	Motes,
+	Floor_Patches,
+	Light_Wash,
+}
+
+Ambient_Set :: bit_set[Ambient_Effect]
+
+// the wall bevel and the Map Selection swatch, derived from the two colours
+// a Map authors rather than authored alongside them - a separately authored
+// third colour would be free to disagree with the world it sits in or
+// advertises, and deriving makes that disagreement unrepresentable
+// (ADR-0024).
+//
+// The mix is weighted toward the floor so a wall reads as thicker than it is:
+// on the Desert Dungeon palette it lands on {74, 64, 53}, within one 8-bit
+// step of the TILEMAP_WALL_BEVEL_COLOR constant it replaces. That weighting
+// is also what keeps the inset darker than the wall it insets - true for as
+// long as a Map authors a floor darker than its wall, which is what a floor
+// is, and which is the validity question ticket 15 asks of the pair.
+MAP_BEVEL_MIX :: 0.27
+
+map_bevel_color :: proc(map_data: Map) -> Color {
+	return color_mix(map_data.floor_color, map_data.wall_color, MAP_BEVEL_MIX)
+}
+
+map_swatch_color :: proc(map_data: Map) -> Color {
+	return map_data.wall_color
+}
+
+// channel-wise lerp, keeping a's alpha - the colours it mixes are opaque
+// world colours, and an interpolated transparency has no meaning for any of
+// them
+color_mix :: proc(a, b: Color, t: f32) -> Color {
+	return Color {
+		u8(f32(a.r) + (f32(b.r) - f32(a.r)) * t),
+		u8(f32(a.g) + (f32(b.g) - f32(a.g)) * t),
+		u8(f32(a.b) + (f32(b.b) - f32(a.b)) * t),
+		a.a,
+	}
 }
 
 load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
@@ -50,6 +107,23 @@ load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 		log_error("Couldn't unmarshal map file at `{}`: {}", path, json_error)
 		return {}, false
 	}
+
+	// the theme's ambient set arrives as identity strings too (ADR-0028), and
+	// resolves before the triggers below so its own allocations are gone
+	// before any of that loop's failure paths can bail past them. An effect
+	// this build doesn't have fails the load rather than quietly leaving the
+	// Map one layer short of the place it was authored to be.
+	for identity, effect_index in map_data.ambient_save {
+		effect, effect_ok := enum_from_identity_string(Ambient_Effect, identity)
+		if !effect_ok {
+			log_error("Ambient effect {} in `{}` names something this build doesn't have", effect_index, path)
+			delete_ambient_save(&map_data)
+			delete_map(map_data)
+			return {}, false
+		}
+		map_data.ambient += {effect}
+	}
+	delete_ambient_save(&map_data)
 
 	// a name no case carries is a load failure, not something to guess at
 	// (ADR-0028). The *_from_save procs name the offending identity and its
@@ -111,7 +185,22 @@ save_map :: proc(path: string, map_data: Map) -> bool {
 		}
 	}
 
-	json_data, json_error := json.marshal(map_data, allocator = context.temp_allocator)
+	// the live bit_set is what's authored; its identity-string list is
+	// rebuilt from it here, the same way each trigger's *_save fields are
+	// above. A local copy because an Odin parameter is immutable - and the
+	// shallow copy is safe, since marshalling is the only thing that reads
+	// it. The strings themselves point into static type info, so the temp
+	// slice holding them is all there is to free.
+	to_write := map_data
+	ambient_save := make([dynamic]string, 0, len(Ambient_Effect), context.temp_allocator)
+	for effect in Ambient_Effect {
+		if effect in map_data.ambient {
+			append(&ambient_save, enum_identity_string(effect))
+		}
+	}
+	to_write.ambient_save = ambient_save[:]
+
+	json_data, json_error := json.marshal(to_write, allocator = context.temp_allocator)
 	if json_error != nil {
 		log_error("Couldn't marshal map `{}`", path)
 		return false
@@ -145,6 +234,19 @@ clone_map :: proc(template: Map) -> Map {
 		trigger.composition = slice.clone(trigger.composition)
 	}
 	return result
+}
+
+// frees the identity strings json.unmarshal allocated for a Map's ambient
+// set, and the slice holding them, once they've been resolved into the live
+// bit_set. Blanks the field so nothing downstream (clone_map, delete_map, a
+// later save) can read or re-free what it points at - save_map rebuilds the
+// list from the set rather than reusing this one.
+delete_ambient_save :: proc(map_data: ^Map) {
+	for &identity in map_data.ambient_save {
+		delete_identity_string(&identity)
+	}
+	delete(map_data.ambient_save)
+	map_data.ambient_save = nil
 }
 
 // frees a Map's own dynamic-array backing memory (as opposed to whatever it
