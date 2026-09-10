@@ -226,7 +226,7 @@ tuning_slug_registered :: proc(slug: string) -> bool {
 // (main.odin), so calling them on every slider tick is safe and cheap.
 //
 // This reaches the *player* only. A value copied into an entity when it spawned
-// - an Enemy's health from ENEMY_MAX_HEALTH, a Bullet's speed from its weapon -
+// - an Enemy's health from its Kind's preset, a Bullet's speed from its weapon -
 // keeps the number it was born with; only newly-spawned entities pick the
 // change up. See ADR-0020.
 apply_tuning_change :: proc() {
@@ -523,7 +523,6 @@ register_player_tunables :: proc() {
 @(private = "file")
 register_enemy_tunables :: proc() {
 	register_tunable(.Enemies, "enemy.max_alive", "Max Alive", &MAX_ENEMIES, 1, 200)
-	register_tunable(.Enemies, "enemy.max_health", "Max Health", &ENEMY_MAX_HEALTH, 1, 500)
 	register_tunable(.Enemies, "enemy.size_min", "Size Min", &ENEMY_SIZE_MIN, 2, 64)
 	register_tunable(.Enemies, "enemy.size_max", "Size Max", &ENEMY_SIZE_MAX, 2, 128)
 	register_tunable(.Enemies, "enemy.size_per_max_health", "Size per Max Health", &ENEMY_SIZE_PER_MAX_HEALTH, 0, 2)
@@ -629,9 +628,7 @@ register_economy_tunables :: proc() {
 	register_tunable(.Progression, "progression.level_growth", "Level Growth", &LEVEL_GROWTH, 1, 3)
 	for kind in Enemy_Kind {
 		name := tuning_slug_part(fmt.tprintf("{}", kind))
-		preset := &enemy_gold_presets[kind]
-		register_tunable(.Progression, fmt.tprintf("gold.{}.base", name), fmt.tprintf("{} Gold", kind), &preset.base_gold, 0, 500)
-		register_tunable(.Progression, fmt.tprintf("gold.{}.multiplier", name), fmt.tprintf("{} Gold Mult", kind), &preset.gold_multiplier, 0, 10)
+		register_tunable(.Progression, fmt.tprintf("gold.{}", name), fmt.tprintf("{} Gold", kind), &enemy_presets[kind].gold, 0, 500)
 	}
 	register_tunable(.Progression, "progression.debug_gold_grant", "Debug Gold Grant", &DEBUG_GOLD_GRANT, 0, 10000)
 }

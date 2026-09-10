@@ -284,7 +284,7 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	game.player.gold = 500
 	game.player.gold_earned = 500
 	game.player.kills = {}
-	game.player.kills[.Basic] = 9
+	game.player.kills[.Grunt] = 9
 	game.player.survival_seconds = 123
 	game.player.upgrade_stacks = {}
 	game.player.upgrade_stacks[.Damage] = 4

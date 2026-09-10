@@ -173,7 +173,7 @@ test_damage_player_does_not_double_bank_gold_on_repeated_hits_after_death :: pro
 	game.player.banked_progress = 0
 	game.player.level = 1
 	game.player.kills = {}
-	game.player.kills[.Basic] = 1
+	game.player.kills[.Grunt] = 1
 	game.player.survival_seconds = 0
 
 	// the killing hit, then a second hit landing the same "frame" - as if two

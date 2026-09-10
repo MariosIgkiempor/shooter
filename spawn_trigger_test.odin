@@ -17,8 +17,8 @@ import "core:testing"
 // that want a composition they can legitimately delete() in teardown need
 // the same real allocation, so this helper always goes through slice.clone
 // too rather than assigning a bare literal.
-single_entry_composition :: proc(movement: Movement_Style, attack: Attack_Style, count: int) -> []Spawn_Composition_Entry {
-	return slice.clone([]Spawn_Composition_Entry{{movement_template = movement, attack_template = attack, count = count}})
+single_entry_composition :: proc(kind: Enemy_Kind, count: int) -> []Spawn_Composition_Entry {
+	return slice.clone([]Spawn_Composition_Entry{{kind = kind, count = count}})
 }
 
 spawn_trigger_test_setup :: proc() -> (previous_map: Map, previous_player: Player, previous_enemies: [dynamic]Enemy, previous_camera: Camera) {
@@ -61,7 +61,7 @@ test_update_spawn_triggers_one_shot_fires_exactly_once_when_condition_crosses ::
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 5},
 			mode = One_Shot{},
-			composition = single_entry_composition(Grounded{speed = 40}, nil, 1),
+			composition = single_entry_composition(.Grunt, 1),
 		},
 	)
 
@@ -88,15 +88,15 @@ test_update_spawn_triggers_kills_reached_checks_cumulative_total_kills :: proc(t
 		Spawn_Trigger {
 			condition = Kills_Reached{count = 3},
 			mode = One_Shot{},
-			composition = single_entry_composition(Grounded{speed = 40}, nil, 1),
+			composition = single_entry_composition(.Grunt, 1),
 		},
 	)
 
-	game.player.kills[.Basic] = 2
+	game.player.kills[.Grunt] = 2
 	update_spawn_triggers(0)
 	testing.expect(t, len(game.enemies) == 0, "total_kills below the threshold should not fire the trigger")
 
-	game.player.kills[.Basic] = 3
+	game.player.kills[.Grunt] = 3
 	update_spawn_triggers(0)
 	testing.expect(t, len(game.enemies) == 1, "total_kills reaching the threshold should fire the trigger")
 }
@@ -111,7 +111,7 @@ test_update_spawn_triggers_repeating_fires_on_activation_then_every_interval_unt
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 0},
 			mode = Repeating{interval = 2, duration = 5},
-			composition = single_entry_composition(Grounded{speed = 40}, nil, 1),
+			composition = single_entry_composition(.Grunt, 1),
 		},
 	)
 
@@ -144,7 +144,7 @@ test_update_spawn_triggers_repeating_with_no_duration_runs_indefinitely :: proc(
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 0},
 			mode = Repeating{interval = 2, duration = 0},
-			composition = single_entry_composition(Grounded{speed = 40}, nil, 1),
+			composition = single_entry_composition(.Grunt, 1),
 		},
 	)
 
@@ -169,7 +169,7 @@ test_update_spawn_triggers_repeating_does_not_double_fire_on_a_large_lag_spike_f
 		Spawn_Trigger {
 			condition = Time_Elapsed{seconds = 0},
 			mode = Repeating{interval = 1, duration = 0},
-			composition = single_entry_composition(Grounded{speed = 40}, nil, 1),
+			composition = single_entry_composition(.Grunt, 1),
 		},
 	)
 
@@ -190,9 +190,7 @@ test_fire_spawn_composition_silently_skips_spawns_past_max_enemies :: proc(t: ^t
 		append(&game.enemies, Enemy{})
 	}
 
-	composition := []Spawn_Composition_Entry {
-		{movement_template = Grounded{speed = 40}, attack_template = nil, count = 3},
-	}
+	composition := []Spawn_Composition_Entry{{kind = .Grunt, count = 3}}
 	fire_spawn_composition(composition)
 
 	testing.expectf(

@@ -636,6 +636,7 @@ tunable_value_text :: proc(tunable: Tunable) -> string {
 
 DEFAULT_SPAWN_TRIGGER_INTERVAL :: 3
 DEFAULT_SPAWN_CONDITION_KILLS :: 10
+DEFAULT_SPAWN_COMPOSITION_KIND :: Enemy_Kind.Grunt // the roster's baseline, so a fresh entry spawns something ordinary
 
 spawn_triggers_ui :: proc() {
 	ui.text("Spawn Triggers: {}", len(game.editing_map.spawn_triggers))
@@ -709,37 +710,9 @@ spawn_composition_summary :: proc(composition: []Spawn_Composition_Entry) -> str
 		if i > 0 {
 			strings.write_string(&sb, ", ")
 		}
-		fmt.sbprintf(
-			&sb,
-			"{}x {}+{}",
-			entry.count,
-			movement_style_label(entry.movement_template),
-			attack_style_label(entry.attack_template),
-		)
+		fmt.sbprintf(&sb, "{}x {}", entry.count, entry.kind)
 	}
 	return strings.to_string(sb)
-}
-
-movement_style_label :: proc(movement: Movement_Style) -> string {
-	switch _ in movement {
-	case Grounded:
-		return "Grounded"
-	case Floater:
-		return "Floater"
-	case Swarmer:
-		return "Swarmer"
-	}
-	return "None"
-}
-
-attack_style_label :: proc(attack: Attack_Style) -> string {
-	switch _ in attack {
-	case Melee:
-		return "Melee"
-	case Ranged:
-		return "Ranged"
-	}
-	return "None"
 }
 
 draw_spawn_trigger_detail :: proc(trigger: ^Spawn_Trigger, key: string, trigger_number: int) {
@@ -801,137 +774,20 @@ draw_spawn_trigger_detail :: proc(trigger: ^Spawn_Trigger, key: string, trigger_
 	}
 
 	if ui.button(fmt.tprintf("+ Add Entry (Trigger {})", trigger_number)) {
-		spawn_composition_entry_add(
-			trigger,
-			Spawn_Composition_Entry {
-				movement_template = Grounded{speed = 40},
-				attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
-				count = 1,
-			},
-		)
+		spawn_composition_entry_add(trigger, Spawn_Composition_Entry{kind = DEFAULT_SPAWN_COMPOSITION_KIND, count = 1})
 	}
 }
 
+// An entry is a Kind and a count, so this is a Kind picker and a count
+// slider - the ~130 lines of movement/attack sliders it replaces are gone
+// with the templates they edited. What a Grunt *is* is authored in
+// enemy_presets (enemy.odin) and tuned by editing that table, not per Map
+// (ADR-0020); a Map picks from the roster and says how many.
 draw_spawn_composition_entry_ui :: proc(entry: ^Spawn_Composition_Entry, key: string) {
 	if ui.row({gap = ui.theme.gap}) {
-		ui.text("Movement")
-		movement_template_none_button(key, "None", entry)
-		movement_template_button(key, "Grounded", entry, Grounded{speed = 40})
-		movement_template_button(
-			key,
-			"Floater",
-			entry,
-			Floater{speed = 30, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35},
-		)
-		movement_template_button(key, "Swarmer", entry, Swarmer{speed = 50})
-	}
-
-	switch &m in entry.movement_template {
-	case Grounded:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider(fmt.tprintf("{}_grounded_speed", key), &m.speed, 0, 300)
-			ui.text("{:.0f}", m.speed)
-		}
-	case Floater:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider(fmt.tprintf("{}_floater_speed", key), &m.speed, 0, 300)
-			ui.text("{:.0f}", m.speed)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Wobble Amplitude")
-			ui.slider(fmt.tprintf("{}_floater_wobble_amplitude", key), &m.wobble_amplitude, 0, 80)
-			ui.text("{:.0f}", m.wobble_amplitude)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Wobble Frequency")
-			ui.slider(fmt.tprintf("{}_floater_wobble_frequency", key), &m.wobble_frequency, 0.1, 5)
-			ui.text("{:.1f}", m.wobble_frequency)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Pull Toward Player")
-			ui.slider(fmt.tprintf("{}_floater_pull_strength", key), &m.pull_strength, 0, 1)
-			ui.text("{:.2f}", m.pull_strength)
-		}
-	case Swarmer:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Speed")
-			ui.slider(fmt.tprintf("{}_swarmer_speed", key), &m.speed, 0, 300)
-			ui.text("{:.0f}", m.speed)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Surround Radius (from Attack Style)")
-			ui.text("{:.0f}", swarmer_surround_radius(entry.attack_template))
-		}
-	}
-
-	if ui.row({gap = ui.theme.gap}) {
-		ui.text("Attack")
-		attack_template_none_button(key, "None", entry)
-		attack_template_button(
-			key,
-			"Melee",
-			entry,
-			Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
-		)
-		attack_template_button(
-			key,
-			"Ranged",
-			entry,
-			Ranged {
-				min_range = 60,
-				max_range = 120,
-				attack_damage = 8,
-				projectile_speed = 200,
-				fire_rate = 1,
-				bullet_lifetime = 2,
-			},
-		)
-	}
-
-	switch &a in entry.attack_template {
-	case Melee:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Attack Damage")
-			ui.slider(fmt.tprintf("{}_melee_attack_damage", key), &a.attack_damage, 0, 100)
-			ui.text("{:.0f}", a.attack_damage)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Attack Range")
-			ui.slider(fmt.tprintf("{}_melee_attack_range", key), &a.attack_range, 0, 50)
-			ui.text("{:.0f}", a.attack_range)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Attack Cooldown")
-			ui.slider(fmt.tprintf("{}_melee_attack_cooldown", key), &a.attack_cooldown, 0.1, 5)
-			ui.text("{:.2f}", a.attack_cooldown)
-		}
-	case Ranged:
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Min Range")
-			ui.slider(fmt.tprintf("{}_ranged_min_range", key), &a.min_range, 0, 300)
-			ui.text("{:.0f}", a.min_range)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Max Range")
-			ui.slider(fmt.tprintf("{}_ranged_max_range", key), &a.max_range, 0, 300)
-			ui.text("{:.0f}", a.max_range)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Attack Damage")
-			ui.slider(fmt.tprintf("{}_ranged_attack_damage", key), &a.attack_damage, 0, 100)
-			ui.text("{:.0f}", a.attack_damage)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Projectile Speed")
-			ui.slider(fmt.tprintf("{}_ranged_projectile_speed", key), &a.projectile_speed, 0, 500)
-			ui.text("{:.0f}", a.projectile_speed)
-		}
-		if ui.row({gap = ui.theme.gap}) {
-			ui.text("Fire Rate")
-			ui.slider(fmt.tprintf("{}_ranged_fire_rate", key), &a.fire_rate, 0.1, 10)
-			ui.text("{:.1f}", a.fire_rate)
+		ui.text("Kind")
+		for kind in Enemy_Kind {
+			enemy_kind_button(key, kind, entry)
 		}
 	}
 
@@ -959,29 +815,10 @@ spawn_mode_type_button :: proc(key_prefix: string, label: string, trigger: ^Spaw
 	}
 }
 
-movement_template_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry, value: $T) {
-	_, is_active := entry.movement_template.(T)
-	if selectable_button(fmt.tprintf("{}_movement_{}", key_prefix, label), label, is_active) {
-		entry.movement_template = value
-	}
-}
-
-movement_template_none_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry) {
-	if selectable_button(fmt.tprintf("{}_movement_{}", key_prefix, label), label, entry.movement_template == nil) {
-		entry.movement_template = nil
-	}
-}
-
-attack_template_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry, value: $T) {
-	_, is_active := entry.attack_template.(T)
-	if selectable_button(fmt.tprintf("{}_attack_{}", key_prefix, label), label, is_active) {
-		entry.attack_template = value
-	}
-}
-
-attack_template_none_button :: proc(key_prefix: string, label: string, entry: ^Spawn_Composition_Entry) {
-	if selectable_button(fmt.tprintf("{}_attack_{}", key_prefix, label), label, entry.attack_template == nil) {
-		entry.attack_template = nil
+enemy_kind_button :: proc(key_prefix: string, kind: Enemy_Kind, entry: ^Spawn_Composition_Entry) {
+	label := fmt.tprintf("{}", kind)
+	if selectable_button(fmt.tprintf("{}_kind_{}", key_prefix, label), label, entry.kind == kind) {
+		entry.kind = kind
 	}
 }
 
@@ -1002,13 +839,7 @@ spawn_trigger_row_add :: proc() {
 			// forgets to also add a composition entry would otherwise
 			// save a trigger that silently spawns nothing, forever
 			composition = slice.clone(
-				[]Spawn_Composition_Entry {
-					{
-						movement_template = Grounded{speed = 40},
-						attack_template = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
-						count = 1,
-					},
-				},
+				[]Spawn_Composition_Entry{{kind = DEFAULT_SPAWN_COMPOSITION_KIND, count = 1}},
 			),
 		},
 	)
@@ -1075,7 +906,7 @@ spawn_composition_entry_remove :: proc(trigger: ^Spawn_Trigger, index: int) {
 
 // like ui.button, but stays highlighted while selected. key/label are split
 // (unlike ui.button, where the label doubles as the key) because the Spawn
-// Trigger panel can show the same variant label (e.g. "Grounded") more than
+// Trigger panel can show the same label (e.g. "Grunt") more than
 // once in a single frame - one per composition entry, across however many
 // trigger rows are expanded at once (ticket 04's multi-expand) - and
 // ui.slider/ui.button's own doc comments warn that a duplicate key

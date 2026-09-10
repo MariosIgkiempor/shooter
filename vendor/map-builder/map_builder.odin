@@ -50,56 +50,13 @@ Tilemap :: struct {
 	tiles:     [dynamic]Tile,
 }
 
-Grounded_Save :: struct {
-	speed: f32,
-}
-
-Floater_Save :: struct {
-	speed:            f32,
-	wobble_amplitude: f32,
-	wobble_frequency: f32,
-	pull_strength:    f32,
-	wobble_phase:     f32,
-}
-
-Swarmer_Save :: struct {
-	speed: f32,
-}
-
-Movement_Style_Save :: struct {
-	kind:     string,
-	grounded: Maybe(Grounded_Save) `json:"grounded,omitempty"`,
-	floater:  Maybe(Floater_Save) `json:"floater,omitempty"`,
-	swarmer:  Maybe(Swarmer_Save) `json:"swarmer,omitempty"`,
-}
-
-Melee_Save :: struct {
-	attack_damage:   f32,
-	attack_range:    f32,
-	attack_cooldown: f32,
-	attack_timer:    f32,
-}
-
-Ranged_Save :: struct {
-	min_range:        f32,
-	max_range:        f32,
-	attack_damage:    f32,
-	projectile_speed: f32,
-	fire_rate:        f32,
-	bullet_lifetime:  f32,
-	fire_timer:       f32,
-}
-
-Attack_Style_Save :: struct {
-	kind:   string,
-	melee:  Maybe(Melee_Save) `json:"melee,omitempty"`,
-	ranged: Maybe(Ranged_Save) `json:"ranged,omitempty"`,
-}
-
+// a Kind and a count. The Kind arrives as its identity string (ADR-0028)
+// and leaves as `.<Name>` in the generated literal - this program never
+// resolves Enemy_Kind itself, so a name no case carries is caught by the
+// Odin compiler when it type-checks maps.odin rather than here.
 Spawn_Composition_Entry :: struct {
-	movement_template_save: Movement_Style_Save,
-	attack_template_save:   Attack_Style_Save,
-	count:                  int,
+	kind_save: string `json:"kind_save"`,
+	count:     int,
 }
 
 Time_Elapsed :: struct {
@@ -326,11 +283,10 @@ write_spawn_triggers_literal :: proc(f: ^os.File, triggers: [dynamic]Spawn_Trigg
 			if i > 0 {
 				fmt.fprint(f, ", ")
 			}
-			fmt.fprintf(f, "Spawn_Composition_Entry{{count = %v, movement_template = ", entry.count)
-			write_movement_style_literal(f, entry.movement_template_save)
-			fmt.fprint(f, ", attack_template = ")
-			write_attack_style_literal(f, entry.attack_template_save)
-			fmt.fprint(f, "}")
+			if entry.kind_save == "" {
+				log.panicf("a composition entry names no Enemy Kind - the map file is stale, or was written before kinds were named")
+			}
+			fmt.fprintf(f, "Spawn_Composition_Entry{{kind = .%s, count = %v}}", entry.kind_save, entry.count)
 		}
 		fmt.fprint(f, "}},\n")
 	}
@@ -359,50 +315,5 @@ write_spawn_mode_literal :: proc(f: ^os.File, s: Spawn_Mode_Save) {
 		fmt.fprintf(f, "Repeating{{interval = %v, duration = %v}}", v.interval, v.duration)
 	case:
 		log.panicf("`%s` is not a Spawn_Mode_Kind - the map file is stale, or the enum was renamed", s.kind)
-	}
-}
-
-write_movement_style_literal :: proc(f: ^os.File, s: Movement_Style_Save) {
-	switch s.kind {
-	case "Grounded":
-		v := s.grounded.? or_else Grounded_Save{}
-		fmt.fprintf(f, "Grounded{{speed = %v}}", v.speed)
-	case "Floater":
-		v := s.floater.? or_else Floater_Save{}
-		fmt.fprintf(
-			f,
-			"Floater{{speed = %v, wobble_amplitude = %v, wobble_frequency = %v, pull_strength = %v}}",
-			v.speed, v.wobble_amplitude, v.wobble_frequency, v.pull_strength,
-		)
-	case "Swarmer":
-		v := s.swarmer.? or_else Swarmer_Save{}
-		fmt.fprintf(f, "Swarmer{{speed = %v}}", v.speed)
-	case "Inert":
-		fmt.fprint(f, "nil")
-	case:
-		log.panicf("`%s` is not a Movement_Style_Kind - the map file is stale, or the enum was renamed", s.kind)
-	}
-}
-
-write_attack_style_literal :: proc(f: ^os.File, s: Attack_Style_Save) {
-	switch s.kind {
-	case "Melee":
-		v := s.melee.? or_else Melee_Save{}
-		fmt.fprintf(
-			f,
-			"Melee{{attack_damage = %v, attack_range = %v, attack_cooldown = %v}}",
-			v.attack_damage, v.attack_range, v.attack_cooldown,
-		)
-	case "Ranged":
-		v := s.ranged.? or_else Ranged_Save{}
-		fmt.fprintf(
-			f,
-			"Ranged{{min_range = %v, max_range = %v, attack_damage = %v, projectile_speed = %v, fire_rate = %v, bullet_lifetime = %v}}",
-			v.min_range, v.max_range, v.attack_damage, v.projectile_speed, v.fire_rate, v.bullet_lifetime,
-		)
-	case "Inert":
-		fmt.fprint(f, "nil")
-	case:
-		log.panicf("`%s` is not an Attack_Style_Kind - the map file is stale, or the enum was renamed", s.kind)
 	}
 }

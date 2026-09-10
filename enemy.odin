@@ -7,14 +7,120 @@ import rl "vendor:raylib"
 
 MAX_ENEMIES: int = 24
 ENEMY_SIZE: i32 = 12
-ENEMY_MAX_HEALTH: f32 = 50
 
-// which per-kind Gold payout (enemy_gold_presets, account_progression.odin) an
-// Enemy grants on death - a single placeholder member today, but the lookup
-// is kept extensible for enemy variety that doesn't exist yet (see the
-// Gold payout ticket)
+// -- the movement-family palette -------------------------------------------
+//
+// Hue means Movement Style family, and it means it because `enemy_presets`
+// below reads these constants rather than authoring a colour of its own -
+// so a Kind cannot be given a hue that lies about how it moves. Spread far
+// enough apart that they stay tellable at a glance alongside the player's
+// own ACTOR_PLAYER_COLOR (main.odin), with room left for the families that
+// don't exist yet.
+//
+// Two of these were inverted rather than merely stale before the roster
+// existed: Grounded was red (reserved now for the family a dashing Charger
+// will take) and Swarmer was orange. A build that repainted them separately from the
+// preset table would have read the roster wrong in between, so the palette
+// and the presets are one change.
+ENEMY_GROUNDED_COLOR :: Color{60, 190, 90, 255} // green
+ENEMY_FLOATER_COLOR :: rl.VIOLET
+ENEMY_SWARMER_COLOR :: Color{235, 215, 70, 255} // yellow
+// no Kind is Inert yet - the family exists (Movement_Style's nil case) and
+// this is the hue reserved for the first Kind that holds still.
+ENEMY_INERT_COLOR :: Color{60, 200, 205, 255} // cyan
+
+// the authored unit of enemy variety - a named entity a Map's Spawn Trigger
+// composition asks for by name, never a bundle of parameters re-specified at
+// every trigger. Ordered by the rung each Kind debuts on rather than by when
+// it was added: a composition entry persists its Kind by identity string
+// (ADR-0028), so this enum can be reordered freely without renumbering the
+// maps. See CONTEXT.md's Enemy Kind entry and ADR-0020.
 Enemy_Kind :: enum {
-	Basic,
+	Grunt,
+	Spitter,
+	Wraith,
+	Mite,
+	Gazer,
+}
+
+// the authored facts of one Enemy Kind - deliberately not a full Enemy,
+// which also carries a world position and per-body runtime state. A spawned
+// Enemy is a pure stamp of its preset plus a position; nothing scales or
+// modifies it afterwards, which is why there is no per-Map health
+// multiplier and no elite tier (ADR-0020).
+Enemy_Preset :: struct {
+	movement:   Movement_Style,
+	attack:     Attack_Style,
+	max_health: f32, // also what the body's drawn size derives from (enemy_body_size)
+	color:      Color, // always one of the family constants above
+	gold:       int, // Gold this Kind's death is worth before Fortune scaling
+}
+
+// tuned by editing this table and rebuilding, exactly as weapon_presets is -
+// a Map picks Kinds and counts and cannot tune an enemy, so there is no
+// data/enemies.json and the level editor has no per-enemy sliders (ADR-0020).
+enemy_presets: [Enemy_Kind]Enemy_Preset = {
+	.Grunt = {
+		movement = Grounded{speed = 40},
+		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		max_health = 50,
+		color = ENEMY_GROUNDED_COLOR,
+		gold = 30,
+	},
+	.Spitter = {
+		movement = Grounded{speed = 35},
+		attack = Ranged {
+			min_range = 60,
+			max_range = 120,
+			attack_damage = 8,
+			projectile_speed = 200,
+			fire_rate = 1,
+			bullet_lifetime = 2,
+		},
+		max_health = 35,
+		color = ENEMY_GROUNDED_COLOR,
+		gold = 20,
+	},
+	.Wraith = {
+		movement = Floater {
+			speed = 45,
+			wobble_amplitude = 80,
+			wobble_frequency = 3,
+			pull_strength = 0.35,
+		},
+		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		max_health = 55,
+		color = ENEMY_FLOATER_COLOR,
+		gold = 35,
+	},
+	.Mite = {
+		movement = Swarmer{speed = 65},
+		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		max_health = 20,
+		color = ENEMY_SWARMER_COLOR,
+		// far below the payout anchor on purpose: Gold rolls per body, so at
+		// swarm density an anchored Mite would out-earn every other Kind
+		gold = 3,
+	},
+	.Gazer = {
+		movement = Floater {
+			speed = 25,
+			wobble_amplitude = 80,
+			wobble_frequency = 3,
+			pull_strength = 0.35,
+		},
+		attack = Ranged {
+			min_range = 60,
+			max_range = 120,
+			attack_damage = 8,
+			projectile_speed = 200,
+			fire_rate = 1,
+			bullet_lifetime = 2,
+		},
+		max_health = 30,
+		color = ENEMY_FLOATER_COLOR,
+		gold = 20,
+	},
 }
 
 Enemy :: struct {
@@ -23,7 +129,8 @@ Enemy :: struct {
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	health:     f32,
-	kind:       Enemy_Kind,
+	kind:       Enemy_Kind, // which preset this body was stamped from - its max health, colour and Gold are read back through it
+
 	// which swing last damaged this body (hit_volume.odin's monotonic swing
 	// identity; 0 means none has). A melee weapon's Hit volume is tested every
 	// frame of its swing and may carry several shapes, so without this a body
@@ -95,14 +202,14 @@ Ranged :: struct {
 // relative to the camera (pick_offscreen_spawn_point). See CONTEXT.md's
 // Spawn Trigger entry and the enemy-spawn-revamp map's ticket 03.
 //
-// condition/mode are tagged json:"-" for the same reason Weapon.variant and
-// Spawn_Composition_Entry's templates are: core:encoding/json's union-decode
-// guessing doesn't work reliably here either - confirmed directly (a
-// Kills_Reached/Repeating trigger round-tripped through json.marshal/
-// json.unmarshal on the bare unions came back as Time_Elapsed(0)/One_Shot,
-// silently wrong). condition_save/mode_save are the plain persisted mirror,
-// same *_Save + explicit `kind` discriminant pattern as
-// Movement_Style_Save/Attack_Style_Save below.
+// condition/mode are tagged json:"-" for the same reason Weapon.variant is:
+// core:encoding/json's union-decode guessing doesn't work reliably here
+// either - confirmed directly (a Kills_Reached/Repeating trigger
+// round-tripped through json.marshal/json.unmarshal on the bare unions came
+// back as Time_Elapsed(0)/One_Shot, silently wrong). condition_save/mode_save
+// are the plain persisted mirror, *_Save plus an explicit `kind` identity
+// string. These two are the last unions this game marshals: the composition's
+// movement/attack templates were the other pair, and they are gone (ADR-0020).
 Spawn_Trigger :: struct {
 	condition:      Spawn_Condition `json:"-"`,
 	condition_save: Spawn_Condition_Save,
@@ -168,7 +275,7 @@ spawn_condition_to_save :: proc(condition: Spawn_Condition) -> Spawn_Condition_S
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
-// union-variant-guessing loop run, same rationale as movement_style_from_save
+// union-variant-guessing loop run, same rationale as spawn_mode_from_save below
 spawn_condition_from_save :: proc(s: Spawn_Condition_Save) -> (condition: Spawn_Condition, ok: bool) {
 	kind := enum_from_identity_string(Spawn_Condition_Kind, s.kind) or_return
 	switch kind {
@@ -211,15 +318,15 @@ spawn_mode_to_save :: proc(mode: Spawn_Mode) -> Spawn_Mode_Save {
 	case Repeating:
 		return {kind = enum_identity_string(Spawn_Mode_Kind.Repeating), repeating = v}
 	}
-	// unreachable: every Spawn_Trigger always has a mode. Unlike Movement_Style/Attack_Style, which
-	// name their nil case (Inert), there is no case to name here - so if
+	// unreachable: every Spawn_Trigger always has a mode. There is no nil
+	// case to name here, unlike a Spawn_Condition - so if
 	// it ever were reached the empty identity fails the load loudly,
 	// rather than decoding back as ordinal zero the way {} used to.
 	return {}
 }
 
 // explicit switch on the decoded `kind` - never lets json.unmarshal's
-// union-variant-guessing loop run, same rationale as movement_style_from_save
+// union-variant-guessing loop run, same rationale as spawn_condition_from_save
 spawn_mode_from_save :: proc(s: Spawn_Mode_Save) -> (mode: Spawn_Mode, ok: bool) {
 	kind := enum_from_identity_string(Spawn_Mode_Kind, s.kind) or_return
 	switch kind {
@@ -231,21 +338,26 @@ spawn_mode_from_save :: proc(s: Spawn_Mode_Save) -> (mode: Spawn_Mode, ok: bool)
 	return nil, false // unreachable: kind is always one of the above
 }
 
-// one (Movement Style, Attack Style, count) entry in a Spawn_Trigger's
-// composition - generalizes Spawner's single fixed template into a mix,
-// reusing Movement_Style/Attack_Style's existing *_Save mirror pattern
-// verbatim (see Movement_Style_Save/Attack_Style_Save below)
+// one line of a Spawn Trigger's composition: how many of which Enemy Kind.
+// A level author picks "six Mites", never a bundle of movement and attack
+// parameters re-specified at every trigger - every field the spawned enemy
+// needs comes from the Kind's own preset (ADR-0020).
+//
+// `kind` persists by identity string rather than by ordinal (kind_save,
+// ADR-0028): this entry rides through every data/maps/*.json, so an enum
+// that marshalled as its ordinal would silently turn every Grunt in every
+// map into whatever else landed at that number when a Kind was inserted.
 Spawn_Composition_Entry :: struct {
-	movement_template:      Movement_Style `json:"-"`,
-	movement_template_save: Movement_Style_Save,
-	attack_template:        Attack_Style `json:"-"`,
-	attack_template_save:   Attack_Style_Save,
-	count:                  int,
+	kind:      Enemy_Kind `json:"-"`,
+	kind_save: string,
+	count:     int,
 }
 
-// discriminant for Movement_Style_Save; also doubles as the grouping key for
-// Separation and per-style debug/tuning tables below, since every Movement
-// Style variant needs one anyway
+// the grouping key for Separation and the per-style debug/tuning tables
+// below - one case per Movement_Style variant plus Inert for the nil case.
+// No longer a persistence discriminant: a Movement Style is authored on an
+// Enemy Preset now and never rides through a file, so the *_Save mirror
+// this used to tag went with the composition's templates (ADR-0020).
 Movement_Style_Kind :: enum {
 	Grounded,
 	Floater,
@@ -263,91 +375,6 @@ movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 		return .Swarmer
 	}
 	return .Inert
-}
-
-// plain (non-union) persisted shape of Spawn_Composition_Entry.movement_template
-// - see the json:"-" comment on Spawn_Composition_Entry.movement_template above
-Movement_Style_Save :: struct {
-	// identity string, not ordinal - see persistence.odin and ADR-0028. A
-	// Movement_Style_Save missing its `kind` key used to decode to
-	// .Grounded (ordinal zero) in silence; it now fails to resolve.
-	kind:     string,
-	grounded: Maybe(Grounded) `json:"grounded,omitempty"`,
-	floater:  Maybe(Floater) `json:"floater,omitempty"`,
-	swarmer:  Maybe(Swarmer) `json:"swarmer,omitempty"`,
-}
-
-movement_style_to_save :: proc(movement: Movement_Style) -> Movement_Style_Save {
-	switch v in movement {
-	case Grounded:
-		return {kind = enum_identity_string(Movement_Style_Kind.Grounded), grounded = v}
-	case Floater:
-		return {kind = enum_identity_string(Movement_Style_Kind.Floater), floater = v}
-	case Swarmer:
-		return {kind = enum_identity_string(Movement_Style_Kind.Swarmer), swarmer = v}
-	}
-	return {kind = enum_identity_string(Movement_Style_Kind.Inert)}
-}
-
-// explicit switch on the decoded `kind` - never lets json.unmarshal's
-// union-variant-guessing loop run, since Movement_Style is never the direct
-// target of json.unmarshal; only Movement_Style_Save is.
-movement_style_from_save :: proc(s: Movement_Style_Save) -> (movement: Movement_Style, ok: bool) {
-	kind := enum_from_identity_string(Movement_Style_Kind, s.kind) or_return
-	switch kind {
-	case .Grounded:
-		return s.grounded.? or_else Grounded{}, true
-	case .Floater:
-		return s.floater.? or_else Floater{}, true
-	case .Swarmer:
-		return s.swarmer.? or_else Swarmer{}, true
-	case .Inert:
-		return nil, true
-	}
-	return nil, false // unreachable: kind is always one of the above
-}
-
-// discriminant for Attack_Style_Save; internal to persistence, unrelated to
-// any gameplay enum
-Attack_Style_Kind :: enum {
-	Melee,
-	Ranged,
-	Inert,
-}
-
-// plain (non-union) persisted shape of Spawn_Composition_Entry.attack_template
-// - see the json:"-" comment on Spawn_Composition_Entry.attack_template above
-Attack_Style_Save :: struct {
-	// identity string, not ordinal - see persistence.odin and ADR-0028
-	kind:   string,
-	melee:  Maybe(Melee) `json:"melee,omitempty"`,
-	ranged: Maybe(Ranged) `json:"ranged,omitempty"`,
-}
-
-attack_style_to_save :: proc(attack: Attack_Style) -> Attack_Style_Save {
-	switch v in attack {
-	case Melee:
-		return {kind = enum_identity_string(Attack_Style_Kind.Melee), melee = v}
-	case Ranged:
-		return {kind = enum_identity_string(Attack_Style_Kind.Ranged), ranged = v}
-	}
-	return {kind = enum_identity_string(Attack_Style_Kind.Inert)}
-}
-
-// explicit switch on the decoded `kind` - never lets json.unmarshal's
-// union-variant-guessing loop run, since Attack_Style is never the direct
-// target of json.unmarshal; only Attack_Style_Save is.
-attack_style_from_save :: proc(s: Attack_Style_Save) -> (attack: Attack_Style, ok: bool) {
-	kind := enum_from_identity_string(Attack_Style_Kind, s.kind) or_return
-	switch kind {
-	case .Melee:
-		return s.melee.? or_else Melee{}, true
-	case .Ranged:
-		return s.ranged.? or_else Ranged{}, true
-	case .Inert:
-		return nil, true
-	}
-	return nil, false // unreachable: kind is always one of the above
 }
 
 // -- Separation ---------------------------------------------------------
@@ -583,13 +610,21 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 				return
 			}
 			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.current_map.tilemap)
-			spawn_enemy_at(point, entry.movement_template, entry.attack_template)
+			spawn_enemy_at(point, entry.kind)
 		}
 	}
 }
 
-spawn_enemy_at :: proc(position: Vec2, movement_template: Movement_Style, attack_template: Attack_Style) {
-	movement := movement_template
+// stamps one Enemy from its Kind's preset. The union values are *copied*
+// onto the body rather than looked up per read, because Floater.wobble_phase,
+// Melee.attack_timer and Ranged.fire_timer are per-enemy mutable state that
+// cannot be shared across a Kind (ADR-0020). Nothing scales the result: what
+// a Kind is worth killing and how much fire it takes is the same everywhere
+// it appears.
+spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
+	preset := enemy_presets[kind]
+
+	movement := preset.movement
 	switch &m in movement {
 	case Floater:
 		m.wobble_phase = rand.float32_range(0, math.TAU)
@@ -604,9 +639,9 @@ spawn_enemy_at :: proc(position: Vec2, movement_template: Movement_Style, attack
 		rect     = {position.x, position.y, 0, 0},
 		squash   = {1, 1},
 		movement = movement,
-		attack   = attack_template,
-		health   = ENEMY_MAX_HEALTH,
-		kind     = .Basic,
+		attack   = preset.attack,
+		health   = preset.max_health,
+		kind     = kind,
 	}
 
 	append(&game.enemies, enemy)

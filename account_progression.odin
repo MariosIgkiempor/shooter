@@ -4,27 +4,17 @@ import "core:math"
 
 // -- Gold payouts (ADR-0016) ------------------------------------------------
 
-// per-Enemy_Kind Gold payout - a single placeholder entry today (see
-// enemy.odin's Enemy_Kind), but base_gold/gold_multiplier is intentionally
-// richer than a flat int so a future enemy-variety effort has a multiplier
-// to tune without a data-shape migration. Replaces the retired
-// enemy_xp_presets: with XP gone (ADR-0016), the per-kind payout table this
-// shape existed for is now denominated in Gold, dropped as a Pickup at the
-// moment of death rather than tallied into a Run-end formula.
-Enemy_Gold_Preset :: struct {
-	base_gold:       int,
-	gold_multiplier: f32,
-}
-
-enemy_gold_presets: [Enemy_Kind]Enemy_Gold_Preset = {
-	.Basic = {base_gold = 30, gold_multiplier = 1.0}, // placeholder, content-authoring
-}
-
 // the Gold a `kind` kill is worth before Fortune scaling - the amount
-// carried on the Pickup it drops (see pickup.odin's maybe_spawn_pickup)
+// carried on the Pickup it drops (see pickup.odin's maybe_spawn_pickup).
+//
+// The payout is one of the authored facts of an Enemy Kind, so it lives on
+// that Kind's Enemy_Preset (enemy.odin) rather than in a parallel table
+// keyed by the same enum - the separate enemy_gold_presets this replaces
+// was a second place a new Kind had to be remembered in. Its
+// base-gold-times-multiplier pair collapsed to the single figure it always
+// evaluated to; a Kind whose payout should change is edited, not scaled.
 enemy_gold_value :: proc(kind: Enemy_Kind) -> int {
-	preset := enemy_gold_presets[kind]
-	return int(f32(preset.base_gold) * preset.gold_multiplier)
+	return enemy_presets[kind].gold
 }
 
 // summed across every Enemy_Kind - the Run End screen shows a single "Kills"

@@ -33,8 +33,7 @@ test_every_persisted_enum_round_trips_through_its_identity_string :: proc(t: ^te
 	expect_round_trip(t, Weapon_Variant_Kind)
 	expect_round_trip(t, Spawn_Condition_Kind)
 	expect_round_trip(t, Spawn_Mode_Kind)
-	expect_round_trip(t, Movement_Style_Kind)
-	expect_round_trip(t, Attack_Style_Kind)
+	expect_round_trip(t, Enemy_Kind)
 	expect_round_trip(t, Map_Name)
 }
 
@@ -45,7 +44,7 @@ test_every_persisted_enum_round_trips_through_its_identity_string :: proc(t: ^te
 test_an_identity_string_is_the_declared_case_name :: proc(t: ^testing.T) {
 	testing.expect_value(t, enum_identity_string(Weapon_Kind.Poison_Staff), "Poison_Staff")
 	testing.expect_value(t, enum_identity_string(Fire_Mode.Semi_Automatic), "Semi_Automatic")
-	testing.expect_value(t, enum_identity_string(Movement_Style_Kind.Inert), "Inert")
+	testing.expect_value(t, enum_identity_string(Enemy_Kind.Spitter), "Spitter")
 }
 
 // Second checkbox of that same ticket, at the unit level. The point isn't which value comes
@@ -66,6 +65,6 @@ test_an_unrecognised_identity_string_is_rejected :: proc(t: ^testing.T) {
 	testing.expect(t, !empty_ok, "an absent identity should not resolve")
 
 	// the ordinal encoding this replaces, offered as a name
-	_, ordinal_ok := enum_from_identity_string(Movement_Style_Kind, "0")
+	_, ordinal_ok := enum_from_identity_string(Enemy_Kind, "0")
 	testing.expect(t, !ordinal_ok, "an ordinal should not resolve as an identity")
 }
