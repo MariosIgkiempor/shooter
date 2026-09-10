@@ -365,7 +365,12 @@ update_game :: proc() {
 			if name, ok := enum_from_identity_string(Map_Name, game.active_map_pointer); ok {
 				game.editing_map_path = map_path_for_name(name)
 			}
+			// the name becomes a view into the editor's own buffer, which is
+			// what lets Map mode's text field edit it (editor.odin)
+			adopt_editing_map_name()
 			clear(&editor.expanded_spawn_triggers)
+			editor.placing_player_start = false
+			editor.name_field_focused = false
 			game.program_mode = .Editing
 		case .Editing:
 			game.program_mode = .Playing
@@ -1095,7 +1100,14 @@ draw_game :: proc() {
 	// identical content into an offscreen texture instead of straight to the
 	// backbuffer, with zero duplication between the two paths.
 	draw_world_contents :: proc() {
-		draw_tilemap(&game.current_map)
+		// Editing draws the Map it is editing, not the one Playing left
+		// behind: a tile blocked out, a collider marked or a colour moved is
+		// visible in the world the moment it changes, which is what makes
+		// the editor's colour sliders a preview rather than a guess
+		// (content-expansion-build ticket 14). The two are the same place by
+		// default - F1 enters on a clone of current_map - so this only
+		// diverges once an edit or a map switch makes it diverge.
+		draw_tilemap(game.program_mode == .Editing ? &game.editing_map : &game.current_map)
 		// under the bodies rather than over them: the field is terrain
 		// furniture, and it is one drawing for the whole map rather than one
 		// per enemy - there are no per-enemy routes to draw any more
