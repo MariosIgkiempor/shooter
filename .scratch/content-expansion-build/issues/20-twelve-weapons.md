@@ -10,11 +10,107 @@ also a paid destination.
 
 **Blocked by:** 18, 19, 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Twelve weapon kinds exist, four per family, each with an icon and a hit volume
-- [ ] The rifle pierces, tracking which bodies a shot has already hit
-- [ ] The lightning staff resolves instantly along its line rather than travelling
-- [ ] Run Start offers exactly one weapon per family, the first of its ladder
-- [ ] One family-to-weapons list has one reader; the Shop ladder and Run Start agree
-- [ ] The number-key weapon hotkey is retired
+- [x] Twelve weapon kinds exist, four per family, each with an icon and a hit volume
+- [x] The rifle pierces, tracking which bodies a shot has already hit
+- [x] The lightning staff resolves instantly along its line rather than travelling
+- [x] Run Start offers exactly one weapon per family, the first of its ladder
+- [x] One family-to-weapons list has one reader; the Shop ladder and Run Start agree
+- [x] The number-key weapon hotkey is retired
+
+## Comments
+
+**Implemented.** Seven commits, each independently green: the pierce machinery
+and the ladder cleanup landed before any new kind existed, so each was
+reviewable against the roster of eight rather than tangled with content.
+
+**The hotkey in the last box is the arrow-key one, not a number-key one.**
+There has never been a number-key weapon hotkey in this codebase. The dev
+hotkey was `cycle_weapon_kind` on LEFT/RIGHT (`weapon.odin`, `main.odin`),
+which is what issue 09 and the shop map both name. It is gone, along with the
+comment claiming `weapon_family_kinds` was "only a cycle order for that debug
+tool". Net capability change is zero: F8's Add 500 Gold plus TAB's Shop reaches
+every non-tier-0 weapon of the equipped family in a running game (the whole
+Ranged ladder is 774 Gold, two clicks), and crossing *families* still needs a
+fresh Run - which was true of the arrow cycle too, since it never crossed one.
+
+**One list, one reading.** `weapon_family_kinds` keeps being the single table,
+but `weapon_tier_index`/`weapon_next_tier` moved out of `shop.odin` to sit
+beside it, and a named `weapon_family_starter` replaced every
+`weapon_family_kinds[family][0]` at a call site - that expression appearing
+anywhere *is* the ladder being read as a menu. weapon.odin now owns what the
+ladder is, shop.odin owns what it costs. `draw_shop_weapon_ladder` needed no
+change at all, so "the Shop and Run Start agree" is structural rather than
+coincidental.
+
+`weapon_family_kinds` is the one per-kind table Odin will not catch you leaving
+incomplete - it is keyed by `Weapon_Family`, not `Weapon_Kind`, so a new kind
+missing from it compiles clean, is unreachable, and quietly falls back to tier
+0 in `weapon_tier_index`. Three tests stand in for that missing compile error.
+
+**Pierce is tracked by shot identity.** A monotonic `Bullet.id` against
+`Enemy.last_hit_bullet_id`, one u32 compare placed *ahead* of the rect test
+because a shot overlaps a 24px body for three or four frames. Its own id space,
+not one shared with swings (ADR-0026). The sharp edge is that 0 is the "no shot
+has hit me" value every fresh Enemy carries, so an unstamped Bullet would find
+the whole world already stamped and pass through it touching nothing - fixed
+structurally by making `spawn_bullet` the one place a Bullet enters the world,
+rather than by vigilance. `fire_pellets` claims an id *inside* its pellet loop,
+so a volley's pellets pierce independently for free. Walls still stop a shot: a
+pierce buys bodies, not terrain.
+
+**The bolt.** Reuses `Magic.range` rather than adding a field - `range` already
+means "px this spell reaches from the caster" for the Flamethrower, so
+`apply_magic_range_upgrade` folds the two into one arm rather than gaining a
+second that could drift. Walls clip the line *before* bodies are ranked;
+ranking first would let a bolt pick a target through terrain and merely draw
+itself short of it. Nothing persists past the cast - the whole visual is a
+chain of ~0.07s streak particles laid along the segment in one call. The one
+concession: a `Particle_Streak` takes its orientation from its own velocity, so
+a perfectly stationary segment would draw horizontal whatever direction the
+shot went, hence a sub-pixel drift speed.
+
+**ADR-0026's "a near-zero arc is a thrust" is true of the hit-check and false
+of the animation.** `melee_swing_angle_offset(0, p)` is 0 for every `p`, and
+`draw_weapon` displaces the pivot along `aim_dir` for Gun and Magic only, so a
+0-degree Spear would sit perfectly still for its whole Follow-through. Authored
+at 18 degrees instead, which moves the head ~27px and reads as a jab. If it
+still reads flat in motion the fix is a melee thrust displacement in
+`draw_weapon`/`weapon_pose_frame` - real new machinery, and not this ticket's.
+
+**Two glyphs were wrong in ways no assertion could see**, caught by rendering
+the authored unit-space geometry out to look at. The Lightning Staff's facets
+pointed backwards - both triangles widest at 0.86, converging on the rod - so
+the one glyph whose whole job is to say "this one is not throwing an area" read
+as an arrow pointing away from the aim. And the Greatsword at 0.48 across was a
+wedge filling its own frame rather than a blade, with a second crossguard made
+invisible by sitting under the blade it was meant to be countable against. Both
+fixed; the Hit volume followed the blade.
+
+**Numbers, and what pins them.** Every new tier is deliberately *worse* than
+something below it at one thing: the Rifle is the worst gun in its family
+against a single body (64 DPS against the Pistol's 75) and unmatched against a
+line of four (256); the Greatsword has the lowest single-target DPS on the
+roster (49.5) and the widest sweep; the Spear out-reaches and out-DPSes the
+Greatsword on one body and is the worst weapon in the family against a crowd.
+Two numbers are not free:
+
+- The Rifle's `clip_size = 5` is the floor
+  `test_every_clip_size_stack_grows_every_gun_s_clip` allows. At 4 the second
+  Clip_Size stack rounds back to 5 and the player pays for nothing - exactly
+  the guardrail issue 19 left behind for this weapon.
+- The Greatsword's 140 degrees / 0.26s is picked against ADR-0026's chord
+  bound, not rounded: at 150/0.24 the opening frame turns 66.8 degrees,
+  under-covering the arc's outside by 13.2px against a 12px body radius.
+
+The Lightning Staff's 78 DPS is ~4.2 casts and ~2.9s of *perfect* uptime
+against a 220-health boss. The arithmetic is recorded on the preset for issue
+21, which should author the Warden's health and phase thresholds against the
+whole roster rather than against this one weapon - at 10 Damage stacks nothing
+in the catalog leaves a 220-health boss alive for three phases.
+
+**Out of scope by decision:** CONTEXT.md glossary entries for Pierce and Bolt,
+and an ADR-0026 amendment recording the second id space. ADR-0008's amendment
+and CONTEXT.md's Weapon tier ladder entry already carried the tier-0-only rule,
+so neither needed touching.
