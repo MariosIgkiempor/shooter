@@ -295,7 +295,7 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	game.player.run_started = false
 	game.run_ended = true
 
-	start_new_run(weapon_family_kinds[.Ranged][0])
+	start_new_run(weapon_family_starter(.Ranged))
 
 	testing.expect(t, game.player.gold_earned == 0, "start_new_run should zero gold_earned")
 	testing.expect(t, total_kills(game.player.kills) == 0, "start_new_run should zero kills")
@@ -306,7 +306,7 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	testing.expect(t, game.player.health == game.player.max_health, "start_new_run should heal to the reset max_health")
 	testing.expect(
 		t,
-		game.player.weapon.kind == weapon_family_kinds[.Ranged][0],
+		game.player.weapon.kind == weapon_family_starter(.Ranged),
 		"start_new_run should equip the picked starter weapon",
 	)
 	testing.expect(t, game.player.run_started, "start_new_run should mark the Run as started")

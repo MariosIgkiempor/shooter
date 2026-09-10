@@ -211,8 +211,9 @@ test_switching_weapon_mid_windup_leaves_no_dangling_state :: proc(t: ^testing.T)
 	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
 	testing.expect(t, weapon.windup_timer > 0, "sanity check: Pistol should be mid-Windup")
 
-	// weapon_create overwrites the Weapon struct outright, as it already
-	// does today for the dev/debug weapon-switching cycle
+	// weapon_create overwrites the Weapon struct outright, as it does on the
+	// Shop's tier purchase (try_buy_next_weapon_tier) - and the Shop opens on
+	// TAB, which is pressable mid-Windup
 	weapon = weapon_create(.SMG)
 
 	testing.expect(t, weapon.windup_timer == 0, "switching mid-Windup should leave no dangling windup_timer")
@@ -493,4 +494,71 @@ test_weapon_variant_from_save_reports_names_this_build_does_not_know :: proc(t: 
 		{kind = "Magic", magic = Magic{spell_kind_save = "Frostbolt"}},
 	)
 	testing.expect(t, !unknown_spell_ok, "an unknown spell kind should fail rather than resolve to Fireball")
+}
+
+// -- the weapon tier ladder -------------------------------------------------
+//
+// weapon_family_kinds is the one per-kind table Odin will not catch you
+// leaving incomplete - it is keyed by Weapon_Family, not Weapon_Kind - so
+// these stand in for the compile error the other eight tables give for free.
+
+@(test)
+test_every_weapon_kind_sits_on_exactly_one_family_ladder :: proc(t: ^testing.T) {
+	// a kind missing from the table compiles clean and is simply unreachable:
+	// no Run Start button, no Shop purchase, and weapon_tier_index quietly
+	// answering 0 for it. A kind listed twice would have two tiers at once.
+	for kind in Weapon_Kind {
+		appearances := 0
+		for family in Weapon_Family {
+			for k in weapon_family_kinds[family] {
+				if k != kind {
+					continue
+				}
+				appearances += 1
+				testing.expectf(
+					t,
+					family == weapon_kind_family[kind],
+					"%v sits on %v's ladder but weapon_kind_family calls it %v",
+					kind,
+					family,
+					weapon_kind_family[kind],
+				)
+			}
+		}
+		testing.expectf(t, appearances == 1, "%v appears on %v family ladders, expected exactly one", kind, appearances)
+	}
+}
+
+@(test)
+test_every_family_s_free_starter_is_the_bottom_of_its_own_ladder :: proc(t: ^testing.T) {
+	// the Run Start screen and the Shop read one list, so the weapon given
+	// away is by construction the tier the Shop never prices
+	for family in Weapon_Family {
+		starter := weapon_family_starter(family)
+		testing.expectf(t, weapon_kind_family[starter] == family, "%v's starter %v belongs to another family", family, starter)
+		testing.expectf(t, weapon_tier_index(starter) == 0, "%v's free starter %v is not tier 0", family, starter)
+	}
+}
+
+@(test)
+test_no_weapon_above_tier_zero_is_ever_free :: proc(t: ^testing.T) {
+	// what a Run Start listing every kind broke: a paid destination also
+	// showing up as a free pick, arriving there with the Shop's weapon slot
+	// dead for the rest of the Run (ADR-0008's amendment)
+	for kind in Weapon_Kind {
+		if weapon_tier_index(kind) == 0 {
+			continue
+		}
+		for family in Weapon_Family {
+			testing.expectf(
+				t,
+				weapon_family_starter(family) != kind,
+				"%v sits at tier %v and must be bought, but %v gives it away",
+				kind,
+				weapon_tier_index(kind),
+				family,
+			)
+		}
+		testing.expectf(t, weapon_tier_price(weapon_tier_index(kind)) > 0, "%v is above tier 0 and should carry a price", kind)
+	}
 }

@@ -2,32 +2,14 @@ package shooter
 
 import "core:math"
 
+// What a tier ladder costs. What it *is* - the order of kinds within a family,
+// which tier a kind sits at, and what comes next - lives beside the ladder
+// itself in weapon.odin (weapon_family_kinds, weapon_tier_index,
+// weapon_next_tier). Nothing in this file needs to know that order, only its
+// price.
+
 WEAPON_TIER_BASE_PRICE: int = 150 // gold cost of a Weapon_Family's first tier-up purchase
 WEAPON_TIER_PRICE_GROWTH: f32 = 1.6 // multiplier per tier step up the ladder
-
-// 0-based position of `kind` within its Weapon_Family's tier ladder
-// (weapon_family_kinds) - tier 0 is always the family's starting weapon,
-// equipped for free when picked on the Run_Start screen, never purchased
-weapon_tier_index :: proc(kind: Weapon_Kind) -> int {
-	kinds := weapon_family_kinds[weapon_kind_family[kind]]
-	for k, i in kinds {
-		if k == kind {
-			return i
-		}
-	}
-	return 0
-}
-
-// the next Weapon_Kind up from `kind` in its Weapon_Family's tier ladder, or
-// nil if `kind` is already the ladder's top tier
-weapon_next_tier :: proc(kind: Weapon_Kind) -> Maybe(Weapon_Kind) {
-	kinds := weapon_family_kinds[weapon_kind_family[kind]]
-	index := weapon_tier_index(kind)
-	if index + 1 >= len(kinds) {
-		return nil
-	}
-	return kinds[index + 1]
-}
 
 // gold cost to buy into `tier_index` (the tier being bought into, not the
 // tier bought from) - grows geometrically per step up the ladder

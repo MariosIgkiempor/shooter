@@ -942,16 +942,11 @@ clamp_point_to_range :: proc(origin, target: Vec2, max_range: f32) -> Vec2 {
 
 // -- Weapon_Family (see CONTEXT.md's Weapon family entry and ADR-0008) -----
 //
-// Purely descriptive of whichever Weapon is currently equipped - the player
-// picks any weapon fresh at the start of every Run (main.odin's Run_Start
-// screen, hud.odin's draw_run_start_ui), so nothing on Player stores a
-// family directly; it's always derived via weapon_kind_family from
-// game.player.weapon.kind. weapon_family_kinds[family][0] becomes a fresh
-// Run's starting weapon when that family is picked; weapon_kind_family is
-// also the reverse lookup dev/debug weapon switching (arrow keys, main.odin)
-// uses to stay within the equipped weapon's family while cycling
-// Weapon_Kinds for testing - weapon_family_kinds is only a cycle order for
-// that debug tool, not the Shop's priced tier ladder (shop.odin).
+// Purely descriptive of whichever Weapon is currently equipped: the player
+// picks a family fresh at the start of every Run by picking its tier-0 weapon
+// (main.odin's Run_Start screen, hud.odin's draw_run_start_ui), so nothing on
+// Player stores a family directly - it is always derived via
+// weapon_kind_family from game.player.weapon.kind.
 
 Weapon_Family :: enum {
 	Ranged,
@@ -977,25 +972,57 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 	.Poison_Staff = .Magic,
 }
 
+// -- the weapon tier ladder ------------------------------------------------
+//
+// One list, and its order *is* the tier ladder (CONTEXT.md's Weapon tier
+// ladder entry): index 0 is the family's free starting weapon, everything
+// above it is a Shop purchase. Every reader below goes through a name rather
+// than indexing the slice, because reading it two ways at once is exactly what
+// let Shotgun be picked free at Ranged tier 2 with weapon_next_tier returning
+// nil - the Shop's weapon slot dead for the rest of the Run - while Pistol
+// cost 390 Gold to reach the same place (ADR-0008's amendment).
+//
+// What the ladder *is* lives here; what it *costs* lives in shop.odin.
+//
+// Note this is the one per-kind table Odin will not catch you leaving
+// incomplete: it is indexed by Weapon_Family, not Weapon_Kind, so a new kind
+// missing from it compiles clean, is simply unreachable, and quietly falls
+// back to tier 0 in weapon_tier_index. That is what
+// test_every_weapon_kind_sits_on_exactly_one_family_ladder is for.
 weapon_family_kinds: [Weapon_Family][]Weapon_Kind = {
 	.Ranged = {.Pistol, .SMG, .Shotgun},
 	.Melee  = {.Dagger, .Sword},
 	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff},
 }
 
-// steps to the next/previous Weapon_Kind within current's family (wrapping) -
-// never crosses into another family
-cycle_weapon_kind :: proc(current: Weapon_Kind, delta: int) -> Weapon_Kind {
-	kinds := weapon_family_kinds[weapon_kind_family[current]]
+// the one weapon a family gives away: the bottom of its ladder, and the only
+// button that family gets on the Run Start screen. Named rather than spelled
+// `weapon_family_kinds[family][0]` at the call site, because that expression
+// appearing anywhere is the ladder being read as a menu.
+weapon_family_starter :: proc(family: Weapon_Family) -> Weapon_Kind {
+	return weapon_family_kinds[family][0]
+}
 
-	index := 0
+// 0-based position of `kind` within its Weapon_Family's tier ladder - tier 0
+// is always the family's starting weapon, equipped for free when picked on the
+// Run_Start screen, never purchased
+weapon_tier_index :: proc(kind: Weapon_Kind) -> int {
+	kinds := weapon_family_kinds[weapon_kind_family[kind]]
 	for k, i in kinds {
-		if k == current {
-			index = i
-			break
+		if k == kind {
+			return i
 		}
 	}
+	return 0
+}
 
-	n := len(kinds)
-	return kinds[((index + delta) % n + n) % n]
+// the next Weapon_Kind up from `kind` in its Weapon_Family's tier ladder, or
+// nil if `kind` is already the ladder's top tier
+weapon_next_tier :: proc(kind: Weapon_Kind) -> Maybe(Weapon_Kind) {
+	kinds := weapon_family_kinds[weapon_kind_family[kind]]
+	index := weapon_tier_index(kind)
+	if index + 1 >= len(kinds) {
+		return nil
+	}
+	return kinds[index + 1]
 }

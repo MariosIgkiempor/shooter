@@ -913,8 +913,9 @@ draw_confirm_new_run_dialog :: proc() {
 }
 
 // shown once per Run (ProgramMode.Run_Start) between Main_Menu and
-// Map_Selection/Playing/Editing: three columns, one per Weapon_Family,
-// each listing that family's Weapon_Kinds as buttons. Picking a weapon
+// Map_Selection/Playing/Editing: three columns, one per Weapon_Family, each
+// holding exactly one button - that family's tier-0 weapon, the only one it
+// gives away (weapon_family_starter, ADR-0008's amendment). Picking a weapon
 // starts a fresh Run (start_new_run) and proceeds to the existing map-select
 // screen, not straight into Playing - mirrors the old Class-select ->
 // map-select order, just re-entered every Run instead of once ever.
@@ -930,14 +931,8 @@ draw_run_start_ui :: proc() {
 	col_gap := MENU_THEME.gap * 2
 	family_count := len(Weapon_Family)
 
-	max_kinds := 0
-	for family in Weapon_Family {
-		if n := len(weapon_family_kinds[family]); n > max_kinds {
-			max_kinds = n
-		}
-	}
-
-	col_content_h := MENU_TEXT_LINE_HEIGHT + f32(max_kinds) * MENU_ICON_BUTTON_LINE_HEIGHT
+	// one row per column: the family's name, then its single free weapon
+	col_content_h := MENU_TEXT_LINE_HEIGHT + MENU_ICON_BUTTON_LINE_HEIGHT
 	panel_w := col_w * f32(family_count) + col_gap * f32(family_count - 1) + pad * 2
 	panel_h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + col_content_h
 
@@ -967,22 +962,25 @@ draw_run_start_ui :: proc() {
 		)
 		y += MENU_TEXT_LINE_HEIGHT
 
-		for kind in weapon_family_kinds[family] {
-			button_rect := Rect{col_x, y, col_w, MENU_ICON_BUTTON_HEIGHT}
-			// per-kind glyph, not per-family: Pistol/SMG/Shotgun are three
-			// distinct silhouettes here, which is the whole of ADR-0018
-			clicked, _ := draw_menu_button(
-				button_rect,
-				weapon_display_name[kind],
-				anim,
-				icon = weapon_icons[kind],
-			)
-			if clicked {
-				start_new_run(kind)
-				request_screen_change(.Map_Selection)
-			}
-			y += MENU_ICON_BUTTON_LINE_HEIGHT
+		// tier 0 only. Listing every kind here read the tier ladder as a menu:
+		// Shotgun cost 0 Gold, arrived at Ranged tier 2 and left the Shop's
+		// weapon slot dead for the whole Run, while Pistol cost 390 Gold to
+		// reach the same place (ADR-0008's amendment).
+		starter := weapon_family_starter(family)
+		button_rect := Rect{col_x, y, col_w, MENU_ICON_BUTTON_HEIGHT}
+		// per-kind glyph, not per-family: the three starters are three
+		// distinct silhouettes here, which is the whole of ADR-0018
+		clicked, _ := draw_menu_button(
+			button_rect,
+			weapon_display_name[starter],
+			anim,
+			icon = weapon_icons[starter],
+		)
+		if clicked {
+			start_new_run(starter)
+			request_screen_change(.Map_Selection)
 		}
+		y += MENU_ICON_BUTTON_LINE_HEIGHT
 
 		col_x += col_w + col_gap
 	}

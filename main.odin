@@ -484,17 +484,6 @@ update_game :: proc() {
 			start_reload(&game.player.weapon)
 		}
 
-		// dev/debug weapon switching: left/right cycles within the equipped
-		// weapon's family (see weapon.odin's cycle_weapon_kind) - never
-		// crosses into another family. Arrow keys are free for this since
-		// WASD alone already covers movement.
-		if is_key_pressed(.LEFT) {
-			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, -1))
-		}
-		if is_key_pressed(.RIGHT) {
-			game.player.weapon = weapon_create(cycle_weapon_kind(game.player.weapon.kind, 1))
-		}
-
 		mouse_world := rl.GetScreenToWorld2D(game.mouse.position, game.camera)
 		player_pos := Vec2{game.player.x, game.player.y}
 		game.player.aim_dir = linalg.normalize0(mouse_world - player_pos)
