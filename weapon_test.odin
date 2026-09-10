@@ -562,3 +562,122 @@ test_no_weapon_above_tier_zero_is_ever_free :: proc(t: ^testing.T) {
 		testing.expectf(t, weapon_tier_price(weapon_tier_index(kind)) > 0, "%v is above tier 0 and should carry a price", kind)
 	}
 }
+
+// -- the Lightning Bolt ------------------------------------------------------
+//
+// The one cast on the roster that resolves along its line rather than sending
+// something travelling, so what these assert is mostly what *doesn't* happen:
+// no Bullet, no second body, nothing past its range.
+
+// puts `weapon` through a full Trigger-to-Resolve cycle in two steps and
+// returns with the Windup just completed - the frame a bolt lands
+test_resolve_through_windup :: proc(weapon: ^Weapon) {
+	try_use_weapon(weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	windup_duration := weapon.windup_fraction / weapon.action_rate
+	update_weapon(weapon, windup_duration + 0.001, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+}
+
+// a body centred `distance` px along the aim line from the staff's tip, which
+// is where a bolt actually starts
+test_body_on_the_bolts_line :: proc(weapon: Weapon, distance: f32, health: f32 = 500) {
+	muzzle := weapon_muzzle_position(weapon, TEST_ORIGIN, TEST_AIM)
+	append(&game.enemies, test_enemy_centered_at(muzzle + TEST_AIM * distance, health))
+}
+
+@(test)
+test_the_lightning_staff_damages_its_target_the_instant_it_resolves :: proc(t: ^testing.T) {
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Lightning_Staff)
+	test_body_on_the_bolts_line(weapon, 120)
+
+	try_use_weapon(&weapon, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+	testing.expect(t, game.enemies[0].health == 500, "a Trigger alone resolves nothing - the Windup is the commitment")
+
+	windup_duration := weapon.windup_fraction / weapon.action_rate
+	update_weapon(&weapon, windup_duration + 0.001, TEST_ORIGIN, TEST_AIM, TEST_MOUSE, game.enemies[:])
+
+	testing.expectf(
+		t,
+		game.enemies[0].health == 500 - weapon.damage,
+		"a bolt damages on the frame it resolves, with no travel time - took %v",
+		500 - game.enemies[0].health,
+	)
+}
+
+@(test)
+test_the_lightning_staff_leaves_no_projectile_behind :: proc(t: ^testing.T) {
+	// what stops this being a Pistol: a single-target arealess magic
+	// projectile *is* a gun shot - a Bullet with explosion_radius 0 is
+	// literally what fire_pellets spawns
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Lightning_Staff)
+	test_body_on_the_bolts_line(weapon, 120)
+	test_resolve_through_windup(&weapon)
+
+	testing.expect(t, len(game.bullets) == 0, "a bolt sends nothing travelling - it has already landed")
+}
+
+@(test)
+test_the_bolt_damages_only_the_nearest_body_on_its_line :: proc(t: ^testing.T) {
+	// single target and no area at all is the whole of what Magic's top tier
+	// trades its two area spells for
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Lightning_Staff)
+	test_body_on_the_bolts_line(weapon, 60)
+	test_body_on_the_bolts_line(weapon, 140)
+	test_resolve_through_windup(&weapon)
+
+	testing.expect(t, game.enemies[0].health == 500 - weapon.damage, "the nearest body on the line should take the bolt")
+	testing.expectf(
+		t,
+		game.enemies[1].health == 500,
+		"a bolt stops at the first body it connects with - the one behind took %v",
+		500 - game.enemies[1].health,
+	)
+}
+
+@(test)
+test_the_bolt_misses_what_its_line_does_not_cross :: proc(t: ^testing.T) {
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Lightning_Staff)
+	muzzle := weapon_muzzle_position(weapon, TEST_ORIGIN, TEST_AIM)
+	// well clear of the line's own width plus a 12px body radius
+	append(&game.enemies, test_enemy_centered_at(muzzle + TEST_AIM * 120 + Vec2{0, 80}, 500))
+	test_resolve_through_windup(&weapon)
+
+	testing.expectf(
+		t,
+		game.enemies[0].health == 500,
+		"a bolt hits its line and nothing else, but a body 80px off it took %v",
+		500 - game.enemies[0].health,
+	)
+}
+
+@(test)
+test_the_bolt_stops_at_the_end_of_its_range :: proc(t: ^testing.T) {
+	// range is what a Range stack buys, so it has to be a real edge rather
+	// than a number nothing reads
+	test_reset_bullet_world()
+	defer test_reset_bullet_world()
+
+	weapon := weapon_create(.Lightning_Staff)
+	magic := weapon.variant.(Magic)
+	test_body_on_the_bolts_line(weapon, magic.range + 60)
+	test_resolve_through_windup(&weapon)
+
+	testing.expectf(
+		t,
+		game.enemies[0].health == 500,
+		"a body past the bolt's %v px of range should be out of reach, but took %v",
+		magic.range,
+		500 - game.enemies[0].health,
+	)
+}

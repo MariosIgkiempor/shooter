@@ -58,6 +58,7 @@ weapon_hit_volumes: [Weapon_Kind][]Hit_Poly = {
 	.Fire_Wand    = {},
 	.Flame_Staff  = {},
 	.Poison_Staff = {},
+	.Lightning_Staff = {},
 }
 
 // scratch space a pose is mapped into before it's tested, sized for the

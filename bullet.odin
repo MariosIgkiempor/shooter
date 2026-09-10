@@ -144,6 +144,35 @@ bullet_hits_wall :: proc(position: Vec2) -> bool {
 	return false
 }
 
+// the first point along a segment that overlaps a collidable tile. The segment
+// counterpart of bullet_hits_wall above, and the Lightning Bolt is its only
+// reader: a travelling Bullet already samples its own path one frame at a
+// time, which is this same march under another name.
+//
+// Marched at half a tile so nothing tile-sized is stepped over, with a floor
+// for the case where no Map is loaded and tile_size is 0 - which is every test
+// that does not build one.
+segment_first_wall_hit :: proc(from, to: Vec2) -> (point: Vec2, blocked: bool) {
+	offset := to - from
+	length := linalg.length(offset)
+	if length <= 0 {
+		return to, false
+	}
+
+	tile := game.current_map.tilemap.tile_size
+	step := max(min(tile.x, tile.y) / 2, BULLET_RADIUS * 2)
+	direction := offset / length
+
+	for travelled: f32 = 0; travelled <= length; travelled += step {
+		p := from + direction * travelled
+		if bullet_hits_wall(p) {
+			return p, true
+		}
+	}
+
+	return to, false
+}
+
 update_bullets :: proc(dt: f32) {
 	#reverse for &bullet, i in game.bullets {
 		bullet.position += bullet.velocity * dt

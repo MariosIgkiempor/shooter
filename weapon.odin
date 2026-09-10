@@ -20,6 +20,7 @@ Weapon_Kind :: enum {
 	Fire_Wand,
 	Flame_Staff,
 	Poison_Staff,
+	Lightning_Staff,
 }
 
 Fire_Mode :: enum {
@@ -33,6 +34,7 @@ Spell_Kind :: enum {
 	Fireball,
 	Flamethrower,
 	Poison_Cloud,
+	Lightning_Bolt,
 }
 
 // Weapon is a wrapper struct, not a bare union like Enemy's Movement_Style/
@@ -155,7 +157,11 @@ Magic :: struct {
 	explosion_radius: f32,
 
 	// Flamethrower: instant cone hit-check re-run every Automatic-mode tick
-	// while held (cast_flamethrower_tick below), reusing melee's arc-check
+	// while held (cast_flamethrower_tick below), reusing melee's arc-check.
+	// `range` is shared with Lightning_Bolt, whose reach is a line rather than
+	// a cone but is the same quantity - px from the caster - which is what
+	// lets apply_magic_range_upgrade treat the two identically. arc_degrees
+	// stays the Flamethrower's alone.
 	range:       f32,
 	arc_degrees: f32,
 
@@ -331,6 +337,24 @@ weapon_presets: [Weapon_Kind]Weapon = {
 		follow_through_time = 0.08,
 		variant = Magic{spell_kind = .Flamethrower, range = 50, arc_degrees = 50},
 	},
+	.Lightning_Staff = {
+		kind = .Lightning_Staff,
+		fire_mode = .Semi_Automatic, // one commit per bolt; there is nothing to hold
+		// the largest number any single action in the catalog puts out, which
+		// is what makes a bolt read as an event rather than a stream. 78 DPS
+		// against a single body - top of the roster's 40-120 band without
+		// exceeding the SMG - which is ~4.2 casts and ~2.9s of *perfect*
+		// uptime against a 220-health boss. Recorded here for the Warden
+		// ticket, which authors its health and phase thresholds against the
+		// whole roster rather than against this one weapon.
+		damage = 52,
+		action_rate = 1.5,
+		// you cannot mis-lead a hitscan target, only mis-commit through its
+		// Windup - so the whole of this weapon's risk lives in this number
+		windup_fraction = 0.36,
+		follow_through_time = 0.06,
+		variant = Magic{spell_kind = .Lightning_Bolt, range = 240},
+	},
 	.Poison_Staff = {
 		kind = .Poison_Staff,
 		fire_mode = .Semi_Automatic, // one click, one cloud - not holdable
@@ -416,6 +440,10 @@ weapon_visuals: [Weapon_Kind]Weapon_Visual = {
 	.Fire_Wand    = {length = 30, muzzle_flash_radius = 13},
 	.Flame_Staff  = {length = 34, muzzle_flash_radius = 9},
 	.Poison_Staff = {length = 32, muzzle_flash_radius = 15},
+	// muzzle_streak_count stays 0 with its siblings: that field is the muzzle
+	// *fan*, and a bolt is a line drawn along its whole segment instead
+	// (spawn_lightning_bolt)
+	.Lightning_Staff = {length = 34, muzzle_flash_radius = 11},
 }
 
 // global multiplier on every weapon's drawn size, driven live by the F8
@@ -459,6 +487,7 @@ weapon_display_name: [Weapon_Kind]string = {
 	.Fire_Wand    = "Fire Wand",
 	.Flame_Staff  = "Flame Staff",
 	.Poison_Staff = "Poison Staff",
+	.Lightning_Staff = "Lightning Staff",
 }
 
 weapon_create :: proc(kind: Weapon_Kind) -> Weapon {
@@ -794,6 +823,14 @@ update_magic_cast_particles :: proc(weapon: Weapon, origin, aim_dir: Vec2, mouse
 			return
 		}
 		spawn_flame_cone_particle(origin, aim_dir, magic.range, magic.arc_degrees)
+	case .Lightning_Bolt:
+		// the Windup is where this weapon's whole risk lives - a hitscan bolt
+		// cannot be mis-led, only mis-committed - so it is the one thing that
+		// has to be visible before Resolve
+		if weapon.windup_timer <= 0 {
+			return
+		}
+		spawn_lightning_charge_particle(weapon_muzzle_position(weapon, origin, aim_dir), weapon_windup_progress(weapon))
 	}
 }
 
@@ -901,6 +938,10 @@ try_cast_magic :: proc(
 		spawn_muzzle_flash(muzzle, WEAPON_MAGIC_ORB_COLOR, visual.muzzle_flash_radius) // art-revamp ticket 02
 	case .Flamethrower:
 		cast_flamethrower_tick(magic^, damage, origin, aim_dir, muzzle, enemies)
+	case .Lightning_Bolt:
+		// no spawn_muzzle_flash here, unlike its two siblings: the flash and
+		// the bolt have to share one endpoint, so the cast owns both
+		cast_lightning_bolt(magic^, damage, muzzle, aim_dir, enemies)
 	case .Poison_Cloud:
 		cast_poison_cloud(magic^, damage, target)
 		// the flash is the Magic family's own cast primitive, and
@@ -926,6 +967,64 @@ cast_flamethrower_tick :: proc(magic: Magic, damage: f32, origin, aim_dir, muzzl
 	}
 
 	spawn_flame_tick_burst(muzzle)
+}
+
+// Resolves along its line in the instant it is cast - the one thing on the
+// roster that does not send something travelling, which is exactly what stops
+// it being a Pistol. A single-target arealess magic projectile *is* a gun shot:
+// a Bullet with explosion_radius 0 is literally what fire_pellets spawns. What
+// a bolt has that no Bullet does is that you cannot mis-lead it, only
+// mis-commit through its Windup - the right property for the weapon that
+// exists to threaten a boss.
+//
+// Nothing persists past this call. The whole visual is a handful of ~0.07s
+// particles, so "instant" costs no entity, no update path and no draw path,
+// where cast_fireball spawns a Bullet the pipeline then has to carry.
+cast_lightning_bolt :: proc(magic: Magic, damage: f32, muzzle, aim_dir: Vec2, enemies: []Enemy) {
+	end := muzzle + aim_dir * magic.range
+
+	// walls clip the line *before* bodies are ranked. Ranking first and
+	// wall-checking after would let a bolt pick a target through terrain and
+	// then merely draw itself short of it.
+	if wall, blocked := segment_first_wall_hit(muzzle, end); blocked {
+		end = wall
+	}
+
+	// Find first, damage second. Every other hit source walks #reverse to
+	// survive apply_hit_to_enemy's unordered_remove mid-walk; here nothing is
+	// removed during the walk at all, which is why this one reads forward.
+	//
+	// Ranked by distance from the muzzle to a body's centre rather than by
+	// where the segment enters it: actor_collision_rect is the same size for
+	// every Enemy whatever it draws at, so the two orderings are identical and
+	// this needs no geometry the codebase does not already have.
+	nearest := -1
+	nearest_distance_sq := max(f32)
+	for enemy, i in enemies {
+		center, radius := enemy_body_circle(enemy)
+		if !segment_circle_overlap(muzzle, end, center, radius) {
+			continue
+		}
+		distance_sq := linalg.length2(center - muzzle)
+		if distance_sq >= nearest_distance_sq {
+			continue
+		}
+		nearest_distance_sq = distance_sq
+		nearest = i
+	}
+
+	// the bolt stops where it connects, so the line the player sees is the
+	// line that damaged - the same promise a Hit volume makes for a swing
+	if nearest >= 0 {
+		center, _ := enemy_body_circle(enemies[nearest])
+		end = center
+	}
+
+	spawn_lightning_bolt(muzzle, end)
+
+	if nearest >= 0 {
+		apply_hit_to_enemy(nearest, damage, end)
+	}
 }
 
 // clamps `target` to at most `max_range` from `origin`, preserving direction -
@@ -970,6 +1069,7 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 	.Fire_Wand    = .Magic,
 	.Flame_Staff  = .Magic,
 	.Poison_Staff = .Magic,
+	.Lightning_Staff = .Magic,
 }
 
 // -- the weapon tier ladder ------------------------------------------------
@@ -992,7 +1092,7 @@ weapon_kind_family: [Weapon_Kind]Weapon_Family = {
 weapon_family_kinds: [Weapon_Family][]Weapon_Kind = {
 	.Ranged = {.Pistol, .SMG, .Shotgun},
 	.Melee  = {.Dagger, .Sword},
-	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff},
+	.Magic  = {.Fire_Wand, .Flame_Staff, .Poison_Staff, .Lightning_Staff},
 }
 
 // the one weapon a family gives away: the bottom of its ladder, and the only

@@ -85,6 +85,36 @@ FLAME_CONE_MAX_RADIUS: f32 = 3.5
 FLAME_CONE_MIN_DRIFT_SPEED: f32 = 10.0
 FLAME_CONE_MAX_DRIFT_SPEED: f32 = 30.0
 
+// Lightning-bolt preset: a chain of stationary streaks laid along the whole
+// line in one call, with the joints jittered off-axis so it forks rather than
+// reading as a ruler. Very short-lived on purpose - the bolt is gone in about
+// four frames, which is what "instant" looks like beside a Fireball the player
+// can watch travel.
+LIGHTNING_BOLT_LIFETIME: f32 = 0.07
+LIGHTNING_BOLT_SEGMENT_LENGTH: f32 = 14.0
+LIGHTNING_BOLT_JITTER: f32 = 4.0 // px, perpendicular offset per joint
+LIGHTNING_BOLT_WIDTH: f32 = 2.5
+// A Particle_Streak takes its orientation from its own velocity (draw_streak,
+// renderer.odin), so a bolt segment cannot be perfectly stationary or it would
+// draw horizontal whatever direction the shot went. This is the smallest speed
+// that buys the orientation: over a segment's whole ~0.07s life it drifts less
+// than a pixel, so the bolt still hangs in place and vanishes rather than
+// flying anywhere.
+LIGHTNING_BOLT_DRIFT_SPEED: f32 = 8.0
+// backs the fixed-size joint buffer below, so it cannot itself be a Tunable
+LIGHTNING_BOLT_MAX_SEGMENTS :: 32
+
+// Lightning charge preset: the gathering crackle through Windup, spawned
+// one-per-frame from update_magic_cast_particles like Fire_Wand's embers.
+// Tiny outward flicks rather than an inward drift - what gathers here is a
+// charge on the tip, not fuel being drawn in.
+LIGHTNING_CHARGE_MIN_LIFETIME: f32 = 0.05
+LIGHTNING_CHARGE_MAX_LIFETIME: f32 = 0.11
+LIGHTNING_CHARGE_SPREAD: f32 = 9.0 // px, shrinks toward the tip as Windup progress -> 1
+LIGHTNING_CHARGE_SPEED: f32 = 40.0
+LIGHTNING_CHARGE_LENGTH: f32 = 5.0
+LIGHTNING_CHARGE_WIDTH: f32 = 1.6
+
 // what a Particle looks like - a plain filled circle, an oriented streak
 // (art-revamp ticket 02), a one-shot radial-gradient flash (ticket 02), or a
 // flat square (ticket 06's poison-gas puffs). Orthogonal to the rest of
@@ -398,4 +428,70 @@ draw_particles :: proc(particles: []Particle) {
 			rl.DrawRectangleV(particle.position - Vec2{size, size} / 2, Vec2{size, size}, rl.Fade(v.color, fade))
 		}
 	}
+}
+
+// lays the whole bolt down in one call: a chain of streaks from `from` to
+// `to`, each joint pushed off the line so the result forks. The segments hang
+// where they are laid and fade - a bolt does not travel, it is simply there
+// and then gone, and anything that visibly moved would make an instant cast
+// look like a slow one (see LIGHTNING_BOLT_DRIFT_SPEED for the sub-pixel
+// exception the renderer forces).
+spawn_lightning_bolt :: proc(from, to: Vec2) {
+	offset := to - from
+	length := linalg.length(offset)
+	if length <= 0 {
+		return
+	}
+
+	direction := offset / length
+	perpendicular := Vec2{-direction.y, direction.x}
+
+	segments := clamp(int(length / max(LIGHTNING_BOLT_SEGMENT_LENGTH, 1)), 2, LIGHTNING_BOLT_MAX_SEGMENTS)
+
+	joints: [LIGHTNING_BOLT_MAX_SEGMENTS + 1]Vec2
+	for i in 0 ..= segments {
+		t := f32(i) / f32(segments)
+		joints[i] = from + offset * t
+		// the ends stay pinned: one is the muzzle and the other is what the
+		// bolt actually hit, and a jittered end would draw a line to somewhere
+		// nothing was damaged
+		if i > 0 && i < segments {
+			joints[i] += perpendicular * rand.float32_range(-LIGHTNING_BOLT_JITTER, LIGHTNING_BOLT_JITTER)
+		}
+	}
+
+	for i in 0 ..< segments {
+		span := joints[i + 1] - joints[i]
+		spawn_particle_streak(
+			joints[i] + span / 2,
+			span,
+			LIGHTNING_BOLT_DRIFT_SPEED,
+			ICON_LIGHTNING_COLOR,
+			linalg.length(span),
+			LIGHTNING_BOLT_WIDTH,
+			LIGHTNING_BOLT_LIFETIME,
+		)
+	}
+}
+
+// one Windup crackle at a random point within LIGHTNING_CHARGE_SPREAD*(1 -
+// progress) of the staff's tip, flicking outward - called once per frame
+// through Windup so the gathering tightens as Resolve approaches, the same
+// shape as Fire_Wand's charge embers with the drift reversed
+spawn_lightning_charge_particle :: proc(tip: Vec2, progress: f32) {
+	spread := LIGHTNING_CHARGE_SPREAD * (1 - progress)
+	angle := rand.float32_range(0, math.TAU)
+	r := spread * math.sqrt(rand.float32_range(0, 1))
+	direction := Vec2{math.cos(angle), math.sin(angle)}
+	lifetime := rand.float32_range(LIGHTNING_CHARGE_MIN_LIFETIME, LIGHTNING_CHARGE_MAX_LIFETIME)
+
+	spawn_particle_streak(
+		tip + direction * r,
+		direction,
+		LIGHTNING_CHARGE_SPEED,
+		ICON_LIGHTNING_COLOR,
+		LIGHTNING_CHARGE_LENGTH,
+		LIGHTNING_CHARGE_WIDTH,
+		lifetime,
+	)
 }

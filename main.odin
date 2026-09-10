@@ -1568,6 +1568,12 @@ draw_game :: proc() {
 				draw_cone(center, v.range, v.arc_degrees, angle)
 			case .Poison_Cloud:
 				rl.DrawCircleLinesV(center, v.cast_range, rl.SKYBLUE)
+			case .Lightning_Bolt:
+				// from the muzzle, not `center`: the cone above is drawn from
+				// the player because cast_flamethrower_tick measures from
+				// `origin`, and a bolt does not
+				muzzle := weapon_muzzle_position(player.weapon, center, player.aim_dir)
+				rl.DrawLineV(muzzle, muzzle + player.aim_dir * v.range, rl.SKYBLUE)
 			case .Fireball:
 			}
 		case Gun:

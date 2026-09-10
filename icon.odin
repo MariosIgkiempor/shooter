@@ -240,6 +240,7 @@ weapon_icon_reach: [Weapon_Kind]f32 = {
 	.Fire_Wand    = 0.87,
 	.Flame_Staff  = 0.86,
 	.Poison_Staff = 0.82,
+	.Lightning_Staff = 0.90,
 }
 
 @(private = "file")
@@ -330,6 +331,16 @@ icon_poison_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_disc(f, tip + 0.22, 0.62, 0.10, orb)
 }
 
+// zero orbs: a bare faceted tip where each of its three siblings carries a
+// disc. The cleanest countable inversion available - one orb, two, three, none
+// - and it reads instantly as the staff that is not throwing an area.
+icon_lightning_staff :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(ICON_LIGHTNING_COLOR, tint, alpha)
+	tip := icon_staff(f, tint, alpha, 0.06, 0.62)
+	icon_tri(f, tip, 0.50, 0.86, 0.36, 0.90, 0.50, c)
+	icon_tri(f, tip, 0.50, 0.86, 0.64, 0.90, 0.50, c)
+}
+
 weapon_icons: [Weapon_Kind]Icon_Proc = {
 	.Pistol       = icon_pistol,
 	.SMG          = icon_smg,
@@ -339,6 +350,7 @@ weapon_icons: [Weapon_Kind]Icon_Proc = {
 	.Fire_Wand    = icon_fire_wand,
 	.Flame_Staff  = icon_flame_staff,
 	.Poison_Staff = icon_poison_staff,
+	.Lightning_Staff = icon_lightning_staff,
 }
 
 // -- resource / pickup glyphs ------------------------------------------------
@@ -354,6 +366,10 @@ ICON_KILLS_COLOR :: Color{205, 120, 120, 255}
 // the poison cloud's own green, opaque - poison_cloud.odin draws the cloud
 // itself at alpha 90, far too faint to read as a glyph
 ICON_POISON_COLOR :: Color{50, 180, 60, 255}
+// the Lightning Bolt's pale blue-white, shared by its glyph and the bolt it
+// throws - the Magic family's third borrowed-from-the-world color, after the
+// orb's warm gold and the poison cloud's green
+ICON_LIGHTNING_COLOR :: Color{150, 205, 255, 255}
 
 icon_gold :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_disc(f, 0.5, 0.5, 0.36, icon_color(rl.GOLD, tint, alpha))

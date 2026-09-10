@@ -303,6 +303,7 @@ Tuning_Group :: enum {
 	Weapon_Fire_Wand,
 	Weapon_Flame_Staff,
 	Weapon_Poison_Staff,
+	Weapon_Lightning_Staff,
 	Weapon_Common,
 	Bullets,
 	Player,
@@ -327,6 +328,7 @@ Tuning_Group :: enum {
 	Particles_Muzzle,
 	Particles_Bullet_Trail,
 	Particles_Flame_Cone,
+	Particles_Lightning,
 	Poison_Gas,
 	Damage_Numbers,
 	World_Render,
@@ -341,6 +343,7 @@ tuning_group_display_name := [Tuning_Group]string {
 	.Weapon_Fire_Wand           = "Weapon: Fire Wand",
 	.Weapon_Flame_Staff         = "Weapon: Flame Staff",
 	.Weapon_Poison_Staff        = "Weapon: Poison Staff",
+	.Weapon_Lightning_Staff     = "Weapon: Lightning Staff",
 	.Weapon_Common              = "Weapons: Common",
 	.Bullets                    = "Bullets",
 	.Player                     = "Player",
@@ -365,6 +368,7 @@ tuning_group_display_name := [Tuning_Group]string {
 	.Particles_Muzzle           = "Particles: Muzzle",
 	.Particles_Bullet_Trail     = "Particles: Bullet Trail",
 	.Particles_Flame_Cone       = "Particles: Flame Cone",
+	.Particles_Lightning        = "Particles: Lightning",
 	.Poison_Gas                 = "Poison Gas",
 	.Damage_Numbers             = "Damage Numbers",
 	.World_Render               = "World Render",
@@ -379,6 +383,7 @@ weapon_tuning_group := [Weapon_Kind]Tuning_Group {
 	.Fire_Wand    = .Weapon_Fire_Wand,
 	.Flame_Staff  = .Weapon_Flame_Staff,
 	.Poison_Staff = .Weapon_Poison_Staff,
+	.Lightning_Staff = .Weapon_Lightning_Staff,
 }
 
 // -- registry ----------------------------------------------------------------
@@ -456,9 +461,15 @@ register_weapon_tunables :: proc() {
 				register_tunable(group, slug(name, "projectile_speed"), "Projectile Speed", &v.projectile_speed, 0, 800)
 				register_tunable(group, slug(name, "bullet_lifetime"), "Bullet Lifetime", &v.bullet_lifetime, 0.1, 5)
 				register_tunable(group, slug(name, "explosion_radius"), "Explosion Radius", &v.explosion_radius, 0, 120)
+			// The two spells carrying a `range` share one bound, per this
+			// registry's rule that a range is authored per *field* rather than
+			// per field-per-kind - so the Flamethrower's 50 and the Lightning
+			// Bolt's 240 sit on one slider that reaches both.
 			case .Flamethrower:
-				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 150)
+				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 300)
 				register_tunable(group, slug(name, "arc_degrees"), "Arc Degrees", &v.arc_degrees, 0, 360)
+			case .Lightning_Bolt:
+				register_tunable(group, slug(name, "range"), "Range", &v.range, 0, 300)
 			case .Poison_Cloud:
 				register_tunable(group, slug(name, "cast_range"), "Cast Range", &v.cast_range, 0, 250)
 				register_tunable(group, slug(name, "cloud_radius"), "Cloud Radius", &v.cloud_radius, 0, 120)
@@ -704,6 +715,18 @@ register_feel_tunables :: proc() {
 	register_tunable(.Particles_Muzzle, "particle.muzzle.flash_max_radius", "Flash Max Radius", &MUZZLE_FLASH_MAX_RADIUS, 0, 60)
 	register_tunable(.Particles_Muzzle, "particle.muzzle.flash_lifetime", "Flash Lifetime", &MUZZLE_FLASH_LIFETIME, 0.01, 1)
 	register_tunable(.Particles_Muzzle, "particle.muzzle.flash_alpha", "Flash Alpha", &MUZZLE_FLASH_ALPHA, 0, 1)
+
+	register_tunable(.Particles_Lightning, "particle.lightning.bolt_lifetime", "Bolt Lifetime", &LIGHTNING_BOLT_LIFETIME, 0.01, 1)
+	register_tunable(.Particles_Lightning, "particle.lightning.bolt_segment_length", "Segment Length", &LIGHTNING_BOLT_SEGMENT_LENGTH, 2, 80)
+	register_tunable(.Particles_Lightning, "particle.lightning.bolt_jitter", "Jitter", &LIGHTNING_BOLT_JITTER, 0, 20)
+	register_tunable(.Particles_Lightning, "particle.lightning.bolt_width", "Bolt Width", &LIGHTNING_BOLT_WIDTH, 0.5, 12)
+	register_tunable(.Particles_Lightning, "particle.lightning.bolt_drift_speed", "Bolt Drift Speed", &LIGHTNING_BOLT_DRIFT_SPEED, 0, 60)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_min_lifetime", "Charge Min Lifetime", &LIGHTNING_CHARGE_MIN_LIFETIME, 0.01, 1)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_max_lifetime", "Charge Max Lifetime", &LIGHTNING_CHARGE_MAX_LIFETIME, 0.01, 1)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_spread", "Charge Spread", &LIGHTNING_CHARGE_SPREAD, 0, 40)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_speed", "Charge Speed", &LIGHTNING_CHARGE_SPEED, 0, 200)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_length", "Charge Length", &LIGHTNING_CHARGE_LENGTH, 0, 30)
+	register_tunable(.Particles_Lightning, "particle.lightning.charge_width", "Charge Width", &LIGHTNING_CHARGE_WIDTH, 0.2, 10)
 
 	register_tunable(.Particles_Bullet_Trail, "particle.bullet_trail.min_lifetime", "Min Lifetime", &BULLET_TRAIL_MIN_LIFETIME, 0.01, 1)
 	register_tunable(.Particles_Bullet_Trail, "particle.bullet_trail.max_lifetime", "Max Lifetime", &BULLET_TRAIL_MAX_LIFETIME, 0.01, 1)

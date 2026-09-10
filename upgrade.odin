@@ -192,7 +192,10 @@ upgraded_clip_size :: proc(base_clip_size: int, stacks: int) -> int {
 // by the equivalent extra seconds (extra px / projectile_speed) instead
 apply_magic_range_upgrade :: proc(magic: ^Magic, base: Magic, n: int) {
 	switch magic.spell_kind {
-	case .Flamethrower:
+	case .Flamethrower, .Lightning_Bolt:
+		// one arm for two spells because `range` is literally the same
+		// quantity for both - px this spell reaches from the caster - even
+		// though one spreads into a cone and the other is a line
 		magic.range = apply_upgrade_effect(base.range, .Range, n)
 	case .Poison_Cloud:
 		magic.cast_range = apply_upgrade_effect(base.cast_range, .Range, n)

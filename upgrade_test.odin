@@ -266,3 +266,24 @@ test_apply_magic_range_upgrade_extends_fireball_via_bullet_lifetime :: proc(t: ^
 		magic.bullet_lifetime,
 	)
 }
+
+@(test)
+test_a_range_stack_lengthens_the_bolt :: proc(t: ^testing.T) {
+	// the Lightning Bolt shares Flamethrower's `range` field precisely because
+	// it means the same thing - px this spell reaches from the caster - so
+	// Range buys it the same px, with no arm of its own to drift
+	previous_stacks := game.player.upgrade_stacks
+	defer game.player.upgrade_stacks = previous_stacks
+	game.player.upgrade_stacks = {}
+	game.player.upgrade_stacks[.Range] = 2
+
+	weapon := weapon_create(.Lightning_Staff)
+	magic, ok := weapon.variant.(Magic)
+	testing.expect(t, ok, "sanity check: Lightning_Staff should be a Magic variant")
+
+	base := weapon_presets[.Lightning_Staff].variant.(Magic)
+	expected := apply_upgrade_effect(base.range, .Range, 2)
+
+	testing.expectf(t, magic.range == expected, "a Range stack should reach %v px, got %v", expected, magic.range)
+	testing.expect(t, magic.range > base.range, "a Range stack that does not lengthen the bolt is not range")
+}
