@@ -530,6 +530,23 @@ register_enemy_tunables :: proc() {
 	register_tunable(.Enemies, "enemy.spawn_margin", "Off-screen Spawn Margin", &OFFSCREEN_SPAWN_MARGIN, 0, 300)
 	register_tunable(.Enemies, "enemy.spawn_max_retries", "Spawn Retries", &OFFSCREEN_SPAWN_MAX_RETRIES, 1, 30)
 
+	// per-Enemy Kind, since max health is authored on the Kind's preset now
+	// rather than shared by every enemy - the same loop-by-enum shape the
+	// weapon registry uses. Speed and attack numbers live inside the preset's
+	// bare unions and have no address a Tunable can hold; reaching those is
+	// the editor's Presets mode (content-expansion ticket 12).
+	for kind in Enemy_Kind {
+		name := tuning_slug_part(fmt.tprintf("{}", kind))
+		register_tunable(
+			.Enemies,
+			fmt.tprintf("enemy.{}.max_health", name),
+			fmt.tprintf("{} Max Health", kind),
+			&enemy_presets[kind].max_health,
+			1,
+			500,
+		)
+	}
+
 	// per-Movement Style, the same loop-by-enum shape the weapon registry uses
 	for style in Movement_Style_Kind {
 		name := tuning_slug_part(fmt.tprintf("{}", style))

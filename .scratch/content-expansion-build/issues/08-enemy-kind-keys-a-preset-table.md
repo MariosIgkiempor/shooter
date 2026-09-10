@@ -13,7 +13,7 @@ leave the roster mid-repaint.
 
 **Blocked by:** 03
 
-**Status:** ready-for-human
+**Status:** resolved
 
 - [x] A preset table keyed by Kind holds every authored enemy parameter
 - [x] A composition entry is a Kind and a count; the movement/attack template fields and their save mirrors are deleted

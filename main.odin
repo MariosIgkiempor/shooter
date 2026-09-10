@@ -1184,16 +1184,17 @@ draw_game :: proc() {
 	// squashed in place while moving like the player, and faded toward
 	// ENEMY_MIN_OPACITY as its remaining health drops - replaces the old
 	// per-movement-style shape (rect/circle/triangle) and the separate enemy
-	// Health bar, which the fade now stands in for. Both authored facts come
-	// from the preset rather than from the body, so tuning a Kind mid-session
-	// (the editor's Presets mode) shows on everything already on the field.
+	// Health bar, which the fade now stands in for. Size reads the body's own
+	// stamped ceiling rather than its Kind's current one, so a Kind retuned
+	// mid-Run cannot shrink a body that is still carrying the health it
+	// spawned with - only the next wave picks the change up, exactly as
+	// ADR-0020 (Tunables) describes for everything else copied at spawn.
 	draw_enemy :: proc(enemy: Enemy) {
-		preset := enemy_presets[enemy.kind]
-		size := enemy_body_size(preset.max_health)
+		size := enemy_body_size(enemy.max_health)
 		// a Kind authored with no health would divide by zero here; it reads
 		// as a full bar rather than a NaN that propagates into rl.Fade
-		health_frac := preset.max_health > 0 ? clamp(enemy.health / preset.max_health, 0, 1) : 1
-		color := enemy_body_color(preset.color, health_frac)
+		health_frac := enemy.max_health > 0 ? clamp(enemy.health / enemy.max_health, 0, 1) : 1
+		color := enemy_body_color(enemy_presets[enemy.kind].color, health_frac)
 
 		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
 		origin := Vec2{dest.width / 2, dest.height}

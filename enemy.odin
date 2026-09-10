@@ -129,7 +129,8 @@ Enemy :: struct {
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	health:     f32,
-	kind:       Enemy_Kind, // which preset this body was stamped from - its max health, colour and Gold are read back through it
+	max_health: f32, // stamped from the Kind's preset, not read back from it: `health` is a copy too, and a body whose ceiling moved under it while its current health did not would draw a full bar at half health
+	kind:       Enemy_Kind, // which preset this body was stamped from - its colour and the Gold it pays are read back through it
 
 	// which swing last damaged this body (hit_volume.odin's monotonic swing
 	// identity; 0 means none has). A melee weapon's Hit volume is tested every
@@ -636,12 +637,13 @@ spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
 	}
 
 	enemy := Enemy {
-		rect     = {position.x, position.y, 0, 0},
-		squash   = {1, 1},
-		movement = movement,
-		attack   = preset.attack,
-		health   = preset.max_health,
-		kind     = kind,
+		rect       = {position.x, position.y, 0, 0},
+		squash     = {1, 1},
+		movement   = movement,
+		attack     = preset.attack,
+		health     = preset.max_health,
+		max_health = preset.max_health,
+		kind       = kind,
 	}
 
 	append(&game.enemies, enemy)

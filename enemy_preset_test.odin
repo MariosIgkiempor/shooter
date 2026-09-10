@@ -1,6 +1,7 @@
 package shooter
 
 import "core:testing"
+import rl "vendor:raylib"
 
 // The preset table is the whole of what an enemy is: a Map's composition can
 // only name a Kind and a count, so anything an author forgets here has no
@@ -22,12 +23,17 @@ test_every_enemy_kind_has_an_authored_preset :: proc(t: ^testing.T) {
 	}
 }
 
-// hue means Movement Style family (see the palette in enemy.odin), and it is
-// only true for as long as every row keeps reading the constants rather than
-// picking a colour of its own
+// Hue means Movement Style family (see the palette in enemy.odin), and it is
+// only true for as long as every row keeps taking its colour from the family
+// constants. The assertion is on *hue* rather than on the whole colour on
+// purpose: the roster distinguishes Kinds inside one family by value (a pale
+// green Spitter beside a green Grunt), so pinning exact equality here would
+// forbid the thing the palette is supposed to leave room for.
+ENEMY_FAMILY_HUE_TOLERANCE :: f32(12) // degrees; the four family hues sit ~50 degrees apart at their closest
+
 @(test)
-test_every_presets_colour_is_its_movement_familys :: proc(t: ^testing.T) {
-	expected_for_family := [Movement_Style_Kind]Color {
+test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
+	family_color := [Movement_Style_Kind]Color {
 		.Grounded = ENEMY_GROUNDED_COLOR,
 		.Floater  = ENEMY_FLOATER_COLOR,
 		.Swarmer  = ENEMY_SWARMER_COLOR,
@@ -37,14 +43,47 @@ test_every_presets_colour_is_its_movement_familys :: proc(t: ^testing.T) {
 	for kind in Enemy_Kind {
 		preset := enemy_presets[kind]
 		family := movement_style_kind(preset.movement)
+		drift := hue_degrees_apart(preset.color, family_color[family])
 		testing.expectf(
 			t,
-			preset.color == expected_for_family[family],
-			"%v moves as a %v but is not painted its family's hue",
+			drift <= ENEMY_FAMILY_HUE_TOLERANCE,
+			"%v moves as a %v but its hue is %.0f degrees off its family's",
 			kind,
 			family,
+			drift,
 		)
 	}
+}
+
+// the four family hues must stay far enough apart that the check above can
+// tell them apart at all - a repaint that quietly moved two together would
+// otherwise leave every row passing while the screen stopped being readable
+@(test)
+test_the_movement_family_hues_stay_apart :: proc(t: ^testing.T) {
+	palette := [][2]Color {
+		{ENEMY_GROUNDED_COLOR, ENEMY_FLOATER_COLOR},
+		{ENEMY_GROUNDED_COLOR, ENEMY_SWARMER_COLOR},
+		{ENEMY_GROUNDED_COLOR, ENEMY_INERT_COLOR},
+		{ENEMY_FLOATER_COLOR, ENEMY_SWARMER_COLOR},
+		{ENEMY_FLOATER_COLOR, ENEMY_INERT_COLOR},
+		{ENEMY_SWARMER_COLOR, ENEMY_INERT_COLOR},
+	}
+
+	for pair in palette {
+		drift := hue_degrees_apart(pair[0], pair[1])
+		testing.expectf(
+			t,
+			drift > ENEMY_FAMILY_HUE_TOLERANCE * 2,
+			"two family hues are only %.0f degrees apart, which is inside what a Kind is allowed to drift",
+			drift,
+		)
+	}
+}
+
+@(private = "file")
+hue_degrees_apart :: proc(a, b: Color) -> f32 {
+	drift := abs(rl.ColorToHSV(a).x - rl.ColorToHSV(b).x)
+	return min(drift, 360 - drift) // hue wraps, so red at 359 is 2 degrees from red at 1
 }
 
 @(test)
@@ -69,6 +108,7 @@ test_spawn_enemy_at_stamps_the_kinds_whole_preset_onto_the_body :: proc(t: ^test
 		preset := enemy_presets[kind]
 		testing.expect_value(t, enemy.kind, kind)
 		testing.expect_value(t, enemy.health, preset.max_health)
+		testing.expect_value(t, enemy.max_health, preset.max_health)
 		testing.expect_value(t, enemy.x, f32(12))
 		testing.expect_value(t, enemy.y, f32(34))
 		testing.expectf(
