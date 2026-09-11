@@ -18,13 +18,15 @@ ENEMY_SIZE: i32 = 12
 // don't exist yet.
 //
 // Two of these were inverted rather than merely stale before the roster
-// existed: Grounded was red (reserved now for the family a dashing Charger
-// will take) and Swarmer was orange. A build that repainted them separately from the
-// preset table would have read the roster wrong in between, so the palette
-// and the presets are one change.
+// existed: Grounded was red and Swarmer was orange. A build that repainted
+// them separately from the preset table would have read the roster wrong in
+// between, so the palette and the presets are one change.
 ENEMY_GROUNDED_COLOR :: Color{60, 190, 90, 255} // green
 ENEMY_FLOATER_COLOR :: rl.VIOLET
 ENEMY_SWARMER_COLOR :: Color{235, 215, 70, 255} // yellow
+// the loudest hue belongs to the thing that dashes at you, not to the
+// baseline walker
+ENEMY_CHARGER_COLOR :: Color{225, 60, 60, 255} // red
 // no Kind is Inert yet - the family exists (Movement_Style's nil case) and
 // this is the hue reserved for the first Kind that holds still.
 ENEMY_INERT_COLOR :: Color{60, 200, 205, 255} // cyan
@@ -39,6 +41,7 @@ Enemy_Kind :: enum {
 	Grunt,
 	Spitter,
 	Wraith,
+	Lancer,
 	Breaker,
 	Mite,
 	Gazer,
@@ -93,6 +96,28 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 55,
 		color = ENEMY_FLOATER_COLOR,
 		gold = 35,
+	},
+	// the first Kind that can catch a running player (roster row 4): it
+	// punishes kiting in a straight line, and is answered by stepping out of
+	// its lane during the Tell. Numbers are a playtest starting point - the
+	// lane a Melee Lancer claims is 34px to either side of its bearing
+	// (charger_lane_half_width), which at PLAYER_BASE_MOVE_SPEED takes ~0.35s
+	// to leave, so 0.5s leaves ~0.15s to read it; 140px at 260 px/s is a
+	// dash of just over half a second. Provisional until ticket 11 authors
+	// the eight Kinds together.
+	.Lancer = {
+		movement = Charger {
+			speed = 55,
+			dash_speed = 260,
+			dash_distance = 140,
+			tell_seconds = 0.5,
+			recovery_seconds = 0.5,
+			cooldown_seconds = 1.5,
+		},
+		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		max_health = 60,
+		color = ENEMY_CHARGER_COLOR,
+		gold = 50, // above the payout anchor on purpose: the highest threat per body on the roster
 	},
 	// the first Kind that claims ground (content-expansion spec's roster row
 	// 6): heavy, slow, and answered by stepping out of its claimed disc
@@ -173,6 +198,7 @@ Movement_Style :: union {
 	Grounded,
 	Floater,
 	Swarmer,
+	Charger,
 }
 
 // an enemy's combat archetype - orthogonal to Movement_Style; nil means the
@@ -208,6 +234,38 @@ Floater :: struct {
 Swarmer :: struct {
 	speed:      f32,
 	drift_sign: f32, // runtime: +1 or -1, which way round the contour this one turns, picked at spawn so a pack closes the ring from both sides. 0 (an old save, or an authored template) reads as +1
+}
+
+// the one that commits: closes by the flow field below the player's speed,
+// then claims a straight lane on the ground for an authored Tell, dashes
+// along it faster than the player can run for a bounded distance, and
+// recovers. The bearing is locked when the Tell starts (ADR-0005's lock,
+// as Tell_Area applies it), so the answer is a sidestep, not a footrace.
+// The dash itself carries no damage - that is the Kind's Attack Style, which
+// the dash delivers into contact - so this spends no Attack_Style slot
+// (content-expansion's Enemy catalog). Authored half above the blank line,
+// runtime half below: zero on a fresh stamp, so spawn_enemy_at needs no init
+// for it. See CONTEXT.md's Charger entry.
+Charger :: struct {
+	speed:            f32, // sustained approach, kept below the player's
+	dash_speed:       f32, // the dash - the roster's one exception to that rule
+	dash_distance:    f32, // px the dash covers; also how close the player must be for a Tell to start
+	tell_seconds:     f32, // absolute seconds (ADR-0023), never a fraction of anything
+	recovery_seconds: f32, // planted after the dash, or after a wall ends it early
+	cooldown_seconds: f32, // from the end of recovery until the next Tell may start
+
+	phase:            Charger_Phase, // runtime
+	timer:            f32, // runtime: the current phase's countdown - the Tell, the recovery, then the cooldown
+	dash_remaining:   f32, // runtime: px still to travel this dash
+	lane_origin:      Vec2, // runtime: LOCK at Tell start - the feet the lane starts from...
+	lane_dir:         Vec2, // runtime: ...and the unit bearing it runs along, never re-read
+}
+
+Charger_Phase :: enum {
+	Approaching,
+	Telling,
+	Dashing,
+	Recovering,
 }
 
 Melee :: struct {
@@ -429,6 +487,7 @@ Movement_Style_Kind :: enum {
 	Grounded,
 	Floater,
 	Swarmer,
+	Charger,
 	Inert,
 }
 
@@ -440,6 +499,8 @@ movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 		return .Floater
 	case Swarmer:
 		return .Swarmer
+	case Charger:
+		return .Charger
 	}
 	return .Inert
 }
@@ -454,6 +515,7 @@ SEPARATION_RADIUS := [Movement_Style_Kind]f32 {
 	.Grounded = 40,
 	.Floater  = 15,
 	.Swarmer  = 15,
+	.Charger  = 40, // Grounded's: its approach is the same chase, and only its approach is pushed
 	.Inert    = 0,
 }
 
@@ -461,6 +523,7 @@ SEPARATION_STRENGTH := [Movement_Style_Kind]f32 {
 	.Grounded = 3.0,
 	.Floater  = 0.5,
 	.Swarmer  = 0.5,
+	.Charger  = 3.0,
 	.Inert    = 0,
 }
 
@@ -796,7 +859,7 @@ spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
 		// half the pack turns each way, so a ring closes from both sides
 		// instead of every Swarmer queueing round the same arc
 		m.drift_sign = rand.float32() < 0.5 ? -1 : 1
-	case Grounded:
+	case Grounded, Charger:
 	}
 
 	enemy := Enemy {
@@ -947,6 +1010,9 @@ update_enemies :: proc(dt: f32) {
 
 	for &enemy, i in game.enemies {
 		delta: Vec2
+		// a Charger mid-commitment: its lane is not steered and its dash is not
+		// stopped by the attack it is delivering
+		committed: bool
 		pos := Vec2{enemy.x, enemy.y}
 		kind := movement_style_kind(enemy.movement)
 		separation_dir := compute_separation_direction(game.enemies[:], i, separation_grid)
@@ -958,6 +1024,16 @@ update_enemies :: proc(dt: f32) {
 			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
 			final_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			delta = final_dir * m.speed * dt
+		case Charger:
+			// Grounded's approach, handed in; Separation is folded into it and
+			// nowhere else, so a body on its lane cannot be pushed off it
+			intent := movement_intent(pos, player_pos, enemy.attack)
+			goal := movement_goal_point(pos, player_pos, intent)
+			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			approach_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
+			tick := update_charger(&m, pos, player_pos, approach_dir, dt)
+			delta = tick.delta
+			committed = tick.committed
 		case Floater:
 			goal := movement_goal_point(pos, player_pos, movement_intent(pos, player_pos, enemy.attack))
 			dir := floater_direction(pos, goal, t, m.wobble_phase, m.wobble_frequency, m.pull_strength)
@@ -988,7 +1064,11 @@ update_enemies :: proc(dt: f32) {
 			a.attack_timer -= dt
 
 			if dist_to_player <= a.attack_range {
-				delta = {}
+				// a body with the player in reach holds its ground - unless it is
+				// a dash arriving, which is the reach being delivered
+				if !committed {
+					delta = {}
+				}
 				if a.attack_timer <= 0 {
 					damage_player(a.attack_damage)
 					a.attack_timer = a.attack_cooldown
@@ -1028,7 +1108,13 @@ update_enemies :: proc(dt: f32) {
 		// resolution and applies its delta directly - the same split that
 		// decided whether it read the flow field above
 		if movement_style_collides_with_terrain[kind] {
-			move_actor(&enemy.rect, &game.current_map.tilemap, delta)
+			blocked := move_actor(&enemy.rect, &game.current_map.tilemap, delta)
+			// a dash into a wall ends early into recovery rather than burning
+			// out against the geometry - so a wall is something the player can
+			// bait a Charger into (ADR-0025)
+			if c, is_charger := &enemy.movement.(Charger); is_charger && blocked && c.phase == .Dashing {
+				charger_end_dash(c)
+			}
 		} else {
 			enemy.x += delta.x
 			enemy.y += delta.y
@@ -1145,6 +1231,120 @@ update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: 
 		resolve(a, attack, player_box, &tick)
 	}
 	return
+}
+
+// -- Charger ---------------------------------------------------------------
+
+// what one tick of a Charger asks its caller to do. update_enemies applies it
+// against `game`; the machine itself reads neither `game` nor the flow field
+// - the approach direction is handed in - so a test drives it with throwaway
+// values the way the Tell_Area suite does.
+Charger_Tick :: struct {
+	delta:     Vec2, // this frame's movement
+	committed: bool, // Telling, Dashing or Recovering: neither Separation nor Melee's hold may move or stop the body
+}
+
+// one tick of the Charger state machine. A Tell starts when the player is
+// within dash_distance - the dash can reach where they stand - and from that
+// LOCK until the dash ends nothing here reads the player: the lane is claimed
+// and always run (ADR-0023's committed Tell), so the only way not to be caught
+// is to have left it. A wall is the one thing that ends a dash early, and it
+// is the caller that knows (move_actor's blocked; charger_end_dash).
+update_charger :: proc(c: ^Charger, enemy_pos, player_pos, approach_dir: Vec2, dt: f32) -> (tick: Charger_Tick) {
+	switch c.phase {
+	case .Approaching:
+		// the cooldown only counts while approaching, so a body cannot pay
+		// for its next dash during this one
+		c.timer -= dt
+		if c.timer <= 0 && linalg.distance(enemy_pos, player_pos) <= c.dash_distance {
+			c.lane_origin = enemy_pos // LOCK: origin and bearing fixed here, never re-read
+			c.lane_dir = linalg.normalize0(player_pos - enemy_pos)
+			c.phase = .Telling
+			c.timer = c.tell_seconds // absolute seconds, verbatim from the preset
+			tick.committed = true
+			if c.timer <= 0 {
+				// a zero-length Tell dashes the instant it starts, the way a
+				// zero-length Windup resolves (weapon.odin) - no frame of dead time
+				c.phase = .Dashing
+				c.dash_remaining = c.dash_distance
+			}
+			return
+		}
+		tick.delta = approach_dir * c.speed * dt
+	case .Telling:
+		tick.committed = true
+		c.timer -= dt
+		if c.timer <= 0 {
+			c.phase = .Dashing
+			c.dash_remaining = c.dash_distance
+		}
+	case .Dashing:
+		tick.committed = true
+		step := min(c.dash_speed * dt, c.dash_remaining)
+		tick.delta = c.lane_dir * step
+		c.dash_remaining -= step
+		if c.dash_remaining <= 0 {
+			charger_end_dash(c)
+		}
+	case .Recovering:
+		tick.committed = true
+		c.timer -= dt
+		if c.timer <= 0 {
+			c.phase = .Approaching
+			c.timer = c.cooldown_seconds
+		}
+	}
+	return
+}
+
+// 0..1 through the running Tell, and whether one is running at all - the one
+// number the lane on the ground and the body flash both read, the same shape
+// as tell_area_progress so draw_enemy reads either through enemy_tell_progress
+charger_tell_progress :: proc(c: Charger) -> (progress: f32, telling: bool) {
+	if c.phase != .Telling {
+		return 0, false
+	}
+	if c.tell_seconds <= 0 {
+		return 1, true
+	}
+	return clamp(1 - c.timer / c.tell_seconds, 0, 1), true
+}
+
+// how far to either side of its bearing a Charger's lane claims: the
+// perpendicular offset at which a passing body's contact test would land -
+// ACTOR_SIZE plus Melee's surface-to-surface reach, the same arithmetic
+// update_enemies' Melee case runs - so the ground shows the danger, not the
+// body. Derived rather than authored, like everything the ground draws: a
+// lane cannot be drawn narrower than what it delivers. A Charger with no
+// contact attack to deliver claims only its own body's width.
+charger_lane_half_width :: proc(enemy: Enemy) -> f32 {
+	if melee, is_melee := enemy.attack.(Melee); is_melee {
+		return ACTOR_SIZE.x + melee.attack_range
+	}
+	return enemy_body_size(enemy.max_health) / 2
+}
+
+// what the body says *when* for: the progress of whichever Tell this enemy
+// is running - its Attack Style's (Tell_Area) or its Movement Style's
+// (Charger). One read, one flash: the two are one vocabulary on purpose.
+enemy_tell_progress :: proc(enemy: Enemy) -> (progress: f32, telling: bool) {
+	if a, is_tell := enemy.attack.(Tell_Area); is_tell {
+		if progress, telling = tell_area_progress(a); telling {
+			return
+		}
+	}
+	if c, is_charger := enemy.movement.(Charger); is_charger {
+		return charger_tell_progress(c)
+	}
+	return 0, false
+}
+
+// the dash is over - it ran its distance, or a wall stopped it - and the body
+// plants to recover
+charger_end_dash :: proc(c: ^Charger) {
+	c.phase = .Recovering
+	c.timer = c.recovery_seconds
+	c.dash_remaining = 0
 }
 
 RANGED_RETREAT_LOOKAHEAD: f32 = 100 // arbitrary distance behind the enemy to aim a euclidean Withdraw at; only direction matters since the goal recomputes every frame. A field-steered enemy ignores it entirely - its Withdraw is a one-cell step (flow_field_retreat_target)
@@ -1312,12 +1512,14 @@ cell_center_to_world :: proc(cell: Vec2i, tile_size: Vec2) -> Vec2 {
 // type-asserted on Floater at the point of use. This is the seam the flow
 // field splits on too (ADR-0025): a style that collides is one that can read
 // the field, because routing around geometry is only meaningful to a body
-// geometry stops. Grounded and Swarmer both read it - Swarmer to reach its
-// surround contour and then to follow it - and ADR-0025 names Charger as the
-// third, once ticket 10 adds it.
+// geometry stops. Grounded, Swarmer and Charger all read it - Swarmer to
+// reach its surround contour and then to follow it, Charger only to approach:
+// its dash ignores the field, since a field is a lookup rather than a
+// subscription, and it is the wall that ends the dash (ADR-0025).
 movement_style_collides_with_terrain := [Movement_Style_Kind]bool {
 	.Grounded = true,
 	.Floater  = false, // flying through walls is its identity - see CONTEXT.md
 	.Swarmer  = true,
+	.Charger  = true,
 	.Inert    = true,
 }

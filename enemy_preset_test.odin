@@ -29,7 +29,7 @@ test_every_enemy_kind_has_an_authored_preset :: proc(t: ^testing.T) {
 // purpose: the roster distinguishes Kinds inside one family by value (a pale
 // green Spitter beside a green Grunt), so pinning exact equality here would
 // forbid the thing the palette is supposed to leave room for.
-ENEMY_FAMILY_HUE_TOLERANCE :: f32(12) // degrees; the four family hues sit ~50 degrees apart at their closest
+ENEMY_FAMILY_HUE_TOLERANCE :: f32(12) // degrees; the five family hues sit ~50 degrees apart at their closest
 
 @(test)
 test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
@@ -37,6 +37,7 @@ test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
 		.Grounded = ENEMY_GROUNDED_COLOR,
 		.Floater  = ENEMY_FLOATER_COLOR,
 		.Swarmer  = ENEMY_SWARMER_COLOR,
+		.Charger  = ENEMY_CHARGER_COLOR,
 		.Inert    = ENEMY_INERT_COLOR,
 	}
 
@@ -55,28 +56,31 @@ test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
 	}
 }
 
-// the four family hues must stay far enough apart that the check above can
+// the five family hues must stay far enough apart that the check above can
 // tell them apart at all - a repaint that quietly moved two together would
 // otherwise leave every row passing while the screen stopped being readable
 @(test)
 test_the_movement_family_hues_stay_apart :: proc(t: ^testing.T) {
-	palette := [][2]Color {
-		{ENEMY_GROUNDED_COLOR, ENEMY_FLOATER_COLOR},
-		{ENEMY_GROUNDED_COLOR, ENEMY_SWARMER_COLOR},
-		{ENEMY_GROUNDED_COLOR, ENEMY_INERT_COLOR},
-		{ENEMY_FLOATER_COLOR, ENEMY_SWARMER_COLOR},
-		{ENEMY_FLOATER_COLOR, ENEMY_INERT_COLOR},
-		{ENEMY_SWARMER_COLOR, ENEMY_INERT_COLOR},
+	palette := []Color {
+		ENEMY_GROUNDED_COLOR,
+		ENEMY_FLOATER_COLOR,
+		ENEMY_SWARMER_COLOR,
+		ENEMY_CHARGER_COLOR,
+		ENEMY_INERT_COLOR,
 	}
 
-	for pair in palette {
-		drift := hue_degrees_apart(pair[0], pair[1])
-		testing.expectf(
-			t,
-			drift > ENEMY_FAMILY_HUE_TOLERANCE * 2,
-			"two family hues are only %.0f degrees apart, which is inside what a Kind is allowed to drift",
-			drift,
-		)
+	for a, i in palette {
+		for b in palette[i + 1:] {
+			drift := hue_degrees_apart(a, b)
+			testing.expectf(
+				t,
+				drift > ENEMY_FAMILY_HUE_TOLERANCE * 2,
+				"two family hues (%v, %v) are only %.0f degrees apart, which is inside what a Kind is allowed to drift",
+				a,
+				b,
+				drift,
+			)
+		}
 	}
 }
 
@@ -216,4 +220,29 @@ test_every_tell_area_preset_authors_a_playable_rotation :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, carriers > 0, "no Kind carries a Tell_Area, so nothing in the game ever telegraphs")
+}
+
+// the roster's speed rule (content-expansion's Enemy catalog): nothing
+// sustains a pace the player cannot walk away from, and the one thing that
+// exceeds it does so only for its dash. Both halves are checked against the
+// player's base speed, since a Charger authored between the two would be
+// either a footrace or a dash that never catches anyone. The "at least one"
+// clause keeps the Movement Style from silently falling off the roster when
+// the eight Kinds are re-authored (ticket 11).
+@(test)
+test_every_charger_preset_outruns_the_player_only_while_dashing :: proc(t: ^testing.T) {
+	carriers := 0
+	for kind in Enemy_Kind {
+		c, is_charger := enemy_presets[kind].movement.(Charger)
+		if !is_charger {
+			continue
+		}
+		carriers += 1
+		testing.expectf(t, c.speed > 0 && c.speed < PLAYER_BASE_MOVE_SPEED, "%v sustains %v against the player's %v - a footrace", kind, c.speed, PLAYER_BASE_MOVE_SPEED)
+		testing.expectf(t, c.dash_speed > PLAYER_BASE_MOVE_SPEED, "%v dashes at %v, which the player outruns", kind, c.dash_speed)
+		testing.expectf(t, c.dash_distance > 0, "%v's dash goes nowhere", kind)
+		testing.expectf(t, c.tell_seconds > 0, "%v's lane has no Tell to read", kind)
+		testing.expectf(t, c.recovery_seconds > 0 && c.cooldown_seconds > 0, "%v would dash again the frame its dash ended", kind)
+	}
+	testing.expect(t, carriers > 0, "no Kind is a Charger, so nothing in the game can catch a running player")
 }

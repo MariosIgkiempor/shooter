@@ -602,8 +602,11 @@ actor_collision_rect :: proc(rect: Rect) -> Rect {
 }
 
 // moves an actor (player or enemy), resolving against colliding tiles one axis
-// at a time so it slides along walls instead of stopping dead on diagonal input
-move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) {
+// at a time so it slides along walls instead of stopping dead on diagonal input.
+// Reports whether any tile resolved the move - a slide along a wall counts,
+// since one axis was stopped - which is the signal a Charger's dash ends on;
+// every other caller discards it.
+move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) -> (blocked: bool) {
 	box := actor_collision_rect(rect^)
 
 	box.x += delta.x
@@ -620,8 +623,10 @@ move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) {
 
 		if delta.x > 0 {
 			box.x = tile_rect.x - box.width
+			blocked = true
 		} else if delta.x < 0 {
 			box.x = tile_rect.x + tile_rect.width
+			blocked = true
 		}
 	}
 
@@ -639,14 +644,17 @@ move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) {
 
 		if delta.y > 0 {
 			box.y = tile_rect.y - box.height
+			blocked = true
 		} else if delta.y < 0 {
 			box.y = tile_rect.y + tile_rect.height
+			blocked = true
 		}
 	}
 
 	// resolved box back to the bottom-center anchor
 	rect.x = box.x + box.width / 2
 	rect.y = box.y + box.height
+	return
 }
 
 Player :: struct {
@@ -1289,11 +1297,9 @@ draw_game :: proc() {
 		// as a full bar rather than a NaN that propagates into rl.Fade
 		health_frac := enemy.max_health > 0 ? clamp(enemy.health / enemy.max_health, 0, 1) : 1
 		color := enemy_body_color(enemy_presets[enemy.kind].color, health_frac)
-		// the body says *when*; the ground layer's zone says *where*
-		if a, is_tell := enemy.attack.(Tell_Area); is_tell {
-			if progress, telling := tell_area_progress(a); telling {
-				color = tell_flash_color(color, progress)
-			}
+		// the body says *when*; the ground layer's zone or lane says *where*
+		if progress, telling := enemy_tell_progress(enemy); telling {
+			color = tell_flash_color(color, progress)
 		}
 
 		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
@@ -1602,9 +1608,11 @@ draw_game :: proc() {
 	// F8 debug panel visualizer: each enemy's Separation neighbour radius (how close
 	// same-Movement-Style enemies must be before they push apart), plus a
 	// dedicated ring for Swarmer's surround distance, read from its own Attack
-	// Style's engagement range (see swarmer_surround_radius). The circle is the
-	// nominal distance only - the contour a Swarmer actually drifts along is a
-	// path distance that wraps geometry, which the .Flow_Field overlay shows.
+	// Style's engagement range (see swarmer_surround_radius), and one for a
+	// Charger's dash distance - the range a Tell starts inside. The circle is
+	// the nominal distance only - the contour a Swarmer actually drifts along
+	// is a path distance that wraps geometry, which the .Flow_Field overlay
+	// shows.
 	draw_debug_movement_styles :: proc() {
 		player_pos := Vec2{game.player.x, game.player.y}
 
@@ -1617,8 +1625,12 @@ draw_game :: proc() {
 
 			rl.DrawCircleLinesV(center, SEPARATION_RADIUS[kind], rl.PURPLE)
 
-			if kind == .Swarmer {
+			switch m in enemy.movement {
+			case Swarmer:
 				rl.DrawCircleLinesV(player_pos, swarmer_surround_radius(enemy.attack), rl.PURPLE)
+			case Charger:
+				rl.DrawCircleLinesV(center, m.dash_distance, rl.PURPLE)
+			case Grounded, Floater:
 			}
 		}
 	}

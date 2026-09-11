@@ -1,5 +1,6 @@
 package shooter
 
+import "core:math"
 import rl "vendor:raylib"
 
 // The Ground layer: the world-space draw slot immediately above the tilemap
@@ -13,8 +14,9 @@ import rl "vendor:raylib"
 // Drawn in order of who is speaking: scenery first (a Map theme's floor
 // patches, content-expansion-build ticket 22, will go at the top of
 // draw_ground_layer), then claimed ground, so a claim is never hidden by
-// decoration. The Charger's lane (ticket 10) is a second claimed shape and
-// extends this proc rather than paralleling it.
+// decoration. Two shapes claim ground - a Tell_Area's disc and a Charger's
+// lane - in one colour and one alpha vocabulary, because they are one read
+// for the player to learn.
 //
 // Read-only: draw_world_contents runs twice a frame once the blurred
 // backdrop is compositing (draw_blurred_world), so nothing here may mutate.
@@ -28,6 +30,9 @@ draw_ground_layer :: proc(enemies: []Enemy) {
 	for enemy in enemies {
 		if a, is_tell := enemy.attack.(Tell_Area); is_tell {
 			draw_tell_area_zone(a)
+		}
+		if c, is_charger := enemy.movement.(Charger); is_charger {
+			draw_charger_lane(enemy, c)
 		}
 	}
 }
@@ -48,4 +53,37 @@ draw_tell_area_zone :: proc(a: Tell_Area) {
 	rl.DrawCircleV(a.tell_centre, attack.radius, rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_CLAIM_ALPHA))
 	rl.DrawCircleV(a.tell_centre, attack.radius * progress, rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_FILL_ALPHA))
 	rl.DrawCircleLinesV(a.tell_centre, attack.radius, rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_EDGE_ALPHA))
+}
+
+// the claimed lane, at full extent from the first frame - from the body's
+// feet along the locked bearing for the whole dash, as wide as what the dash
+// delivers (charger_lane_half_width) - with an inner strip sweeping down it
+// as the Tell runs. The same three layers as the disc, in the disc's colour:
+// the ground says *where*, the sweep and the body flash say *when*.
+draw_charger_lane :: proc(enemy: Enemy, c: Charger) {
+	progress, telling := charger_tell_progress(c)
+	if !telling {
+		return
+	}
+	half_width := charger_lane_half_width(enemy)
+	length := c.dash_distance + half_width // to the far edge of what the body's stop still reaches
+	angle := math.atan2(c.lane_dir.y, c.lane_dir.x) * math.DEG_PER_RAD
+	// DrawRectanglePro rotates about `origin` in the rect's own space: the
+	// lane's near edge midpoint sits on the feet, so the strip runs from the
+	// body forward rather than hanging past it
+	claim := Rect{c.lane_origin.x, c.lane_origin.y, length, half_width * 2}
+	rl.DrawRectanglePro(claim, {0, half_width}, angle, rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_CLAIM_ALPHA))
+	fill := Rect{c.lane_origin.x, c.lane_origin.y, length * progress, half_width * 2}
+	rl.DrawRectanglePro(fill, {0, half_width}, angle, rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_FILL_ALPHA))
+
+	side := Vec2{-c.lane_dir.y, c.lane_dir.x} * half_width
+	near_left := c.lane_origin - side
+	near_right := c.lane_origin + side
+	far_left := near_left + c.lane_dir * length
+	far_right := near_right + c.lane_dir * length
+	edge := rl.Fade(TELL_ZONE_COLOR, TELL_ZONE_EDGE_ALPHA)
+	rl.DrawLineV(near_left, far_left, edge)
+	rl.DrawLineV(far_left, far_right, edge)
+	rl.DrawLineV(far_right, near_right, edge)
+	rl.DrawLineV(near_right, near_left, edge)
 }
