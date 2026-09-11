@@ -184,3 +184,36 @@ a_kind_moving_as :: proc(family: Movement_Style_Kind) -> (kind: Enemy_Kind, foun
 	}
 	return {}, false
 }
+
+// a Tell_Area whose rotation is empty is inert (update_tell_area guards the
+// modulo), and one whose entry has a zero radius or damage telegraphs nothing
+// worth dodging - either is an authoring slip with no second place to catch
+// it. The "at least one" clause keeps the variant from silently falling off
+// the roster when the eight Kinds are re-authored (ticket 11).
+@(test)
+test_every_tell_area_preset_authors_a_playable_rotation :: proc(t: ^testing.T) {
+	carriers := 0
+	for kind in Enemy_Kind {
+		a, is_tell := enemy_presets[kind].attack.(Tell_Area)
+		if !is_tell {
+			continue
+		}
+		carriers += 1
+		testing.expectf(
+			t,
+			a.rotation_count >= 1 && a.rotation_count <= TELL_AREA_MAX_ROTATION,
+			"%v's rotation has %d live entries, outside 1..%d",
+			kind,
+			a.rotation_count,
+			TELL_AREA_MAX_ROTATION,
+		)
+		testing.expectf(t, a.cooldown_seconds > 0, "%v would Tell again the frame it resolved", kind)
+		for i in 0 ..< min(a.rotation_count, TELL_AREA_MAX_ROTATION) {
+			attack := a.rotation[i]
+			testing.expectf(t, attack.radius > 0, "%v's attack %d claims no ground", kind, i)
+			testing.expectf(t, attack.damage > 0, "%v's attack %d lands for nothing", kind, i)
+			testing.expectf(t, attack.tell_seconds > 0, "%v's attack %d has no Tell to read", kind, i)
+		}
+	}
+	testing.expect(t, carriers > 0, "no Kind carries a Tell_Area, so nothing in the game ever telegraphs")
+}

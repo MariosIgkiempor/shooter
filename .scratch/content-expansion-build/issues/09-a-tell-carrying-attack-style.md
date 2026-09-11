@@ -12,11 +12,25 @@ This introduces the ground layer the zone draws into, beneath every actor.
 
 **Blocked by:** 08
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An attack style variant carries a Tell of an authored duration in seconds
-- [ ] The zone draws at full extent for the whole Tell, on a ground layer beneath actors
-- [ ] The telegraphing enemy stops moving and flashes
-- [ ] The bearing is locked at Tell start; walking out of the zone avoids the hit
-- [ ] The attack resolves at the end of the Tell regardless of what it hits, with screen shake
-- [ ] Tell duration is unchanged by anything that scales other timings
+- [x] An attack style variant carries a Tell of an authored duration in seconds
+- [x] The zone draws at full extent for the whole Tell, on a ground layer beneath actors
+- [x] The telegraphing enemy stops moving and flashes
+- [x] The bearing is locked at Tell start; walking out of the zone avoids the hit
+- [x] The attack resolves at the end of the Tell regardless of what it hits, with screen shake
+- [x] Tell duration is unchanged by anything that scales other timings
+
+## Comments
+
+Implemented as the `Tell_Area` Attack Style variant (`enemy.odin`): a rotation
+of `Area_Attack`s (`radius`, `reach`, `damage`, `tell_seconds`), cycled on
+resolve, per ADR-0023's amendment - so ticket 21 stacks phases on this shape
+rather than reshaping it. `update_tell_area` is the pure seam
+(`enemy_tell_test.odin`); `update_enemies` applies its tick: plant, shake on
+resolve hit or miss, `damage_player` only when the locked disc still covers
+the player. The Ground layer is `ground_layer.odin`, called first after
+`draw_tilemap`; the body flash is `tell_flash_color` (value only, toward
+white - hue stays family, alpha stays health). One Kind carries it now:
+**Breaker**, provisionally added to Cold Hall's kill-gated composition so it
+is playable before ticket 11 re-authors the roster.

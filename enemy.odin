@@ -39,6 +39,7 @@ Enemy_Kind :: enum {
 	Grunt,
 	Spitter,
 	Wraith,
+	Breaker,
 	Mite,
 	Gazer,
 }
@@ -92,6 +93,23 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 55,
 		color = ENEMY_FLOATER_COLOR,
 		gold = 35,
+	},
+	// the first Kind that claims ground (content-expansion spec's roster row
+	// 6): heavy, slow, and answered by stepping out of its claimed disc
+	// rather than by kiting. Numbers are a playtest starting point - at
+	// PLAYER_BASE_MOVE_SPEED leaving a 28px disc from its centre takes ~0.4s,
+	// so 0.6s leaves ~0.2s to read it. Provisional until the roster ticket
+	// (content-expansion-build 11) authors the eight Kinds together.
+	.Breaker = {
+		movement = Grounded{speed = 30},
+		attack = Tell_Area {
+			rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
+			rotation_count = 1,
+			cooldown_seconds = 1.5,
+		},
+		max_health = 130, // -> 46px, the heaviest body the one-tile inflation envelope allows
+		color = ENEMY_GROUNDED_COLOR,
+		gold = 80,
 	},
 	.Mite = {
 		movement = Swarmer{speed = 65},
@@ -158,10 +176,13 @@ Movement_Style :: union {
 }
 
 // an enemy's combat archetype - orthogonal to Movement_Style; nil means the
-// enemy doesn't attack. See CONTEXT.md's Attack Style entry.
+// enemy doesn't attack. Melee and Ranged are answered by keeping away;
+// Tell_Area is the one the player reacts to. See CONTEXT.md's Attack Style
+// entry.
 Attack_Style :: union {
 	Melee,
 	Ranged,
+	Tell_Area,
 }
 
 // grounded chase by the shared flow field, colliding with terrain like the
@@ -204,6 +225,43 @@ Ranged :: struct {
 	fire_rate:        f32, // shots/sec while in the min..max band
 	bullet_lifetime:  f32,
 	fire_timer:       f32, // runtime countdown, not editor-set
+}
+
+// one committed area attack: a disc of `radius` claimed on the ground,
+// centred where the player stood at Tell start clamped to `reach` from the
+// body (ADR-0005's lock, carried to the enemy side by ADR-0023's amendment).
+// The Tell's duration lives here rather than on the variant because it is
+// authored per attack: what makes it fair is how far the player must travel
+// to leave *this* disc.
+Area_Attack :: struct {
+	radius:       f32, // px, the claimed disc
+	reach:        f32, // px, how far from the body the disc's centre may be placed; 0 centres it on the body
+	damage:       f32,
+	tell_seconds: f32, // absolute seconds (ADR-0023), never a fraction of anything
+}
+
+// backs a fixed-size array, so it stays a compile-time constant (the same
+// exclusion ADR-0020 makes for SWORD_ECHO_COUNT). Rotations are stamped by
+// copy with the rest of the preset; a slice would alias the table.
+TELL_AREA_MAX_ROTATION :: 4
+
+// the Tell-carrying Attack Style: a rotation of committed area attacks, each
+// shown on the ground for its own authored seconds before it lands. Once a
+// Tell starts it always resolves (ADR-0023) - the running branch never reads
+// the player - so the only way not to be hit is to have left the disc. The
+// authored half is what a preset writes; the runtime half is zero on a fresh
+// stamp (Melee.attack_timer's "runtime countdown, not editor-set"), which is
+// why spawn_enemy_at needs no init for it and a body still compares equal
+// to its preset. Ticket 21's boss stacks phases on top of this shape.
+Tell_Area :: struct {
+	rotation:         [TELL_AREA_MAX_ROTATION]Area_Attack, // cycled in order
+	rotation_count:   int, // live entries of `rotation`, 1..TELL_AREA_MAX_ROTATION; 0 makes the body inert rather than a panic
+	cooldown_seconds: f32, // seconds from a resolve until the next Tell may start (Melee's attack_cooldown analogue)
+
+	rotation_index:   int, // runtime: the entry the running (or next) Tell uses; advances on resolve, so mid-Tell it is the attack in flight
+	tell_remaining:   f32, // runtime: > 0 while a Tell is running; counted down in raw dt seconds, scaled by nothing
+	tell_centre:      Vec2, // runtime: the claimed disc's centre, locked at Tell start and never re-read
+	cooldown_timer:   f32, // runtime countdown between Tells, not editor-set
 }
 
 // one entry in a Map's spawn timeline, replacing the old fixed-position
@@ -576,6 +634,8 @@ swarmer_surround_radius :: proc(attack: Attack_Style) -> f32 {
 		return a.attack_range
 	case Ranged:
 		return a.max_range
+	case Tell_Area:
+		return tell_area_engagement_range(a)
 	}
 	return SWARMER_FALLBACK_SURROUND_RADIUS
 }
@@ -721,10 +781,10 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 
 // stamps one Enemy from its Kind's preset. The union values are *copied*
 // onto the body rather than looked up per read, because Floater.wobble_phase,
-// Melee.attack_timer and Ranged.fire_timer are per-enemy mutable state that
-// cannot be shared across a Kind (ADR-0020). Nothing scales the result: what
-// a Kind is worth killing and how much fire it takes is the same everywhere
-// it appears.
+// Melee.attack_timer, Ranged.fire_timer and Tell_Area's running Tell are
+// per-enemy mutable state that cannot be shared across a Kind (ADR-0020).
+// Nothing scales the result: what a Kind is worth killing and how much fire
+// it takes is the same everywhere it appears.
 spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
 	preset := enemy_presets[kind]
 
@@ -943,6 +1003,20 @@ update_enemies :: proc(dt: f32) {
 				fire_enemy_bullet(pos, direction, a)
 				a.fire_timer = 1.0 / a.fire_rate
 			}
+		case Tell_Area:
+			tick := update_tell_area(&a, pos, game.player.rect, dt)
+			if tick.planted {
+				delta = {}
+			}
+			if tick.resolved {
+				// hit or miss: the shake is the attack landing on the ground,
+				// not the damage - a dodged slam still shakes, which is what
+				// tells the player the dodge was real
+				trigger_screen_shake(TELL_AREA_RESOLVE_SHAKE)
+				if tick.damage > 0 {
+					damage_player(tick.damage)
+				}
+			}
 		case:
 		// nil: no attack
 		}
@@ -960,6 +1034,117 @@ update_enemies :: proc(dt: f32) {
 			enemy.y += delta.y
 		}
 	}
+}
+
+// -- Tell area -------------------------------------------------------------
+
+TELL_AREA_RESOLVE_SHAKE: f32 = 0.35 // trauma added when a claimed disc lands, hit or miss
+
+// what one tick of a Tell_Area asks its caller to do. update_enemies applies
+// these against `game`; the state machine itself never touches it, so a test
+// drives it with throwaway values the way the Separation suite does.
+Tell_Area_Tick :: struct {
+	planted:  bool, // hold the body still this frame
+	resolved: bool, // a Tell ended this frame: shake, hit or miss
+	damage:   f32, // > 0 only when the resolve caught the player's collision rect
+}
+
+// the attack the running (or next) Tell uses; false when the rotation is
+// empty, which makes a mis-authored preset inert rather than a modulo by zero
+tell_area_current_attack :: proc(a: Tell_Area) -> (Area_Attack, bool) {
+	if a.rotation_count <= 0 {
+		return {}, false
+	}
+	return a.rotation[a.rotation_index % a.rotation_count], true
+}
+
+// where the disc lands: the player's feet at Tell start, clamped to `reach`
+// along the bearing from the body - the same lock a ground-targeted cast
+// applies at Trigger (ADR-0005), so a body that plants has a fixed target
+tell_area_claim_centre :: proc(enemy_pos, player_pos: Vec2, reach: f32) -> Vec2 {
+	return clamp_point_to_range(enemy_pos, player_pos, reach)
+}
+
+// the farthest centre-to-centre distance at which the current disc can still
+// cover the player - what a Swarmer orbits at and what the debug ring shows.
+// Derived, not the trigger: the Tell starts on the resolve test itself.
+tell_area_engagement_range :: proc(a: Tell_Area) -> f32 {
+	attack, ok := tell_area_current_attack(a)
+	if !ok {
+		return 0
+	}
+	return attack.reach + attack.radius
+}
+
+// 0..1 through the running Tell, and whether one is running at all - the
+// one number both the ground zone and the body flash read
+tell_area_progress :: proc(a: Tell_Area) -> (progress: f32, telling: bool) {
+	if a.tell_remaining <= 0 {
+		return 0, false
+	}
+	attack, ok := tell_area_current_attack(a)
+	if !ok || attack.tell_seconds <= 0 {
+		return 1, true
+	}
+	return clamp(1 - a.tell_remaining / attack.tell_seconds, 0, 1), true
+}
+
+// one tick of the Tell_Area state machine. The start gate is the resolve test
+// itself - "would standing still be hit?" - so a Tell only ever starts when
+// it would land, and the resolve re-runs the identical test against the
+// locked centre: the only way to be missed is to have moved. While a Tell
+// runs nothing here reads the player - leaving reach, god mode or dying does
+// not stop it (ADR-0023: a committed Tell always resolves). The only thing
+// that ends one early is the body's own death, which is not a bluff.
+update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: f32) -> (tick: Tell_Area_Tick) {
+	attack, ok := tell_area_current_attack(a^)
+	if !ok {
+		return
+	}
+	player_box := actor_collision_rect(player_rect)
+
+	resolve := proc(a: ^Tell_Area, attack: Area_Attack, player_box: Rect, tick: ^Tell_Area_Tick) {
+		tick.resolved = true
+		if rl.CheckCollisionCircleRec(a.tell_centre, attack.radius, player_box) {
+			tick.damage = attack.damage
+		}
+		a.tell_remaining = 0
+		a.cooldown_timer = a.cooldown_seconds
+		a.rotation_index = (a.rotation_index + 1) % a.rotation_count
+	}
+
+	if a.tell_remaining > 0 {
+		a.tell_remaining -= dt
+		tick.planted = true
+		if a.tell_remaining <= 0 {
+			resolve(a, attack, player_box, &tick)
+		}
+		return
+	}
+
+	// the cooldown only counts while no Tell is running, so a body cannot
+	// pay for its next attack during this one
+	a.cooldown_timer -= dt
+	player_pos := Vec2{player_rect.x, player_rect.y}
+	centre := tell_area_claim_centre(enemy_pos, player_pos, attack.reach)
+	if !rl.CheckCollisionCircleRec(centre, attack.radius, player_box) {
+		return // keep approaching: standing still would not be hit yet
+	}
+	// Melee's precedent (a body with the player in reach holds its ground),
+	// so the disc is claimed from where the body stopped rather than a step on
+	tick.planted = true
+	if a.cooldown_timer > 0 {
+		return
+	}
+
+	a.tell_centre = centre // LOCK: bearing and centre fixed here, never re-read
+	a.tell_remaining = attack.tell_seconds // absolute seconds, verbatim from the preset
+	if a.tell_remaining <= 0 {
+		// a zero-length Tell resolves the instant it starts, the way a
+		// zero-length Windup does (weapon.odin) - no frame of dead time
+		resolve(a, attack, player_box, &tick)
+	}
+	return
 }
 
 RANGED_RETREAT_LOOKAHEAD: f32 = 100 // arbitrary distance behind the enemy to aim a euclidean Withdraw at; only direction matters since the goal recomputes every frame. A field-steered enemy ignores it entirely - its Withdraw is a one-cell step (flow_field_retreat_target)
