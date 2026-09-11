@@ -5200,7 +5200,7 @@ maps: [Map_Name]Map = {
 		Tile{world_coords = {53, 46}, collides = true},
 		Tile{world_coords = {53, 47}, collides = true},
 	}}, spawn_triggers = {
-		Spawn_Trigger{condition = Time_Elapsed{seconds = 0}, mode = Repeating{interval = 3, duration = 150}, composition = {Spawn_Composition_Entry{kind = .Grunt, count = 1}, Spawn_Composition_Entry{kind = .Spitter, count = 1}}},
+		Spawn_Trigger{condition = Time_Elapsed{seconds = 0}, mode = Repeating{interval = 3, duration = 150}, composition = {Spawn_Composition_Entry{kind = .Grunt, count = 1}, Spawn_Composition_Entry{kind = .Spitter, count = 1}, Spawn_Composition_Entry{kind = .Lancer, count = 1}}},
 		Spawn_Trigger{condition = Kills_Reached{count = 15}, mode = Repeating{interval = 4, duration = 120}, composition = {Spawn_Composition_Entry{kind = .Wraith, count = 1}, Spawn_Composition_Entry{kind = .Gazer, count = 1}}},
 		Spawn_Trigger{condition = Time_Elapsed{seconds = 150}, mode = Repeating{interval = 3, duration = 120}, composition = {Spawn_Composition_Entry{kind = .Mite, count = 3}, Spawn_Composition_Entry{kind = .Spitter, count = 1}}},
 	}, time_limit = 330, victory_multiplier = 1.5, rung = 1, floor_color = Color{56, 48, 40, 255}, wall_color = Color{124, 110, 90, 255}, ambient = {}},
