@@ -603,7 +603,6 @@ register_enemy_tunables :: proc() {
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_harmonic_freq", "Wobble Harmonic Freq", &FLOATER_WOBBLE_HARMONIC_FREQ, 0, 8)
 	register_tunable(.Enemy_AI, "enemy.floater.wobble_harmonic_phase", "Wobble Harmonic Phase", &FLOATER_WOBBLE_HARMONIC_PHASE, 0, 8)
 	register_tunable(.Enemy_AI, "enemy.ranged.retreat_lookahead", "Ranged Retreat Lookahead", &RANGED_RETREAT_LOOKAHEAD, 0, 500)
-	register_tunable(.Enemy_AI, "enemy.tell.resolve_shake", "Tell Resolve Shake", &TELL_AREA_RESOLVE_SHAKE, 0, 1)
 	register_tunable(.Enemies, "enemy.tell.flash_base_mix", "Tell Flash Base Mix", &TELL_FLASH_BASE_MIX, 0, 1)
 	register_tunable(.Enemies, "enemy.tell.flash_pulse_mix", "Tell Flash Pulse Mix", &TELL_FLASH_PULSE_MIX, 0, 1)
 	register_tunable(.Enemies, "enemy.tell.flash_pulse_hz", "Tell Flash Pulses", &TELL_FLASH_PULSE_HZ, 0, 12)
@@ -690,6 +689,7 @@ register_feel_tunables :: proc() {
 
 	register_tunable(.Screen_Shake, "shake.decay", "Decay", &SCREEN_SHAKE_DECAY, 0.1, 20)
 	register_tunable(.Screen_Shake, "shake.max_offset", "Max Offset", &SCREEN_SHAKE_MAX_OFFSET, 0, 400)
+	register_tunable(.Screen_Shake, "shake.tell_resolve", "Tell Resolve", &TELL_AREA_RESOLVE_SHAKE, 0, 1)
 
 	register_tunable(.Weapon_Animation, "weapon_anim.windup_pullback", "Windup Pullback", &WEAPON_WINDUP_PULLBACK, 0, 40)
 	register_tunable(.Weapon_Animation, "weapon_anim.recoil_kick", "Recoil Kick", &WEAPON_RECOIL_KICK, 0, 40)

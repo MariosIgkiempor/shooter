@@ -782,9 +782,9 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 // stamps one Enemy from its Kind's preset. The union values are *copied*
 // onto the body rather than looked up per read, because Floater.wobble_phase,
 // Melee.attack_timer, Ranged.fire_timer and Tell_Area's running Tell are
-// per-enemy mutable state that cannot be shared across a Kind (ADR-0020). Nothing scales the result: what
-// a Kind is worth killing and how much fire it takes is the same everywhere
-// it appears.
+// per-enemy mutable state that cannot be shared across a Kind (ADR-0020).
+// Nothing scales the result: what a Kind is worth killing and how much fire
+// it takes is the same everywhere it appears.
 spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
 	preset := enemy_presets[kind]
 

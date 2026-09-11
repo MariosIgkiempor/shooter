@@ -87,13 +87,14 @@ test_a_telling_enemy_plants_for_the_whole_tell :: proc(t: ^testing.T) {
 }
 
 @(test)
-test_a_tell_resolves_after_exactly_its_authored_seconds_and_only_once :: proc(t: ^testing.T) {
+test_a_tell_resolves_once_its_authored_seconds_have_run_and_only_once :: proc(t: ^testing.T) {
 	a := a_tell(28, 40, 0.55, 5)
 	enemy_pos := Vec2{0, 0}
 	player := player_at({30, 0})
 
-	// tick 1 starts the Tell (0.55 remaining); ticks 2..6 count 0.5s off it;
-	// tick 7 crosses zero
+	// tick 1 starts the Tell (0.55 remaining) and, like a Windup's start
+	// frame (weapon.odin), does not count against it; ticks 2..6 take 0.5s
+	// off; tick 7 crosses zero
 	for i in 1 ..= 6 {
 		tick := update_tell_area(&a, enemy_pos, player, STEP)
 		testing.expectf(t, !tick.resolved, "tick %d is inside the 0.55s Tell and should not resolve", i)
@@ -245,14 +246,13 @@ test_an_empty_rotation_never_tells :: proc(t: ^testing.T) {
 // against; if one ever appears, this is the test to extend.
 @(test)
 test_tell_duration_is_unchanged_by_anything_that_scales_other_timings :: proc(t: ^testing.T) {
-	enemy_pos := Vec2{0, 0}
-	player := player_at({30, 0})
-
 	resolve_ticks :: proc(cooldown: f32) -> (first_remaining: f32, ticks: int) {
 		a := a_tell(28, 40, 0.55, cooldown)
-		update_tell_area(&a, {0, 0}, {30, 0, 0, 0}, STEP)
+		enemy_pos := Vec2{0, 0}
+		player := player_at({30, 0})
+		update_tell_area(&a, enemy_pos, player, STEP)
 		first_remaining = a.tell_remaining
-		_, ticks = tick_until_resolved(&a, {0, 0}, {30, 0, 0, 0}, 20)
+		_, ticks = tick_until_resolved(&a, enemy_pos, player, 20)
 		return
 	}
 
