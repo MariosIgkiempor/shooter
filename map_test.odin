@@ -2,6 +2,7 @@ package shooter
 
 import "core:fmt"
 import "core:log"
+import "core:math"
 import "core:os"
 import "core:slice"
 import "core:strings"
@@ -278,4 +279,290 @@ test_the_baked_desert_dungeon_keeps_todays_palette :: proc(t: ^testing.T) {
 	// derived rather than authored, and within one 8-bit step of the
 	// TILEMAP_WALL_BEVEL_COLOR it replaces ({74, 64, 52})
 	testing.expect_value(t, map_bevel_color(desert), Color{74, 64, 53, 255})
+}
+
+// -- Map validity (ticket 15) ---------------------------------------------
+// The seven checks spec.md's Testing Decisions name, one test each, over the
+// baked `maps` table Playing draws from: a broken Map fails the build rather
+// than the playtest. Every test here is read-only against `maps` - a
+// `map_data := maps[name]` copy aliases the table's own tile and trigger
+// arrays (map.odin's clone_map comment), so nothing below may append to,
+// delete, or clone one - and builds any Flow_Field it needs on its own stack,
+// so the file's no-thread-pinning discipline still holds.
+//
+// Order is deliberate: the start-on-floor check comes first because a start
+// inside a wall floods nothing, and the connectivity check after it would
+// then report every walkable cell as sealed off.
+
+// "on a floor tile" is strictly stronger than "not inside a wall": an absent
+// cell is walkable (ADR-0025) but is drawn as the clear colour rather than the
+// Map's floor, and Desert Dungeon's start sat on one until this ticket.
+@(test)
+test_every_baked_maps_player_start_is_on_a_floor_tile :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		cell := world_to_cell_coord(map_data.player_start, map_data.tilemap.tile_size)
+
+		found: Tile
+		on_tile := false
+		for tile in map_data.tilemap.tiles {
+			if tile.world_coords == cell {
+				found = tile
+				on_tile = true
+				break
+			}
+		}
+
+		testing.expectf(t, on_tile, "%v: player_start %v is on cell %v, which has no tile at all", name, map_data.player_start, cell)
+		testing.expectf(t, !on_tile || !found.collides, "%v: player_start %v is on cell %v, which is a wall", name, map_data.player_start, cell)
+	}
+}
+
+// Flooded at radius 0 rather than the radius the game runs at, and that is
+// the whole design of this test. At FLOW_FIELD_INFLATION_RADIUS the flood
+// refuses to re-enter the envelope around a wall, so 741 of Desert Dungeon's
+// 2239 standable cells and 388 of Cold Hall's 2108 carry no distance - and 47
+// and 16 of those respectively have no filled neighbour either, so even
+// flow_field_reaches rejects them. Both Maps are connected; it is the radius
+// that is opinionated. At radius 0 `inflated` is stamped only on the wall
+// cells themselves, so the filled set is exactly the source's walkable
+// component and "every walkable cell in the extent is filled" is the
+// connectivity question with nothing left over.
+@(test)
+test_every_baked_map_is_one_connected_walkable_region :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+
+		field: Flow_Field
+		defer flow_field_destroy(&field)
+		flow_field_rebuild(&field, &map_data.tilemap, map_data.player_start, 0)
+
+		// flow_field_reaches answers true for everything once nothing is
+		// filled, and a start inside a wall floods nothing - so without this
+		// guard the sweep passes silently on the worst Map there is
+		testing.expectf(t, field.filled_count > 0, "%v: the flood from player_start filled nothing - the start is inside a wall or the Map has no tiles", name)
+		if field.filled_count == 0 {
+			continue
+		}
+
+		// one message per Map, not per cell: a split Map strands hundreds of
+		// cells and every one of them names the same defect
+		unreached := 0
+		first: Vec2i
+		for y in field.origin.y ..< field.origin.y + field.size.y {
+			for x in field.origin.x ..< field.origin.x + field.size.x {
+				cell, in_bounds := flow_field_cell(&field, {x, y})
+				if !in_bounds || cell.collides || cell.distance != FLOW_UNREACHED {
+					continue
+				}
+				if unreached == 0 {
+					first = {x, y}
+				}
+				unreached += 1
+			}
+		}
+
+		testing.expectf(
+			t,
+			unreached == 0,
+			"%v: %v walkable cells are sealed off from player_start (first at cell %v; %v cells reached)",
+			name,
+			unreached,
+			first,
+			field.filled_count,
+		)
+	}
+}
+
+// the ring the game actually throws candidates onto: angle-around-player at
+// the visible rect's half-diagonal plus OFFSCREEN_SPAWN_MARGIN, clamped into
+// the Map the way pick_offscreen_spawn_point clamps. Sampled at fixed angles
+// rather than through that proc, deliberately: it picks its angles with rand,
+// and on exhausted retries falls back to flow_field_nearest_reachable, which
+// always names a reachable cell - so asserting through it is close to a
+// tautology and would pass on a Map where one angle in sixty-four works.
+@(private = "file")
+SPAWN_RING_ANGLES :: 64
+
+// the shipped window (initialize_default_game_state). There is no real one in
+// a test run, so camera_visible_world_rect would hand back a zero-sized rect
+// and collapse the ring to bare OFFSCREEN_SPAWN_MARGIN.
+@(private = "file")
+SPAWN_RING_VIEW_SIZE :: Vec2{1920 / 2, 1080 / 2}
+
+// This one floods at FLOW_FIELD_INFLATION_RADIUS, unlike the connectivity
+// check above: these are the very points the live spawn filter tests, so the
+// question is asked at the radius the game asks it at.
+@(test)
+test_every_baked_maps_spawn_ring_is_reachable :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		start := map_data.player_start
+
+		field: Flow_Field
+		defer flow_field_destroy(&field)
+		flow_field_rebuild(&field, &map_data.tilemap, start, i32(FLOW_FIELD_INFLATION_RADIUS))
+		testing.expectf(t, field.filled_count > 0, "%v: the flood from player_start filled nothing, and an empty field reaches everywhere", name)
+		if field.filled_count == 0 {
+			continue
+		}
+
+		half := SPAWN_RING_VIEW_SIZE / GAMEPLAY_ZOOM / 2
+		ring := math.hypot(half.x, half.y) + OFFSCREEN_SPAWN_MARGIN
+
+		// pick_offscreen_spawn_point's own clamp, half a tile in from the far
+		// edge - the bounds' max is the near edge of the *next* cell
+		map_bounds := tilemap_world_bounds(&map_data.tilemap)
+		inset := map_data.tilemap.tile_size * 0.5
+		max_x := max(map_bounds.min_x, map_bounds.max_x - inset.x)
+		max_y := max(map_bounds.min_y, map_bounds.max_y - inset.y)
+
+		stranded := 0
+		first_stranded: Vec2i
+		for i in 0 ..< SPAWN_RING_ANGLES {
+			angle := math.TAU * f32(i) / SPAWN_RING_ANGLES
+			point := start + Vec2{math.cos(angle), math.sin(angle)} * ring
+			point.x = clamp(point.x, map_bounds.min_x, max_x)
+			point.y = clamp(point.y, map_bounds.min_y, max_y)
+
+			// a candidate under a wall is refused and retried, which is
+			// ordinary. A candidate on open ground the player can never walk
+			// to is the permanent failure: a body spawned there holds the
+			// Map's Cleared condition open for the rest of the Run.
+			if tile_blocks_point(&map_data.tilemap, point) {
+				continue
+			}
+			if !flow_field_reaches(&field, point) {
+				if stranded == 0 {
+					first_stranded = world_to_cell_coord(point, map_data.tilemap.tile_size)
+				}
+				stranded += 1
+			}
+		}
+
+		testing.expectf(
+			t,
+			stranded == 0,
+			"%v: %v of %v spawn-ring angles land on walkable ground the player can never reach (first on cell %v)",
+			name,
+			stranded,
+			SPAWN_RING_ANGLES,
+			first_stranded,
+		)
+	}
+}
+
+@(test)
+test_every_baked_maps_extent_is_within_bound :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		min_cell, max_cell, ok := tilemap_cell_bounds(&map_data.tilemap)
+		testing.expectf(t, ok, "%v: has no tiles at all", name)
+		if !ok {
+			continue
+		}
+		extent := max_cell - min_cell + {1, 1}
+		testing.expectf(
+			t,
+			extent.x <= MAP_MAX_CELL_EXTENT.x && extent.y <= MAP_MAX_CELL_EXTENT.y,
+			"%v: is %v cells, past the %v footprint the ladder holds flat - a harder Map is denser, not bigger",
+			name,
+			extent,
+			MAP_MAX_CELL_EXTENT,
+		)
+	}
+}
+
+// 1..N with N the number of authored Maps, not a number written here: the
+// ladder is however long it is, and ticket 17's four Maps make this "1
+// through 5" the moment they land. Gaps and duplicates both break ticket 16's
+// gating, which opens rung n+1 on clearing rung n.
+@(test)
+test_the_baked_maps_rungs_cover_the_ladder_once_each :: proc(t: ^testing.T) {
+	ladder := len(Map_Name)
+	holders: [len(Map_Name)]int // holders[r-1] = how many Maps claim rung r
+	for name in Map_Name {
+		rung := maps[name].rung
+		testing.expectf(t, rung >= 1 && rung <= ladder, "%v: rung %v is off a ladder of %v", name, rung, ladder)
+		if rung >= 1 && rung <= ladder {
+			holders[rung - 1] += 1
+		}
+	}
+	for count, index in holders {
+		testing.expectf(t, count == 1, "rung %v is held by %v Maps, not one", index + 1, count)
+	}
+}
+
+// a zero-valued Color is what a Map that never authored a theme carries, and
+// it draws as nothing (ADR-0024). Beyond that the pair has to be a floor and a
+// wall: map_bevel_color mixes toward the floor to keep a wall's inset darker
+// than the wall, which only holds while the floor is the darker of the two -
+// what MAP_BEVEL_MIX's comment promises this ticket checks.
+@(test)
+test_every_baked_map_authors_its_own_colours :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		testing.expectf(t, map_data.floor_color.a > 0, "%v: floor colour %v is not authored, so the floor draws as nothing", name, map_data.floor_color)
+		testing.expectf(t, map_data.wall_color.a > 0, "%v: wall colour %v is not authored, so the walls draw as nothing", name, map_data.wall_color)
+		testing.expectf(
+			t,
+			color_luma(map_data.floor_color) < color_luma(map_data.wall_color),
+			"%v: floor %v is not darker than wall %v, so the wall bevel would inset lighter than the wall",
+			name,
+			map_data.floor_color,
+			map_data.wall_color,
+		)
+	}
+}
+
+@(test)
+test_every_baked_maps_time_limit_clears_its_own_timeline :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		end, bounded := map_timeline_earliest_end(map_data.spawn_triggers[:])
+
+		testing.expectf(t, bounded, "%v: a Repeating trigger with duration <= 0 runs until the Run ends, so this Map can never be Cleared", name)
+
+		// <= 0 is untimed, which stays a legal authoring choice - it only
+		// means anything on a Map whose timeline is finite, which `bounded`
+		// above is what checks
+		testing.expectf(
+			t,
+			map_data.time_limit <= 0 || map_data.time_limit > end,
+			"%v: time_limit %v does not clear the earliest its timeline can finish (%v s)",
+			name,
+			map_data.time_limit,
+			end,
+		)
+	}
+}
+
+// -- map_timeline_earliest_end on its own ---------------------------------
+// The two things it deliberately does not know, pinned so the honesty is
+// checked rather than commented.
+
+// a Kills_Reached trigger's activation is play-dependent, so it is folded in
+// at zero: the answer is the earliest the timeline can finish, a floor the
+// time limit must clear for certain, not a prediction of when it will
+@(test)
+test_timeline_earliest_end_folds_a_kills_trigger_in_at_zero :: proc(t: ^testing.T) {
+	triggers := []Spawn_Trigger {
+		{condition = Time_Elapsed{seconds = 30}, mode = Repeating{interval = 2, duration = 40}},
+		{condition = Kills_Reached{count = 50}, mode = Repeating{interval = 2, duration = 100}},
+		{condition = Time_Elapsed{seconds = 120}, mode = One_Shot{}},
+	}
+	end, bounded := map_timeline_earliest_end(triggers)
+	testing.expect(t, bounded, "every trigger here has a finite span")
+	// 120 from the one-shot, not 30+40=70, and not the kills trigger's 100
+	// pushed out by any guess at when 50 kills happen
+	testing.expect_value(t, end, f32(120))
+}
+
+@(test)
+test_timeline_earliest_end_reports_an_unbounded_repeating_trigger :: proc(t: ^testing.T) {
+	triggers := []Spawn_Trigger {
+		{condition = Time_Elapsed{seconds = 0}, mode = Repeating{interval = 3, duration = 0}},
+	}
+	_, bounded := map_timeline_earliest_end(triggers)
+	testing.expect(t, !bounded, "a Repeating trigger with duration <= 0 never finishes, so the timeline has no end")
 }

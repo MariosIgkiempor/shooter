@@ -93,6 +93,70 @@ color_mix :: proc(a, b: Color, t: f32) -> Color {
 	}
 }
 
+// perceived brightness, Rec. 601 weights - the coarse "is this the darker of
+// the two" a floor-against-wall comparison needs, not a colour-managed one.
+// Ignores alpha: the colours it ranks are opaque world colours.
+color_luma :: proc(c: Color) -> f32 {
+	return 0.299 * f32(c.r) + 0.587 * f32(c.g) + 0.114 * f32(c.b)
+}
+
+// -- validity (ticket 15) ---------------------------------------------------
+// The two answers about an authored Map that the validity sweep in
+// map_test.odin needs and nothing at runtime derives for it. Both read only
+// what an author wrote, never `game`.
+
+// the cell footprint a Map may not exceed on either axis. Footprint is held
+// flat across the ladder - a harder Map is denser, not bigger (ADR-0021) -
+// and this is the footprint the shipped Maps have, so a Map that wants more
+// changes this on purpose rather than drifting past it.
+MAP_MAX_CELL_EXTENT :: Vec2i{54, 48}
+
+// the earliest point a Map's timeline can stop producing enemies, and whether
+// it can stop at all. This is what `time_limit` has to clear (ADR-0022). The
+// runtime sibling is spawn_timeline_exhausted (main.odin), which asks whether
+// a Run's timeline is finished *now* and reads the latches
+// update_spawn_triggers writes; this one reads only the authored triggers.
+//
+// A Time_Elapsed condition names its own activation time. A Kills_Reached one
+// does not: the count could be met on the first frame or never, so its
+// activation is play-dependent and unknowable here. Zero is the only honest
+// answer, and taking it makes this a *lower* bound on the timeline rather
+// than a prediction of it - a Map whose limit does not clear even the
+// earliest possible finish is broken for certain, which is the claim a
+// validity test can actually make. It cannot certify the other direction,
+// and does not pretend to.
+//
+// A trigger's span is its Repeating duration and nothing more:
+// update_spawn_triggers stops firing once `elapsed` passes `duration`, so
+// activation + duration is the last instant it can still spawn. A One_Shot
+// spans nothing. `bounded` is false where some Repeating trigger has
+// duration <= 0, which runs until the Run ends: such a Map can never be
+// Cleared at all (CONTEXT.md's Run outcome entry), whatever its time limit.
+map_timeline_earliest_end :: proc(triggers: []Spawn_Trigger) -> (seconds: f32, bounded: bool) {
+	bounded = true
+	for trigger in triggers {
+		activation: f32
+		switch condition in trigger.condition {
+		case Time_Elapsed:
+			activation = max(condition.seconds, 0)
+		case Kills_Reached:
+			activation = 0
+		}
+
+		span: f32
+		if repeating, is_repeating := trigger.mode.(Repeating); is_repeating {
+			if repeating.duration <= 0 {
+				bounded = false
+				continue
+			}
+			span = repeating.duration
+		}
+
+		seconds = max(seconds, activation + span)
+	}
+	return seconds, bounded
+}
+
 load_map :: proc(path: string) -> (map_data: Map, ok: bool) {
 	log_info("Loading map from `{}`", path)
 
