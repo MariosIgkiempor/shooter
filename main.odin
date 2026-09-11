@@ -918,6 +918,25 @@ enemy_body_color :: proc(base: Color, health_frac: f32) -> Color {
 	return rl.Fade(base, alpha)
 }
 
+// the body half of a Tell: a pulse that quickens as the Tell runs. The
+// prototype's numbers (prototype/boss-tell, Form E).
+TELL_FLASH_BASE_MIX: f32 = 0.35 // how far toward white the body sits for the whole Tell
+TELL_FLASH_PULSE_MIX: f32 = 0.65 // how much further the pulse pushes it at full progress
+TELL_FLASH_PULSE_HZ: f32 = 3 // pulses per Tell at its start...
+TELL_FLASH_PULSE_HZ_GAIN: f32 = 6 // ...and how many more it gains by the end
+
+// a quickening pulse toward white while a Tell runs. It moves *value* only:
+// hue still means Movement Style family and alpha still means remaining
+// health (enemy_body_color), so the target keeps the base's own alpha and
+// the blend never touches it. White rather than the zone's amber on purpose
+// - green pulsed most of the way toward amber lands on Swarmer yellow, so a
+// telling Breaker would read as a Mite at the peak of every pulse.
+tell_flash_color :: proc(base: Color, progress: f32) -> Color {
+	pulse := 0.5 + 0.5 * math.sin(progress * math.TAU * (TELL_FLASH_PULSE_HZ + progress * TELL_FLASH_PULSE_HZ_GAIN))
+	mix := TELL_FLASH_BASE_MIX + TELL_FLASH_PULSE_MIX * pulse * progress
+	return color_lerp(base, Color{255, 255, 255, base.a}, mix)
+}
+
 // weapon-animation feel. Hoisted out of draw_game so Tunables can hold their
 // addresses; the values are unchanged.
 WEAPON_WINDUP_PULLBACK: f32 = 6.0 // px pulled back along -aim_dir while a Gun/Magic weapon winds up
@@ -1084,6 +1103,7 @@ draw_game :: proc() {
 		// default - F1 enters on a clone of current_map - so this only
 		// diverges once an edit or a map switch makes it diverge.
 		draw_tilemap(game.program_mode == .Editing ? &game.editing_map : &game.current_map)
+		draw_ground_layer(game.enemies[:])
 		// under the bodies rather than over them: the field is terrain
 		// furniture, and it is one drawing for the whole map rather than one
 		// per enemy - there are no per-enemy routes to draw any more
@@ -1191,6 +1211,12 @@ draw_game :: proc() {
 		// as a full bar rather than a NaN that propagates into rl.Fade
 		health_frac := enemy.max_health > 0 ? clamp(enemy.health / enemy.max_health, 0, 1) : 1
 		color := enemy_body_color(enemy_presets[enemy.kind].color, health_frac)
+		// the body says *when*; the ground layer's zone says *where*
+		if a, is_tell := enemy.attack.(Tell_Area); is_tell {
+			if progress, telling := tell_area_progress(a); telling {
+				color = tell_flash_color(color, progress)
+			}
+		}
 
 		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
 		origin := Vec2{dest.width / 2, dest.height}
@@ -1473,10 +1499,12 @@ draw_game :: proc() {
 	}
 
 	// F8 debug panel visualizer: each enemy's attack-trigger radius - a single circle at
-	// attack_range for Melee (contact distance to land a hit), or two
+	// attack_range for Melee (contact distance to land a hit), two
 	// circles (min_range/max_range) for Ranged marking the band it holds
-	// inside to fire rather than chase or retreat. Enemies with no Attack
-	// Style have no attack, so nothing is drawn for them.
+	// inside to fire rather than chase or retreat, or the engagement range
+	// (reach + radius) for Tell_Area - the claimed disc itself is already on
+	// the ground layer. Enemies with no Attack Style have no attack, so
+	// nothing is drawn for them.
 	draw_debug_attack_ranges :: proc() {
 		for enemy in game.enemies {
 			center := Vec2{enemy.x, enemy.y}
@@ -1486,6 +1514,8 @@ draw_game :: proc() {
 			case Ranged:
 				rl.DrawCircleLinesV(center, a.min_range, rl.ORANGE)
 				rl.DrawCircleLinesV(center, a.max_range, rl.ORANGE)
+			case Tell_Area:
+				rl.DrawCircleLinesV(center, tell_area_engagement_range(a), rl.ORANGE)
 			case:
 			}
 		}
