@@ -1,6 +1,7 @@
 package shooter
 
 import "core:math"
+import "core:strings"
 import "core:testing"
 
 // enemy_gold_value/total_kills/account_stat_price/apply_account_stat_effect
@@ -339,4 +340,167 @@ test_bank_run_gold_never_runs_progression_backwards_when_a_run_overspends :: pro
 		game.player.banked_progress,
 	)
 	testing.expectf(t, receipt.bonus == 0, "a negative net take should never be amplified by a victory multiplier, got %v", receipt.bonus)
+}
+
+// -- Map ladder (ADR-0022, ticket 16) ----------------------------------------
+//
+// map_rung_open/record_map_cleared read and write game.player.maps_cleared -
+// snapshot and restore it around each test. Rungs are looked up through
+// map_name_at_rung rather than named, so adding Maps to the ladder (ticket
+// 17) doesn't rewrite these.
+
+// second checkbox of ticket 16, first half: a fresh Account can walk onto
+// rung 1 and nothing else
+@(test)
+test_rung_one_is_open_on_a_fresh_account :: proc(t: ^testing.T) {
+	previous_cleared := game.player.maps_cleared
+	defer game.player.maps_cleared = previous_cleared
+	game.player.maps_cleared = {}
+
+	first, first_ok := map_name_at_rung(1)
+	testing.expect(t, first_ok, "the baked ladder should carry a rung 1")
+	testing.expect(t, map_rung_open(first), "rung 1 should be open on a fresh Account")
+
+	for name in Map_Name {
+		if maps[name].rung > 1 {
+			testing.expectf(t, !map_rung_open(name), "%v (rung %v) should be closed on a fresh Account", name, maps[name].rung)
+		}
+	}
+}
+
+// second checkbox of ticket 16, second half - "and nothing further" is the
+// load-bearing part: a clear opens the rung directly above and no other
+@(test)
+test_clearing_a_rung_opens_exactly_the_next_one :: proc(t: ^testing.T) {
+	previous_cleared := game.player.maps_cleared
+	defer game.player.maps_cleared = previous_cleared
+	game.player.maps_cleared = {}
+
+	first, _ := map_name_at_rung(1)
+	second, second_ok := map_name_at_rung(2)
+	testing.expect(t, second_ok, "the baked ladder should carry a rung 2")
+
+	record_map_cleared(first)
+
+	testing.expect(t, map_rung_open(second), "clearing rung 1 should open rung 2")
+	for name in Map_Name {
+		if maps[name].rung > 2 {
+			testing.expectf(t, !map_rung_open(name), "%v (rung %v) should stay closed after only rung 1 is cleared", name, maps[name].rung)
+		}
+	}
+}
+
+// the "nothing further" half again, without waiting for ticket 17's third
+// rung: the baked ladder has only rungs 1 and 2 today, so the loop above
+// has nothing to check. Lifting rung 2's Map to rung 3 leaves a gap at 2,
+// and a clear of rung 1 must not reach across it.
+@(test)
+test_clearing_a_rung_does_not_open_a_rung_two_above_it :: proc(t: ^testing.T) {
+	previous_cleared := game.player.maps_cleared
+	defer game.player.maps_cleared = previous_cleared
+	game.player.maps_cleared = {}
+
+	first, _ := map_name_at_rung(1)
+	second, _ := map_name_at_rung(2)
+	previous_rung := maps[second].rung
+	defer maps[second].rung = previous_rung
+	maps[second].rung = 3
+
+	record_map_cleared(first)
+
+	testing.expect(t, !map_rung_open(second), "clearing rung 1 should not open rung 3")
+}
+
+// fourth checkbox of ticket 16: the set is one bool per Map, so a second
+// clear of the same rung is the same write
+@(test)
+test_clearing_a_map_already_cleared_changes_nothing :: proc(t: ^testing.T) {
+	previous_cleared := game.player.maps_cleared
+	defer game.player.maps_cleared = previous_cleared
+	game.player.maps_cleared = {}
+
+	first, _ := map_name_at_rung(1)
+	record_map_cleared(first)
+	after_first := game.player.maps_cleared
+
+	record_map_cleared(first)
+
+	testing.expect(t, game.player.maps_cleared == after_first, "clearing an already-Cleared Map should leave the cleared set exactly as it was")
+}
+
+// third checkbox of ticket 16, the mechanical half: the gate is enforced
+// at the choice itself, not only in the screen that grays the row - the
+// same way try_buy_account_stat re-checks its own unlock
+@(test)
+test_a_closed_rung_cannot_be_chosen :: proc(t: ^testing.T) {
+	previous_cleared := game.player.maps_cleared
+	previous_map := game.current_map
+	previous_pointer := game.active_map_pointer
+	previous_rect := game.player.rect
+	defer {
+		game.player.maps_cleared = previous_cleared
+		game.current_map = previous_map
+		game.active_map_pointer = previous_pointer
+		game.player.rect = previous_rect
+	}
+	game.player.maps_cleared = {}
+	game.active_map_pointer = ""
+
+	first, _ := map_name_at_rung(1)
+	second, _ := map_name_at_rung(2)
+
+	testing.expect(t, !try_choose_map(second), "a closed rung should refuse the choice")
+	testing.expect(t, game.active_map_pointer == "", "a refused choice should leave the active-map pointer alone")
+
+	record_map_cleared(first)
+
+	testing.expect(t, try_choose_map(second), "an open rung should accept the choice")
+	defer delete_map(game.current_map)
+	testing.expectf(
+		t,
+		game.active_map_pointer == enum_identity_string(second),
+		"an accepted choice should point the Account at that Map, got `%v`",
+		game.active_map_pointer,
+	)
+}
+
+// Map Selection lists the ladder in rung order, which Map_Name's own order
+// is not - the enum is generated from a filename-sorted listing. Every Map
+// exactly once, so a mis-authored table can't silently drop one.
+@(test)
+test_maps_in_rung_order_lists_every_map_once_lowest_rung_first :: proc(t: ^testing.T) {
+	order := maps_in_rung_order()
+
+	seen: [Map_Name]int
+	for name, i in order {
+		seen[name] += 1
+		if i > 0 {
+			testing.expectf(
+				t,
+				maps[order[i - 1]].rung <= maps[name].rung,
+				"%v (rung %v) should not come before %v (rung %v)",
+				order[i - 1], maps[order[i - 1]].rung, name, maps[name].rung,
+			)
+		}
+	}
+	for name in Map_Name {
+		testing.expectf(t, seen[name] == 1, "%v should be listed exactly once, was listed %v times", name, seen[name])
+	}
+}
+
+// third checkbox of ticket 16, the wording half: a locked rung says which
+// Map to clear, not which Level to reach
+@(test)
+test_map_rung_requirement_names_the_rung_below :: proc(t: ^testing.T) {
+	first, _ := map_name_at_rung(1)
+	second, _ := map_name_at_rung(2)
+
+	requirement := map_rung_requirement(second)
+
+	testing.expectf(
+		t,
+		strings.contains(requirement, maps[first].name),
+		"rung 2's requirement should name rung 1's Map, got `%v`",
+		requirement,
+	)
 }

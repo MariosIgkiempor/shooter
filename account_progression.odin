@@ -1,6 +1,8 @@
 package shooter
 
+import "core:fmt"
 import "core:math"
+import "core:slice"
 
 // -- Gold payouts (ADR-0016) ------------------------------------------------
 
@@ -223,4 +225,84 @@ try_buy_account_stat :: proc(stat: Account_Stat) -> bool {
 	}
 
 	return true
+}
+
+// -- Map ladder (ADR-0022) ---------------------------------------------------
+//
+// Maps are an ordered ladder, one Map per rung, and a rung is playable only
+// once the rung below it has been Cleared at least once. Gated on clears
+// rather than Account Level deliberately: Level advances on banked Gold, so
+// a Level gate would ask "have you saved enough?" where the ladder means
+// to ask "can you do this?" - and Fortune would compound straight into
+// ladder access. The evidence is game.player.maps_cleared.
+
+// the Map that carries `rung`, if any. A linear scan of the baked table
+// rather than an index: Map_Name is generated in filename order, so ordinal
+// N is not rung N and never will be. ok is false for a rung no Map carries
+// - a broken ladder table, which ticket 15's validity sweep (rungs are 1..N
+// with no gaps and no duplicates) is what asserts against.
+map_name_at_rung :: proc(rung: int) -> (name: Map_Name, ok: bool) {
+	for candidate in Map_Name {
+		if maps[candidate].rung == rung {
+			return candidate, true
+		}
+	}
+	return {}, false
+}
+
+// whether `name`'s rung is open: rung 1 always is, and every rung above it
+// is opened by a Cleared on the rung directly below. `rung <= 1` rather than
+// `== 1` so an unauthored rung-0 Map fails open - an authoring mistake
+// should make the ladder wrong, not make a Map permanently unreachable. A
+// gap below (no Map at rung-1) closes this one: nothing to clear, so
+// nothing can open it.
+map_rung_open :: proc(name: Map_Name) -> bool {
+	rung := maps[name].rung
+	if rung <= 1 {
+		return true
+	}
+
+	below, below_ok := map_name_at_rung(rung - 1)
+	if !below_ok {
+		return false
+	}
+	return game.player.maps_cleared[below]
+}
+
+// records a Cleared Map on the Account - the only permanent mark a Run
+// outcome leaves (CONTEXT.md's Run outcome entry). Idempotent by
+// construction: one bool per Map, so a second clear of the same rung writes
+// the same true. Called from end_run, inside its double-fire guard.
+record_map_cleared :: proc(name: Map_Name) {
+	game.player.maps_cleared[name] = true
+}
+
+// what a locked rung asks for, as Map Selection states it - here rather
+// than in the drawing so the sentence is assertable without a window.
+// Names the Map to clear, not a Level to reach (ADR-0022). Temp-allocated,
+// like every other menu label.
+map_rung_requirement :: proc(name: Map_Name) -> string {
+	below, below_ok := map_name_at_rung(maps[name].rung - 1)
+	if !below_ok {
+		return "Locked"
+	}
+	return fmt.tprintf("Clear {} to open", maps[below].name)
+}
+
+// the Map ladder in rung order, which Map_Name's own order is not: the enum
+// is generated from a filename-sorted listing, so today Cold_Hall (rung 2)
+// sorts above Desert_Dungeon (rung 1). Sorted rather than walked
+// rung-by-rung so a mis-authored table still lists every Map exactly once -
+// a Map that vanished from Map Selection would be unplayable with no
+// visible cause.
+maps_in_rung_order :: proc() -> (order: [len(Map_Name)]Map_Name) {
+	i := 0
+	for name in Map_Name {
+		order[i] = name
+		i += 1
+	}
+	slice.sort_by(order[:], proc(a, b: Map_Name) -> bool {
+		return maps[a].rung < maps[b].rung
+	})
+	return
 }

@@ -74,7 +74,7 @@ enum_from_identity_string :: proc(
 // non-empty identity there is always heap. load_game does not - it unmarshals
 // into the long-lived `game`, where a key absent from the file leaves the
 // previous (possibly static) string in place - and it deliberately doesn't
-// call this, since it runs once per process and leaks at most three small
+// call this, since it runs once per process and leaks at most a few small
 // strings, the same posture the rest of load_game already takes toward what
 // json.unmarshal allocates for it.
 delete_identity_string :: proc(identity: ^string) {

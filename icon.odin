@@ -486,6 +486,25 @@ icon_swatch :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
 	icon_bar_h(f, 0.12, 0.5, 0.76, 0.76, icon_color(ICON_NEUTRAL_COLOR, tint, alpha))
 }
 
+// a padlock: a solid body under a squared shackle. The Map Selection
+// screen's locked rung (ADR-0022), standing where an open rung shows its
+// swatch - the glyph is swapped rather than the swatch grayed, since a gray
+// swatch is what an unaffordable row looks like, not a shut one. The
+// shackle is the countable difference from icon_swatch's bare square.
+//
+// No keyhole: a hole would have to be drawn in the surface behind it, and a
+// tint replaces every part of a glyph with one flat colour (see the
+// header), so it would fill in on exactly the disabled rows this is only
+// ever drawn on.
+icon_lock :: proc(f: Icon_Frame, tint: Maybe(Color), alpha: f32) {
+	c := icon_color(ICON_NEUTRAL_COLOR, tint, alpha)
+	// shackle first, so the body covers where its legs stop
+	icon_bar_h(f, 0.32, 0.26, 0.36, 0.10, c) // arch
+	icon_bar_v(f, 0.32, 0.26, 0.22, 0.10, c) // left leg
+	icon_bar_v(f, 0.68, 0.26, 0.22, 0.10, c) // right leg
+	icon_bar_h(f, 0.16, 0.64, 0.68, 0.44, c) // body
+}
+
 // -- upgrade glyphs ----------------------------------------------------------
 //
 // The only glyphs with no world shape to borrow, so they're invented - but

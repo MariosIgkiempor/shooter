@@ -88,11 +88,71 @@ test_load_game_falls_back_when_the_save_names_a_weapon_this_build_lacks :: proc(
 	)
 
 	// the reported error is what this test asserts on, and core:testing
-	// fails any test that emits an error-level log
+	// fails any test that emits an error-level log. Silenced for the load
+	// only: testing.expect reports through the same logger, so an assertion
+	// made while it is nil'd can't fail.
 	reporting := context.logger
 	context.logger = log.nil_logger()
-	defer context.logger = reporting
 	load_game()
+	context.logger = reporting
+
+	testing.expect_value(t, game.player.level, 1)
+	testing.expect_value(t, game.player.gold, 0)
+}
+
+// first checkbox of ticket 16 at the outermost seam: the cleared set goes
+// out as Map_Name identity strings and comes back through them (ADR-0022,
+// ADR-0028). Cold_Hall is the right subject - it is ordinal 0, so a save
+// that wrote ordinals would produce a shape the name assertion catches.
+@(test)
+test_save_game_round_trips_the_cleared_set_by_name :: proc(t: ^testing.T) {
+	snapshot, existed := snapshot_save_file()
+	defer restore_save_file(snapshot, existed)
+	saved_game := game
+	defer game = saved_game
+
+	game.player.maps_cleared = {}
+	game.player.maps_cleared[.Cold_Hall] = true
+	// the active-map pointer is the other place a Map_Name identity lands in
+	// the file - blanked so the "never Cleared" assertion below reads only
+	// the cleared set
+	game.active_map_pointer = ""
+	save_game()
+
+	written, read_err := os.read_entire_file(SAVE_GAME_PATH, context.temp_allocator)
+	testing.expect(t, read_err == nil, "the save file should be readable")
+	text := string(written)
+	testing.expect(t, strings.contains(text, "Cold_Hall"), "a Cleared Map should be written by name")
+	testing.expect(t, !strings.contains(text, "Desert_Dungeon"), "a Map never Cleared should not be written at all")
+
+	game.player.maps_cleared = {}
+	load_game()
+
+	testing.expect(t, game.player.maps_cleared[.Cold_Hall], "the Cleared Map should come back Cleared")
+	testing.expect(t, !game.player.maps_cleared[.Desert_Dungeon], "a Map never Cleared should come back not Cleared")
+}
+
+// ADR-0028's unknown-name contract, on the cleared set: a Map this build
+// doesn't have is a load failure that runs the fallback, never a clear
+// silently dropped or credited to ordinal zero. Same shape as the weapon
+// test above - level and gold gone is the proof the fallback ran.
+@(test)
+test_load_game_falls_back_when_the_save_names_a_map_this_build_lacks :: proc(t: ^testing.T) {
+	snapshot, existed := snapshot_save_file()
+	defer restore_save_file(snapshot, existed)
+	saved_game := game
+	defer game = saved_game
+
+	write_save_file(
+		t,
+		`{"player":{"weapon":{"kind_save":"Pistol","fire_mode_save":"Semi_Automatic"},"weapon_variant_save":{"kind":"Gun","gun":{"clip_size":12}},"maps_cleared_save":["Not_A_Map"],"level":9,"gold":500}}`,
+	)
+
+	// silenced for the load only - see the weapon test above
+	reporting := context.logger
+	context.logger = log.nil_logger()
+	load_game()
+	context.logger = reporting
 
 	testing.expect_value(t, game.player.level, 1)
 	testing.expect_value(t, game.player.gold, 0)
