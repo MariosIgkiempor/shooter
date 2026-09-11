@@ -266,6 +266,7 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 	previous_level := game.player.level
 	previous_run_start_gold := game.player.run_start_gold
 	previous_account_stat_stacks := game.player.account_stat_stacks
+	previous_maps_cleared := game.player.maps_cleared
 	defer {
 		game.player.gold = previous_gold
 		game.player.gold_earned = previous_gold_earned
@@ -281,10 +282,13 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 		game.player.level = previous_level
 		game.player.run_start_gold = previous_run_start_gold
 		game.player.account_stat_stacks = previous_account_stat_stacks
+		game.player.maps_cleared = previous_maps_cleared
 		game.run_ended = false
 	}
 
 	game.player.account_stat_stacks = {}
+	game.player.maps_cleared = {}
+	game.player.maps_cleared[.Desert_Dungeon] = true
 	game.player.banked_progress = 42
 	game.player.level = 7
 	game.player.run_start_gold = 0
@@ -321,6 +325,11 @@ test_start_new_run_resets_run_scoped_state_but_not_account_progression :: proc(t
 
 	testing.expect(t, game.player.banked_progress == 42, "start_new_run must not touch banked_progress (Account progression)")
 	testing.expect(t, game.player.level == 7, "start_new_run must not touch level (Account progression)")
+	testing.expect(
+		t,
+		game.player.maps_cleared[.Desert_Dungeon],
+		"start_new_run must not touch the cleared set (Account progression, ADR-0022)",
+	)
 
 	// Gold is Account-scoped now (ADR-0016): a new Run inherits the wallet
 	// intact and only records the balance it started from, so bank_run_gold

@@ -987,16 +987,35 @@ draw_run_start_ui :: proc() {
 }
 
 // shown at every launch (ProgramMode.Selecting) before Playing/Editing
-// become reachable - one button per Map_Name, labeled by that case's baked
-// display name. Map choice is one-shot per launch: once game.program_mode
-// leaves .Selecting here, there's no in-game way back. Unstaggered, like
-// Run_Start above. Transitions to Playing on pick - not a Screen (see
-// current_screen), so request_screen_change(nil) rather than a Screen_Kind.
+// become reachable - one button per Map, labeled by its baked display name,
+// in rung order (ADR-0022), which is not Map_Name's own order: the enum is
+// generated from a filename-sorted listing. A rung whose predecessor has
+// not been Cleared is drawn locked rather than hidden, following
+// draw_account_stat_row's precedent, so the ladder ahead stays visible as
+// something a clear buys. Map choice is one-shot per launch: once
+// game.program_mode leaves .Selecting here, there's no in-game way back.
+// Unstaggered, like Run_Start above. Transitions to Playing on pick - not a
+// Screen (see current_screen), so request_screen_change(nil) rather than a
+// Screen_Kind.
 draw_map_selection_ui :: proc() {
+	order := maps_in_rung_order()
+
+	// a locked row carries a requirement line under its button
+	locked_count := 0
+	for name in order {
+		if !map_rung_open(name) {
+			locked_count += 1
+		}
+	}
+
 	pad := MENU_THEME.padding
-	w: f32 = 300
-	button_count := len(Map_Name)
-	h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + f32(button_count) * MENU_ICON_BUTTON_LINE_HEIGHT
+	w: f32 = 360 // wide enough for "Clear <Map> to open" at MENU_THEME.font_size
+	h :=
+		pad * 2 +
+		(MENU_THEME.font_size + 4) +
+		MENU_THEME.gap +
+		f32(len(order)) * MENU_ICON_BUTTON_LINE_HEIGHT +
+		f32(locked_count) * MENU_TEXT_LINE_HEIGHT
 
 	rect := Rect{(game.window_width - w) / 2, (game.window_height - h) / 2, w, h}
 	anim := menu_element_anim(0, 0)
@@ -1011,31 +1030,48 @@ draw_map_selection_ui :: proc() {
 	)
 
 	y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
-	for name in Map_Name {
+	for name in order {
 		chosen := maps[name]
+		open := map_rung_open(name)
 
-		// a flat swatch in the Map's own color - passed as the icon's tint
-		// rather than baked into a glyph, since a swatch's color *is* its
-		// content (see icon_swatch). Derived from the Map's wall colour
-		// rather than authored beside it, so the menu can't advertise a
-		// colour the world doesn't have (ADR-0024).
+		// an open rung shows a flat swatch in the Map's own color - passed as
+		// the icon's tint rather than baked into a glyph, since a swatch's
+		// color *is* its content (see icon_swatch), and derived from the
+		// Map's wall colour so the menu can't advertise a colour the world
+		// doesn't have (ADR-0024). A locked rung swaps the swatch for the
+		// lock outright rather than graying it: draw_menu_button overrides
+		// icon_tint to text_disabled on any disabled button, so a locked row
+		// could not show the Map's colour even if it wanted to - and a gray
+		// swatch is what an unaffordable row looks like, not a shut one.
+		icon: Icon_Proc = icon_lock
+		tint: Maybe(Color) = nil
+		if open {
+			icon = icon_swatch
+			tint = map_swatch_color(chosen)
+		}
+
 		button_rect := Rect{rect.x + pad, y, w - pad * 2, MENU_ICON_BUTTON_HEIGHT}
-		clicked, _ := draw_menu_button(
-			button_rect,
-			chosen.name,
-			anim,
-			icon = icon_swatch,
-			icon_tint = map_swatch_color(chosen),
-		)
-		if clicked {
-			// clone_map, never a plain value copy - game.current_map would
-			// otherwise alias the shared baked table's backing tile/spawner
-			// memory (see clone_map's doc comment)
-			game.current_map = clone_map(chosen)
-			apply_chosen_map(chosen, enum_identity_string(name))
+		clicked, _ := draw_menu_button(button_rect, chosen.name, anim, disabled = !open, icon = icon, icon_tint = tint)
+		y += MENU_ICON_BUTTON_LINE_HEIGHT
+
+		if !open {
+			draw_menu_centered_text(
+				map_rung_requirement(name),
+				rect.x + pad,
+				y,
+				w - pad * 2,
+				menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
+			)
+			y += MENU_TEXT_LINE_HEIGHT
+			continue
+		}
+
+		// the gate is re-checked inside try_choose_map rather than trusted
+		// to the disabled button above, the same way try_buy_account_stat
+		// re-checks its own unlock
+		if clicked && try_choose_map(name) {
 			request_screen_change(nil) // Playing isn't a Screen - see current_screen
 		}
-		y += MENU_ICON_BUTTON_LINE_HEIGHT
 	}
 }
 

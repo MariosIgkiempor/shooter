@@ -75,8 +75,14 @@ test_check_run_objectives_clears_only_once_the_field_is_empty :: proc(t: ^testin
 	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
 	previous_transition := game.menu_transition
 	defer game.menu_transition = previous_transition
+	// a Run always plays a named Map (Selecting precedes Playing), and a
+	// clear records that name on the Account - so name one (the cleared
+	// set it writes to goes back with the player in teardown)
+	previous_pointer := game.active_map_pointer
+	defer game.active_map_pointer = previous_pointer
 
 	game.menu_transition = {}
+	game.active_map_pointer = enum_identity_string(Map_Name.Desert_Dungeon)
 	game.current_map.victory_multiplier = 1.5
 	append(&game.current_map.spawn_triggers, one_shot_trigger(true))
 	append(&game.enemies, Enemy{})
@@ -136,4 +142,46 @@ test_check_run_objectives_never_times_out_an_untimed_map :: proc(t: ^testing.T) 
 	check_run_objectives()
 
 	testing.expect(t, !screen_change_pending_to(.Run_End), "a time_limit of 0 means untimed, not instantly expired")
+}
+
+// first checkbox of ticket 16, the write side: a Cleared Run is the one
+// outcome that leaves a permanent mark on the Account (ADR-0022). Names the
+// Map through game.active_map_pointer, the way end_run does - current_map
+// is a clone with no Map_Name on it.
+@(test)
+test_a_cleared_run_records_its_map_on_the_account :: proc(t: ^testing.T) {
+	previous_map, previous_player, previous_enemies, previous_camera := spawn_trigger_test_setup()
+	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
+	previous_transition := game.menu_transition
+	defer game.menu_transition = previous_transition
+	previous_pointer := game.active_map_pointer
+	defer game.active_map_pointer = previous_pointer
+
+	game.menu_transition = {}
+	game.run_ended = false
+	game.active_map_pointer = enum_identity_string(Map_Name.Desert_Dungeon)
+
+	end_run(.Cleared)
+
+	testing.expect(t, game.player.maps_cleared[.Desert_Dungeon], "a Cleared Run should record its Map on the Account")
+}
+
+// pins the `outcome == .Cleared` condition: the other two outcomes bank
+// but leave the ladder alone
+@(test)
+test_a_killed_run_records_no_clear :: proc(t: ^testing.T) {
+	previous_map, previous_player, previous_enemies, previous_camera := spawn_trigger_test_setup()
+	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
+	previous_transition := game.menu_transition
+	defer game.menu_transition = previous_transition
+	previous_pointer := game.active_map_pointer
+	defer game.active_map_pointer = previous_pointer
+
+	game.menu_transition = {}
+	game.run_ended = false
+	game.active_map_pointer = enum_identity_string(Map_Name.Desert_Dungeon)
+
+	end_run(.Killed)
+
+	testing.expect(t, game.player.maps_cleared == {}, "a Killed Run should leave the cleared set empty")
 }

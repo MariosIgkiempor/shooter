@@ -259,6 +259,24 @@ delete_map :: proc(map_data: Map) {
 	delete(map_data.spawn_triggers)
 }
 
+// finalizes a Map choice, if its rung is open (ADR-0022): the one path from
+// Selecting to a live Map. The gate lives here and not only in the screen
+// that grays the row, the same way try_buy_account_stat re-checks its own
+// unlock. False is a no-op - the live map, the active-map pointer and the
+// player's position are all left exactly as they were.
+try_choose_map :: proc(name: Map_Name) -> bool {
+	if !map_rung_open(name) {
+		return false
+	}
+
+	// clone_map, never a plain value copy - game.current_map would otherwise
+	// alias the shared baked table's backing tile/spawner memory (see
+	// clone_map's doc comment)
+	game.current_map = clone_map(maps[name])
+	apply_chosen_map(game.current_map, enum_identity_string(name))
+	return true
+}
+
 // resolves resume-vs-reset player positioning against game_save.json's
 // active-map pointer: called once, at the point the player's map choice is
 // finalized (Selecting -> Playing). First-ever launch falls out naturally -
