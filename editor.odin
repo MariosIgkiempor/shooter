@@ -750,6 +750,8 @@ open_editing_map :: proc(map_data: Map, path: string) {
 	game.editing_map = map_data
 	game.editing_map_path = path
 	adopt_editing_map_name()
+	// the Map the ambience decorates has just been replaced too (ambience.odin)
+	ambience_invalidate(&game.ambience)
 
 	clear(&editor.expanded_spawn_triggers)
 	editor.placing_player_start = false

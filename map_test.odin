@@ -281,6 +281,16 @@ test_the_baked_desert_dungeon_keeps_todays_palette :: proc(t: ^testing.T) {
 	testing.expect_value(t, map_bevel_color(desert), Color{74, 64, 53, 255})
 }
 
+// the third derived colour (ticket 22): what tints a Map's motes and light
+@(test)
+test_the_accent_is_the_wall_pushed_toward_white :: proc(t: ^testing.T) {
+	desert := Map{floor_color = {56, 48, 40, 255}, wall_color = {124, 110, 90, 255}}
+	accent := map_accent_color(desert)
+	testing.expect_value(t, accent.a, u8(255))
+	testing.expect(t, color_luma(accent) > color_luma(desert.wall_color), "the accent tints motes and light over the wall, so it has to be lighter than it")
+	testing.expect(t, accent.r > accent.b, "pushing toward white keeps the wall's own hue, so a warm wall gives a warm accent")
+}
+
 // the two shipped Maps run the ambient sets authored for them (ticket 22):
 // motes in the dust of the Desert, patches on the Hall's stone, both lit.
 // Reads the baked table, since a set that survived the file but not the bake

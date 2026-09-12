@@ -53,13 +53,37 @@ Ambience :: struct {
 	patches:      [AMBIENT_PATCH_MAX]Floor_Patch,
 	patch_count:  int,
 	// what the patches were placed on, so ambience_ensure re-places them
-	// only once the tilemap underneath is no longer the one they describe -
-	// flow_field_ensure's idiom, and the same two facts it watches
-	patches_placed:    bool,
-	patches_placed_on: Ambient_Set,
-	patch_tile_count:  int,
-	patch_tile_size:   Vec2,
-	time:              f32, // drives the mote shimmer
+	// only once the tilemap underneath is no longer the one they describe
+	placed_on:    Maybe(Ambient_Placement),
+	time:         f32, // drives the mote shimmer
+}
+
+// the facts about a Map that decide where its patches go: flow_field_ensure's
+// idiom, watching the tile count and size it watches plus the solid count, so
+// a tile painted, erased or flipped between wall and floor in the editor is
+// a change. Two Maps can share every one of these, which is why replacing
+// the live Map also calls ambience_invalidate rather than trusting the
+// comparison.
+Ambient_Placement :: struct {
+	ambient:     Ambient_Set,
+	tile_count:  int,
+	solid_count: int,
+	tile_size:   Vec2,
+}
+
+ambient_placement_of :: proc(map_data: ^Map) -> Ambient_Placement {
+	solid_count := 0
+	for tile in map_data.tilemap.tiles {
+		if tile.collides {
+			solid_count += 1
+		}
+	}
+	return {
+		ambient = map_data.ambient,
+		tile_count = len(map_data.tilemap.tiles),
+		solid_count = solid_count,
+		tile_size = map_data.tilemap.tile_size,
+	}
 }
 
 AMBIENT_MOTE_DRIFT_MAX: f32 = 6 // px/s, each axis
@@ -106,8 +130,8 @@ AMBIENT_PATCH_PLACEMENT_TRIES :: 8
 AMBIENT_PATCH_SEED :: 0x5EED
 
 // places up to len(patches) blotches, each centred on a floor tile, and
-// returns how many it placed. Off-grid on purpose - a decal layer with no
-// relationship to the tile grid is what keeps this clear of the locked
+// returns how many it placed. Off-grid on purpose - blotches with no
+// relationship to the tile grid are what keep this clear of the locked
 // no-per-tile-colour-noise rule (ADR-0024) - but centred on floor, because a
 // blotch on a wall or in an untiled gap is the world misreporting where the
 // floor is.
@@ -166,23 +190,25 @@ tile_is_floor_at :: proc(tilemap: ^Tilemap, point: Vec2) -> bool {
 // "once per Map" assertable. A Map that does not run Floor_Patches gets
 // none, so an empty ambient set leaves the whole struct untouched.
 ambience_ensure :: proc(a: ^Ambience, map_data: ^Map) -> (replaced: bool) {
-	tilemap := &map_data.tilemap
-	if a.patches_placed &&
-	   a.patches_placed_on == map_data.ambient &&
-	   a.patch_tile_count == len(tilemap.tiles) &&
-	   a.patch_tile_size == tilemap.tile_size {
+	placement := ambient_placement_of(map_data)
+	if placed_on, placed := a.placed_on.?; placed && placed_on == placement {
 		return false
 	}
 
 	a.patch_count = 0
 	if .Floor_Patches in map_data.ambient {
-		a.patch_count = seed_floor_patches(a.patches[:], tilemap)
+		a.patch_count = seed_floor_patches(a.patches[:], &map_data.tilemap)
 	}
-	a.patches_placed = true
-	a.patches_placed_on = map_data.ambient
-	a.patch_tile_count = len(tilemap.tiles)
-	a.patch_tile_size = tilemap.tile_size
+	a.placed_on = placement
 	return true
+}
+
+// forgets what the patches were placed on, so the next ambience_ensure
+// re-places them. Called where the live Map is replaced, beside
+// flow_field_invalidate: a new Map can match the old one's placement facts
+// exactly and still be a different place.
+ambience_invalidate :: proc(a: ^Ambience) {
+	a.placed_on = nil
 }
 
 // how far past the visible rect motes live, so one drifts into view rather
@@ -190,11 +216,11 @@ ambience_ensure :: proc(a: ^Ambience, map_data: ^Map) -> (replaced: bool) {
 // camera_visible_world_rect is the unshaken rect and shake moves the lens
 AMBIENT_VIEW_MARGIN: f32 = 24
 
-// the per-frame entry point, called outside the Shop / Run End pause:
-// ambience is steady-state and keeps drifting behind a blurred backdrop, and
-// runs in Editing so the editor's Ambient toggles preview live. Reads the
-// same Map draw_tilemap does - the one being edited while Editing, else the
-// one being played.
+// the per-frame entry point, called in every mode and outside the Shop / Run
+// End pause: ambience is steady-state and keeps drifting wherever the world
+// is drawn, and runs in Editing so the editor's Ambient toggles preview
+// live. Reads the same Map draw_tilemap does - the one being edited while
+// Editing, else the one being played.
 update_ambience :: proc(dt: f32) {
 	a := &game.ambience
 	map_data := game.program_mode == .Editing ? &game.editing_map : &game.current_map
@@ -256,6 +282,9 @@ draw_ambient_light_wash :: proc(map_data: ^Map, camera: Camera) {
 		return
 	}
 	bounds := camera_visible_world_rect(camera)
+	// the shake offset is in screen px; at gameplay zoom (> 1) that is more
+	// than the world px it moves the view by, so this over-covers, which for
+	// a gradient with nothing outside the view to compare against is fine
 	margin := AMBIENT_VIEW_MARGIN + SCREEN_SHAKE_MAX_OFFSET
 	quad := Rect {
 		bounds.min_x - margin,

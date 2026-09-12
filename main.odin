@@ -389,13 +389,13 @@ update_game :: proc() {
 	// already reflected in every guard/switch further down (ADR-0014)
 	update_menu_transition()
 
-	// outside update_game_state's pause on purpose: ambience is steady-state
-	// (CONTEXT.md's Ambient effect entry) and keeps drifting behind the Shop
-	// and Run End blur, and it runs in Editing so the Ambient toggles preview
-	// live, the same way the colour sliders do
-	if game.program_mode == .Playing || game.program_mode == .Editing {
-		update_ambience(rl.GetFrameTime())
-	}
+	// every mode, outside update_game_state's pause, on purpose: the world is
+	// drawn behind every Screen and the Shop and Run End blur, and ambience
+	// is steady-state (CONTEXT.md's Ambient effect entry) - it keeps
+	// drifting wherever the world is visible. In Editing it reads the Map
+	// being edited, so the Ambient toggles preview live like the colour
+	// sliders do.
+	update_ambience(rl.GetFrameTime())
 
 	if is_key_pressed(.F1) {
 		switch game.program_mode {

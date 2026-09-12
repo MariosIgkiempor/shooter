@@ -10,15 +10,6 @@ package shooter
 import "core:testing"
 import rl "vendor:raylib"
 
-@(test)
-test_the_accent_is_the_wall_pushed_toward_white :: proc(t: ^testing.T) {
-	desert := Map{floor_color = {56, 48, 40, 255}, wall_color = {124, 110, 90, 255}}
-	accent := map_accent_color(desert)
-	testing.expect_value(t, accent.a, u8(255))
-	testing.expect(t, color_luma(accent) > color_luma(desert.wall_color), "the accent tints motes and light over the wall, so it has to be lighter than it")
-	testing.expect(t, accent.r > accent.b, "pushing toward white keeps the wall's own hue, so a warm wall gives a warm accent")
-}
-
 @(private = "file")
 BOUNDS :: World_Bounds{min_x = 0, max_x = 320, min_y = 0, max_y = 180}
 
@@ -31,10 +22,13 @@ test_a_mote_that_drifts_out_of_view_is_reseeded_inside_it :: proc(t: ^testing.T)
 		testing.expect(t, m.radius > 0, "a seeded mote has a body to draw")
 	}
 
-	// far enough for any drift to carry every mote well past the edge
-	update_motes(motes[:], BOUNDS, 10_000)
+	// the view scrolled away from every mote at once
+	for &m in motes {
+		m.position = {-500, -500}
+	}
+	update_motes(motes[:], BOUNDS, 0.1)
 	for m in motes {
-		testing.expect(t, point_in_world_bounds(m.position, BOUNDS), "a mote that leaves the view comes back inside it, never accumulating off-screen")
+		testing.expect(t, point_in_world_bounds(m.position, BOUNDS), "a mote outside the view comes back inside it, never accumulating off-screen")
 	}
 }
 
@@ -126,9 +120,18 @@ test_patches_are_placed_once_per_map_and_replaced_when_the_tiles_change :: proc(
 	testing.expect(t, ambience.patch_count > 0, "and there are some")
 	testing.expect(t, !ambience_ensure(&ambience, &map_data), "the next frame on the same tiles leaves them where they are")
 
-	// a wall blocked out in the editor is a different place to decorate
+	// a tile painted, or a floor tile flipped to wall, is a different place
+	// to decorate
 	tilemap_place_tile(&map_data.tilemap, {3, 8})
 	testing.expect(t, ambience_ensure(&ambience, &map_data), "a tile painted underneath re-places them")
+	map_data.tilemap.tiles[9].collides = !map_data.tilemap.tiles[9].collides
+	testing.expect(t, ambience_ensure(&ambience, &map_data), "a tile flipped between wall and floor re-places them")
+	testing.expect(t, !ambience_ensure(&ambience, &map_data), "and they settle again")
+
+	// a new Map that happens to share every placement fact is still a new
+	// place, which is what the replace sites say by invalidating
+	ambience_invalidate(&ambience)
+	testing.expect(t, ambience_ensure(&ambience, &map_data), "invalidating re-places them on the next frame")
 }
 
 @(test)
