@@ -209,6 +209,27 @@ flow_field_distance :: proc(field: ^Flow_Field, cell: Vec2i) -> u32 {
 	return found.distance
 }
 
+// the cell-indexed solid set ADR-0025 promised move_actor: whether an
+// authored colliding Tile sits on `cell`. Off the extent answers false, and
+// that is correct rather than a guess - the extent contains every authored
+// tile, so a cell outside it is untiled ground. An unusable field (no tiles,
+// or a zero tile_size) has no solid cells either, which is what a scan of an
+// empty tile list found.
+//
+// This reads whatever was last built and does not consult `built`: an
+// invalidated field keeps its cells, so answering "not solid" while unbuilt
+// would drop every wall for a frame, and answering from the stale cells is
+// the previous Map's walls. Neither is fixable here. Keeping the field fresh
+// is the caller's job - the frame loop runs flow_field_ensure before anything
+// moves (see update_game_state), and a test drives the field it built itself.
+flow_field_is_solid :: proc(field: ^Flow_Field, cell: Vec2i) -> bool {
+	if !flow_field_is_usable(field) {
+		return false
+	}
+	index, ok := flow_field_index(field, cell)
+	return ok && field.cells[index].collides
+}
+
 // the per-frame entry point. Rebuilds only when the answer would actually
 // differ: the player crossed into a new cell, the field is unbuilt or was
 // invalidated, the inflation radius changed, or the tilemap underneath is not

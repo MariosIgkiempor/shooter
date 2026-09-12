@@ -4,9 +4,10 @@ import "core:testing"
 
 // Off-screen spawn placement (enemy-spawn-revamp map, ticket 02) is pure
 // geometry - no game global reliance - except tile_blocks_point/
-// tilemap_world_bounds, which take a Tilemap directly rather than reading
-// game.current_map, so tests build their own throwaway tilemaps instead of
-// touching shared state (no ODIN_TEST_THREADS=1 concerns for this file).
+// tilemap_world_bounds, which take a Flow_Field or Tilemap directly rather
+// than reading game, so tests build their own throwaway tilemaps and fields
+// instead of touching shared state (no ODIN_TEST_THREADS=1 concerns for this
+// file).
 
 @(test)
 test_camera_visible_world_rect_is_half_extent_box_around_target :: proc(t: ^testing.T) {
@@ -51,10 +52,19 @@ test_tile_blocks_point_true_only_for_a_colliding_tile_under_the_point :: proc(t:
 	append(&tilemap.tiles, Tile{world_coords = {1, 1}, collides = true})
 	append(&tilemap.tiles, Tile{world_coords = {2, 1}, collides = false})
 	defer delete(tilemap.tiles)
+	field := fixture_field(&tilemap, {36, 20})
+	defer flow_field_destroy(&field)
 
-	testing.expect(t, tile_blocks_point(&tilemap, {20, 20}), "a point inside a colliding tile should be blocked")
-	testing.expect(t, !tile_blocks_point(&tilemap, {36, 20}), "a point inside a non-colliding tile should not be blocked")
-	testing.expect(t, !tile_blocks_point(&tilemap, {200, 200}), "a point over no tile at all should not be blocked")
+	testing.expect(t, tile_blocks_point(&field, {20, 20}), "a point inside a colliding tile should be blocked")
+	testing.expect(t, !tile_blocks_point(&field, {36, 20}), "a point inside a non-colliding tile should not be blocked")
+	testing.expect(t, !tile_blocks_point(&field, {200, 200}), "a point over no tile at all should not be blocked")
+	// a tile owns its near edge and not its far one, as the point-in-rect
+	// test this replaced had it
+	testing.expect(t, tile_blocks_point(&field, {16, 16}), "a point on a colliding tile's near edge is inside it")
+	testing.expect(t, !tile_blocks_point(&field, {32, 20}), "a point on a colliding tile's far edge is in the next cell")
+
+	never_built: Flow_Field
+	testing.expect(t, !tile_blocks_point(&never_built, {20, 20}), "a field never built has no walls to block with")
 }
 
 @(test)
@@ -74,9 +84,11 @@ test_pick_offscreen_spawn_point_never_lands_inside_the_visible_rect :: proc(t: ^
 	player_pos := Vec2{0, 0}
 	visible_rect := World_Bounds{-100, 100, -80, 80} // centered on player_pos, matching the camera-caught-up case
 	map_bounds := tilemap_world_bounds(&tilemap)
+	field := fixture_field(&tilemap, player_pos)
+	defer flow_field_destroy(&field)
 
 	for _ in 0 ..< 20 {
-		point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &tilemap, nil)
+		point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &field, must_reach = false)
 		testing.expectf(
 			t,
 			!point_in_world_bounds(point, visible_rect),
@@ -101,9 +113,11 @@ test_pick_offscreen_spawn_point_clamps_into_map_bounds :: proc(t: ^testing.T) {
 	player_pos := Vec2{8, 8} // inside the map's only tile
 	visible_rect := World_Bounds{-200, 200, -200, 200}
 	bounds := tilemap_world_bounds(&tilemap)
+	field := fixture_field(&tilemap, player_pos)
+	defer flow_field_destroy(&field)
 
 	for _ in 0 ..< 20 {
-		point := pick_offscreen_spawn_point(player_pos, visible_rect, bounds, &tilemap, nil)
+		point := pick_offscreen_spawn_point(player_pos, visible_rect, bounds, &field, must_reach = false)
 		testing.expectf(t, point_in_world_bounds(point, bounds), "spawn point %v should be clamped into map bounds %v", point, bounds)
 	}
 }
@@ -164,7 +178,7 @@ test_flow_field_reaches_rejects_a_walkable_cell_the_flood_never_reached :: proc(
 
 	testing.expect(
 		t,
-		!tile_blocks_point(&tilemap, SPLIT_ROOM_FAR_SIDE),
+		!tile_blocks_point(&field, SPLIT_ROOM_FAR_SIDE),
 		"the far side must be walkable, or this fixture is testing tile_blocks_point instead",
 	)
 	testing.expect(
@@ -297,7 +311,7 @@ test_pick_offscreen_spawn_point_never_lands_on_a_cell_the_field_never_reached ::
 	map_bounds := tilemap_world_bounds(&tilemap)
 
 	for _ in 0 ..< 200 {
-		point := pick_offscreen_spawn_point(SPLIT_ROOM_PLAYER, visible_rect, map_bounds, &tilemap, &field)
+		point := pick_offscreen_spawn_point(SPLIT_ROOM_PLAYER, visible_rect, map_bounds, &field, must_reach = true)
 		testing.expectf(
 			t,
 			flow_field_reaches(&field, point),
@@ -339,7 +353,7 @@ test_pick_offscreen_spawn_point_falls_back_to_the_field_when_nothing_reachable_i
 	map_bounds := tilemap_world_bounds(&tilemap)
 
 	for _ in 0 ..< 200 {
-		point := pick_offscreen_spawn_point(player, visible_rect, map_bounds, &tilemap, &field)
+		point := pick_offscreen_spawn_point(player, visible_rect, map_bounds, &field, must_reach = true)
 		cell := world_to_cell_coord(point, tilemap.tile_size)
 		testing.expectf(
 			t,
@@ -374,7 +388,7 @@ test_pick_offscreen_spawn_point_takes_a_reachable_candidate_over_an_offscreen_on
 	map_bounds := tilemap_world_bounds(&tilemap)
 
 	for _ in 0 ..< 200 {
-		point := pick_offscreen_spawn_point(SPLIT_ROOM_PLAYER, visible_rect, map_bounds, &tilemap, &field)
+		point := pick_offscreen_spawn_point(SPLIT_ROOM_PLAYER, visible_rect, map_bounds, &field, must_reach = true)
 		testing.expectf(
 			t,
 			flow_field_reaches(&field, point),
@@ -402,9 +416,11 @@ test_pick_offscreen_spawn_point_clamps_inside_the_last_authored_cell :: proc(t: 
 	// its edges and the clamp is what decides where it lands
 	visible_rect := World_Bounds{-1000, 1000, -1000, 1000}
 	map_bounds := tilemap_world_bounds(&tilemap)
+	field := fixture_field(&tilemap, {8, 8})
+	defer flow_field_destroy(&field)
 
 	for _ in 0 ..< 100 {
-		point := pick_offscreen_spawn_point({8, 8}, visible_rect, map_bounds, &tilemap, nil)
+		point := pick_offscreen_spawn_point({8, 8}, visible_rect, map_bounds, &field, must_reach = false)
 		cell := world_to_cell_coord(point, tilemap.tile_size)
 		testing.expectf(
 			t,

@@ -5,7 +5,7 @@ import "core:testing"
 
 // A Charger's state machine (update_charger) takes the body's position, the
 // player's, the direction its approach would take and a dt explicitly, and
-// never reads `game` or the flow field - so, like enemy_tell_test.odin,
+// never reads `game` - so, like enemy_tell_test.odin,
 // nearly everything here drives throwaway values with fixed dt steps. The
 // exception is the wiring test at the bottom, which drives update_enemies
 // against `game` to prove the dash survives Melee's hold and that a wall
@@ -206,6 +206,7 @@ test_charger_tell_duration_is_unchanged_by_its_pacing :: proc(t: ^testing.T) {
 @(test)
 test_update_enemies_lets_a_dash_through_melees_hold_and_ends_it_on_a_wall :: proc(t: ^testing.T) {
 	previous_map := game.current_map
+	previous_field := game.flow_field
 	previous_player := game.player
 	previous_enemies := game.enemies
 	previous_particles := game.particles
@@ -215,6 +216,8 @@ test_update_enemies_lets_a_dash_through_melees_hold_and_ends_it_on_a_wall :: pro
 	defer {
 		delete(game.current_map.tilemap.tiles)
 		game.current_map = previous_map
+		flow_field_destroy(&game.flow_field)
+		game.flow_field = previous_field
 		game.player = previous_player
 		delete(game.enemies)
 		game.enemies = previous_enemies
@@ -225,10 +228,14 @@ test_update_enemies_lets_a_dash_through_melees_hold_and_ends_it_on_a_wall :: pro
 		game.run_ended = previous_run_ended
 		game.debug.god_mode = previous_god_mode
 	}
-	// a 10-cell corridor with a wall at its right end; the field is left
-	// empty, which every field lookup falls back from to a straight line
+	// a 10-cell corridor with a wall at its right end. The field is built
+	// the way the frame loop builds it, since move_actor reads its walls
+	// from the field's solid set; its flood is beside the point here, as a
+	// dash moves down its lane rather than by the field's steering
 	game.current_map = Map{}
 	game.current_map.tilemap = fixture_room({".........#"})
+	game.flow_field = {}
+	flow_field_ensure(&game.flow_field, &game.current_map.tilemap, {40, 16}, i32(FLOW_FIELD_INFLATION_RADIUS))
 	game.player = Player{}
 	game.player.health = 100
 	game.player.max_health = 100

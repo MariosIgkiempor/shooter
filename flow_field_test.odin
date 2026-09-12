@@ -35,6 +35,14 @@ fixture_room :: proc(rows: []string) -> Tilemap {
 	return tilemap
 }
 
+// a field flooded from `source` at the radius the game runs at, for the
+// tests whose subject is what reads the field rather than the flood itself
+fixture_field :: proc(tilemap: ^Tilemap, source: Vec2) -> Flow_Field {
+	field: Flow_Field
+	flow_field_rebuild(&field, tilemap, source, i32(FLOW_FIELD_INFLATION_RADIUS))
+	return field
+}
+
 @(private = "file")
 cell_world_center :: proc(cell: Vec2i) -> Vec2 {
 	return cell_center_to_world(cell, {16, 16})
@@ -1042,4 +1050,28 @@ test_a_swarmer_inside_the_inflation_envelope_closes_on_the_player :: proc(t: ^te
 		"the fixture must actually put this cell in the envelope",
 	)
 	testing.expect(t, swarmer_intent(&field, beside_the_wall, 32) == .Approach, "no distance to hold, so it closes")
+}
+
+// the solid set as move_actor and tile_blocks_point read it: only an authored
+// colliding tile answers true. An untiled gap inside the extent, a cell off
+// the extent (which holds every authored tile, so off it is untiled ground),
+// and a field with nothing in it all answer false, which is what a scan of the
+// tiles would have found.
+@(test)
+test_flow_field_is_solid_answers_only_for_a_colliding_cell :: proc(t: ^testing.T) {
+	tilemap := fixture_room({"#. ."})
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+	flow_field_rebuild(&field, &tilemap, cell_world_center({1, 0}), 1)
+
+	testing.expect(t, flow_field_is_solid(&field, {0, 0}), "a colliding tile's cell is solid")
+	testing.expect(t, !flow_field_is_solid(&field, {1, 0}), "a floor tile's cell is not solid")
+	testing.expect(t, !flow_field_is_solid(&field, {2, 0}), "an untiled gap inside the extent is not solid")
+	testing.expect(t, !flow_field_is_solid(&field, {0, 5}), "a cell off the extent is not solid")
+	testing.expect(t, !flow_field_is_solid(&field, {-1, 0}), "a cell before the origin is not solid")
+
+	empty: Flow_Field
+	testing.expect(t, !flow_field_is_solid(&empty, {0, 0}), "a field that was never built has no solid cells")
 }
