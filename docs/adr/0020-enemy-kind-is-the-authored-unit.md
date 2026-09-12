@@ -36,6 +36,8 @@ A widened `Spawn_Composition_Entry` was the only place an affix could have been 
 
 What the elite tier was wanted for is real and survives without it. `MAX_ENEMIES :: 24` caps the field, and the ladder's fourth rung is authored at peak concurrency, so past that point pressure can only come from heavier bodies rather than more of them. Those are ordinary roster entries. They carry one authoring constraint that comes from the code rather than from taste: `update_enemies` builds a single shared `build_inflated_collision_map(tilemap, 1)` for every enemy, and the boss's own second map is affordable only because there is exactly one boss. A heavy kind therefore stays inside that one-tile envelope — at or below the 48px that `ENEMY_SIZE_MAX` held before the boss raised it, which the size derivation puts at roughly 136 health.
 
+*Later, when the ordinary roster was authored:* the cap rose to 4096 and stopped being a design input — it is a safety rail against a runaway `Repeating` trigger, and the swarm rung is sized by screen legibility instead. The envelope rule above does not depend on the cap and stands unchanged on the shared-field argument alone (the mechanism is now the shared flow field's `FLOW_FIELD_INFLATION_RADIUS`, ADR-0025, rather than a per-frame inflated collision map, but it is still one field for every ordinary enemy); `ENEMY_SIZE_MAX` rose to 72 for the boss, so the 48px ceiling on ordinary kinds is now pinned by the preset well-formedness test rather than by the clamp.
+
 ## Amendment: the kind persists by name, not by ordinal
 
 Found while resolving the content-expansion map's *Enemy catalog* ticket, which authored the first roster larger than one entry.

@@ -545,7 +545,7 @@ register_player_tunables :: proc() {
 
 @(private = "file")
 register_enemy_tunables :: proc() {
-	register_tunable(.Enemies, "enemy.max_alive", "Max Alive", &MAX_ENEMIES, 1, 200)
+	register_tunable(.Enemies, "enemy.max_alive", "Max Alive", &MAX_ENEMIES, 1, 4096)
 	register_tunable(.Enemies, "enemy.size_min", "Size Min", &ENEMY_SIZE_MIN, 2, 64)
 	register_tunable(.Enemies, "enemy.size_max", "Size Max", &ENEMY_SIZE_MAX, 2, 128)
 	register_tunable(.Enemies, "enemy.size_per_max_health", "Size per Max Health", &ENEMY_SIZE_PER_MAX_HEALTH, 0, 2)

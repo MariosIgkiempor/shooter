@@ -5,8 +5,12 @@ import "core:math/linalg"
 import "core:math/rand"
 import rl "vendor:raylib"
 
-MAX_ENEMIES: int = 24
-ENEMY_SIZE: i32 = 12
+// a safety rail against a runaway Repeating trigger, not a budget the ladder
+// is authored against: the swarm rung is authored at 150-250 concurrent, a
+// number set by screen legibility, and fire_spawn_composition silently
+// truncates a batch here so a broken timeline fills the field rather than
+// the heap
+MAX_ENEMIES: int = 4096
 
 // -- the movement-family palette -------------------------------------------
 //
@@ -27,9 +31,16 @@ ENEMY_SWARMER_COLOR :: Color{235, 215, 70, 255} // yellow
 // the loudest hue belongs to the thing that dashes at you, not to the
 // baseline walker
 ENEMY_CHARGER_COLOR :: Color{225, 60, 60, 255} // red
-// no Kind is Inert yet - the family exists (Movement_Style's nil case) and
-// this is the hue reserved for the first Kind that holds still.
+// the family that holds still (Movement_Style's nil case)
 ENEMY_INERT_COLOR :: Color{60, 200, 205, 255} // cyan
+
+// two Kinds sharing a family are told apart by size first and by *value*
+// second: a pale variant keeps its family's hue (the preset test binds it
+// within ENEMY_FAMILY_HUE_TOLERANCE) and lifts the value, so the roster's
+// "pale green" and "pale violet" read as lighter cousins, never as a sixth
+// and seventh family
+ENEMY_GROUNDED_PALE_COLOR :: Color{150, 225, 165, 255}
+ENEMY_FLOATER_PALE_COLOR :: Color{200, 160, 240, 255}
 
 // the authored unit of enemy variety - a named entity a Map's Spawn Trigger
 // composition asks for by name, never a bundle of parameters re-specified at
@@ -42,6 +53,7 @@ Enemy_Kind :: enum {
 	Spitter,
 	Wraith,
 	Lancer,
+	Sentry,
 	Breaker,
 	Mite,
 	Gazer,
@@ -59,6 +71,13 @@ Enemy_Preset :: struct {
 	color:      Color, // always one of the family constants above
 	gold:       int, // Gold this Kind's death is worth before Fortune scaling
 }
+
+// Gold anchors at this fraction of a Kind's max health: health is what the
+// player spends time on, so a heavy is priced at the bodies it replaces by
+// construction. A Kind may deviate, but only by name - enemy_preset_test
+// lists the ones that do and why, so a payout off the anchor is a decision
+// rather than a drift
+ENEMY_GOLD_PER_MAX_HEALTH :: f32(0.6)
 
 // tuned by editing this table and rebuilding, exactly as weapon_presets is -
 // a Map picks Kinds and counts and cannot tune an enemy, so there is no
@@ -82,7 +101,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 			bullet_lifetime = 2,
 		},
 		max_health = 35,
-		color = ENEMY_GROUNDED_COLOR,
+		color = ENEMY_GROUNDED_PALE_COLOR,
 		gold = 20,
 	},
 	.Wraith = {
@@ -92,7 +111,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 			wobble_frequency = 3,
 			pull_strength = 0.35,
 		},
-		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		attack = Melee{attack_damage = 10, attack_range = 12, attack_cooldown = 1}, // it drifts, so its touch is a little forgiving
 		max_health = 55,
 		color = ENEMY_FLOATER_COLOR,
 		gold = 35,
@@ -100,11 +119,10 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 	// the first Kind that can catch a running player (roster row 4): it
 	// punishes kiting in a straight line, and is answered by stepping out of
 	// its lane during the Tell. Numbers are a playtest starting point - the
-	// lane a Melee Lancer claims is 34px to either side of its bearing
-	// (charger_lane_half_width), which at PLAYER_BASE_MOVE_SPEED takes ~0.35s
-	// to leave, so 0.5s leaves ~0.15s to read it; 140px at 260 px/s is a
-	// dash of just over half a second. Provisional until ticket 11 authors
-	// the eight Kinds together.
+	// lane a Melee Lancer claims is ~40px to either side of its bearing
+	// (charger_lane_half_width), which at PLAYER_BASE_MOVE_SPEED takes ~0.4s
+	// to leave, so 0.5s leaves ~0.1s to read it; 140px at 260 px/s is a
+	// dash of just over half a second.
 	.Lancer = {
 		movement = Charger {
 			speed = 55,
@@ -114,17 +132,36 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 			recovery_seconds = 0.5,
 			cooldown_seconds = 1.5,
 		},
-		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		attack = Melee{attack_damage = 10, attack_range = 14, attack_cooldown = 1}, // a dash arriving reaches a touch further than a walk
 		max_health = 60,
 		color = ENEMY_CHARGER_COLOR,
 		gold = 50, // above the payout anchor on purpose: the highest threat per body on the roster
 	},
-	// the first Kind that claims ground (content-expansion spec's roster row
-	// 6): heavy, slow, and answered by stepping out of its claimed disc
-	// rather than by kiting. Numbers are a playtest starting point - at
-	// PLAYER_BASE_MOVE_SPEED leaving a 28px disc from its centre takes ~0.4s,
-	// so 0.6s leaves ~0.2s to read it. Provisional until the roster ticket
-	// (content-expansion-build 11) authors the eight Kinds together.
+	// the Kind that holds a line (roster row 5): it never moves, so its
+	// pressure is fixed ground the player must cross open space to clear -
+	// the one answer on the roster that is neither kiting nor dodging. An
+	// Inert body cannot retreat, so its band has no floor; the ceiling is
+	// wide enough that a player approaching from the edge of view is already
+	// under fire. Numbers are a playtest starting point.
+	.Sentry = {
+		movement = nil,
+		attack = Ranged {
+			min_range = 0,
+			max_range = 200,
+			attack_damage = 8,
+			projectile_speed = 180,
+			fire_rate = 0.8,
+			bullet_lifetime = 2,
+		},
+		max_health = 70,
+		color = ENEMY_INERT_COLOR,
+		gold = 35, // below the payout anchor on purpose: a body that never moves is the safest kill on the roster
+	},
+	// the first Kind that claims ground (roster row 6): heavy, slow, and
+	// answered by stepping out of its claimed disc rather than by kiting.
+	// Numbers are a playtest starting point - at PLAYER_BASE_MOVE_SPEED
+	// leaving a 28px disc from its centre takes ~0.4s, so 0.6s leaves ~0.2s
+	// to read it.
 	.Breaker = {
 		movement = Grounded{speed = 30},
 		attack = Tell_Area {
@@ -138,7 +175,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 	},
 	.Mite = {
 		movement = Swarmer{speed = 65},
-		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
+		attack = Melee{attack_damage = 10, attack_range = 8, attack_cooldown = 1}, // a small body lands at contact
 		max_health = 20,
 		color = ENEMY_SWARMER_COLOR,
 		// far below the payout anchor on purpose: Gold rolls per body, so at
@@ -161,7 +198,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 			bullet_lifetime = 2,
 		},
 		max_health = 30,
-		color = ENEMY_FLOATER_COLOR,
+		color = ENEMY_FLOATER_PALE_COLOR,
 		gold = 20,
 	},
 }
@@ -270,7 +307,7 @@ Charger_Phase :: enum {
 
 Melee :: struct {
 	attack_damage:   f32,
-	attack_range:    f32, // contact distance to land a hit
+	attack_range:    f32, // px past its own body's surface that a hit lands at, per Kind - a body reaches as far as itself plus this (melee_contact_distance)
 	attack_cooldown: f32, // seconds between hits
 	attack_timer:    f32, // runtime countdown, not editor-set
 }
@@ -491,6 +528,24 @@ Movement_Style_Kind :: enum {
 	Inert,
 }
 
+// the pace a Movement Style keeps up indefinitely - `speed` is a movement
+// trait, so every variant carries its own and Inert has none. A Charger's
+// dash_speed is deliberately not this: it is the roster's one bounded
+// exception to sustained speed staying under the player's
+movement_sustained_speed :: proc(movement: Movement_Style) -> f32 {
+	switch m in movement {
+	case Grounded:
+		return m.speed
+	case Floater:
+		return m.speed
+	case Swarmer:
+		return m.speed
+	case Charger:
+		return m.speed
+	}
+	return 0
+}
+
 movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 	switch _ in movement {
 	case Grounded:
@@ -683,24 +738,38 @@ compute_separation_direction :: proc(enemies: []Enemy, index: int, grid: Separat
 
 // -- Swarmer surround -----------------------------------------------------
 
-SWARMER_FALLBACK_SURROUND_RADIUS: f32 = 60 // used when the Swarmer's Attack Style is nil (no attack_range to read)
+SWARMER_FALLBACK_SURROUND_RADIUS: f32 = 60 // used when the Swarmer's Attack Style is nil (no reach to read)
 SWARMER_DRIFT_SPEED_SCALE: f32 = 0.35 // fraction of `speed` used while drifting on the contour rather than closing on it, standing in for the retired ring's slow 0.3 rad/s rotation
 
 // the distance a Swarmer orbits the player at - its own Attack Style's
-// engagement range, so orbiting and attacking naturally coincide (validated
-// for Melee's attack_range in the swarmer-surround-mechanic ticket; Ranged's
-// max_range is the natural equivalent - the outer edge of its firing band -
-// extrapolated the same way since the ticket only exercised Melee)
-swarmer_surround_radius :: proc(attack: Attack_Style) -> f32 {
-	switch a in attack {
+// engagement range, so orbiting and attacking naturally coincide: for Melee
+// the centre-to-centre distance its reach lands at (validated in the
+// swarmer-surround-mechanic ticket, when reach was still a bare distance);
+// Ranged's max_range is the natural equivalent - the outer edge of its
+// firing band - extrapolated the same way since the ticket only exercised
+// Melee
+swarmer_surround_radius :: proc(enemy: Enemy) -> f32 {
+	switch a in enemy.attack {
 	case Melee:
-		return a.attack_range
+		return melee_contact_distance(enemy, a)
 	case Ranged:
 		return a.max_range
 	case Tell_Area:
 		return tell_area_engagement_range(a)
 	}
 	return SWARMER_FALLBACK_SURROUND_RADIUS
+}
+
+// -- Melee reach ------------------------------------------------------------
+
+// the centre-to-centre distance at which a Melee body's hit lands: half the
+// player's body, half its own drawn body, then the reach its Kind authors
+// past that surface. Measured this way so attack_range means the same thing
+// on every Kind - a 46px body and a 16px one each reach exactly as far as
+// themselves plus their own reach, where a shared flat allowance would let
+// the heavy one land short of contact and the small one land from a gap.
+melee_contact_distance :: proc(enemy: Enemy, melee: Melee) -> f32 {
+	return ACTOR_SIZE.x / 2 + enemy_body_size(enemy.max_health) / 2 + melee.attack_range
 }
 
 // -- Floater drift ---------------------------------------------------------
@@ -1042,7 +1111,7 @@ update_enemies :: proc(dt: f32) {
 				1 + (m.wobble_amplitude / FLOATER_WOBBLE_AMPLITUDE_CEILING) * FLOATER_WOBBLE_BOOST_SCALE
 			delta = final_dir * m.speed * wobble_boost * dt
 		case Swarmer:
-			radius := swarmer_surround_radius(enemy.attack)
+			radius := swarmer_surround_radius(enemy)
 			drift_dir, drifting := swarmer_direction(&game.flow_field, pos, player_pos, radius, m.drift_sign)
 			final_dir := linalg.normalize0(drift_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			// a Swarmer rushes in at full speed and settles into a slow orbit
@@ -1054,16 +1123,16 @@ update_enemies :: proc(dt: f32) {
 
 		switch &a in enemy.attack {
 		case Melee:
-			// surface to surface, both half-extents subtracted, the way the
-			// retired melee arc already allowed for an enemy's own collision
-			// size. Centre-to-centre made attack_range mean something
-			// different for every body size - a wide enemy with a small
-			// uniform range could not reach the player at all, because the
-			// two bodies collided before their centres ever got that close.
-			dist_to_player := linalg.distance(pos, player_pos) - ACTOR_SIZE.x
+			// surface to surface, each body's own half-extent subtracted
+			// (melee_contact_distance). Centre-to-centre made attack_range
+			// mean something different for every body size - a wide enemy
+			// with a small uniform range could not reach the player at all,
+			// because the two bodies collided before their centres ever got
+			// that close - and a flat allowance for both bodies at ACTOR_SIZE
+			// made a heavy Kind's reach land short of its own drawn edge.
 			a.attack_timer -= dt
 
-			if dist_to_player <= a.attack_range {
+			if linalg.distance(pos, player_pos) <= melee_contact_distance(enemy, a) {
 				// a body with the player in reach holds its ground - unless it is
 				// a dash arriving, which is the reach being delivered
 				if !committed {
@@ -1312,14 +1381,14 @@ charger_tell_progress :: proc(c: Charger) -> (progress: f32, telling: bool) {
 
 // how far to either side of its bearing a Charger's lane claims: the
 // perpendicular offset at which a passing body's contact test would land -
-// ACTOR_SIZE plus Melee's surface-to-surface reach, the same arithmetic
-// update_enemies' Melee case runs - so the ground shows the danger, not the
-// body. Derived rather than authored, like everything the ground draws: a
-// lane cannot be drawn narrower than what it delivers. A Charger with no
-// contact attack to deliver claims only its own body's width.
+// melee_contact_distance, the same arithmetic update_enemies' Melee case
+// runs - so the ground shows the danger, not the body. Derived rather than
+// authored, like everything the ground draws: a lane cannot be drawn
+// narrower than what it delivers. A Charger with no contact attack to
+// deliver claims only its own body's width.
 charger_lane_half_width :: proc(enemy: Enemy) -> f32 {
 	if melee, is_melee := enemy.attack.(Melee); is_melee {
-		return ACTOR_SIZE.x + melee.attack_range
+		return melee_contact_distance(enemy, melee)
 	}
 	return enemy_body_size(enemy.max_health) / 2
 }
