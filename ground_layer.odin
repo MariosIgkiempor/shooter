@@ -12,8 +12,7 @@ import rl "vendor:raylib"
 // feedback on a shot already fired, not the world speaking.
 //
 // Drawn in order of who is speaking: scenery first (a Map theme's floor
-// patches, content-expansion-build ticket 22, will go at the top of
-// draw_ground_layer), then claimed ground, so a claim is never hidden by
+// patches, ambience.odin), then claimed ground, so a claim is never hidden by
 // decoration. Two shapes claim ground - a Tell_Area's disc and a Charger's
 // lane - in one colour and one alpha vocabulary, because they are one read
 // for the player to learn.
@@ -26,7 +25,8 @@ TELL_ZONE_CLAIM_ALPHA: f32 = 0.13 // the full-extent disc, present from the firs
 TELL_ZONE_FILL_ALPHA: f32 = 0.34 // the inner disc that sweeps out to it as the Tell runs
 TELL_ZONE_EDGE_ALPHA: f32 = 0.8 // the outline, so the extent reads even over a bright floor
 
-draw_ground_layer :: proc(enemies: []Enemy) {
+draw_ground_layer :: proc(map_data: ^Map, patches: []Floor_Patch, enemies: []Enemy) {
+	draw_ambient_floor_patches(map_data, patches)
 	for enemy in enemies {
 		if a, is_tell := enemy.attack.(Tell_Area); is_tell {
 			draw_tell_area_zone(a)

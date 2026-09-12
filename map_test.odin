@@ -281,6 +281,16 @@ test_the_baked_desert_dungeon_keeps_todays_palette :: proc(t: ^testing.T) {
 	testing.expect_value(t, map_bevel_color(desert), Color{74, 64, 53, 255})
 }
 
+// the two shipped Maps run the ambient sets authored for them (ticket 22):
+// motes in the dust of the Desert, patches on the Hall's stone, both lit.
+// Reads the baked table, since a set that survived the file but not the bake
+// is a Map one layer short of the place it was authored to be.
+@(test)
+test_the_baked_maps_run_their_authored_ambient_sets :: proc(t: ^testing.T) {
+	testing.expect_value(t, maps[.Desert_Dungeon].ambient, Ambient_Set{.Motes, .Light_Wash})
+	testing.expect_value(t, maps[.Cold_Hall].ambient, Ambient_Set{.Floor_Patches, .Light_Wash})
+}
+
 // -- Map validity (ticket 15) ---------------------------------------------
 // The seven checks spec.md's Testing Decisions name, one test each, over the
 // baked `maps` table Playing draws from: a broken Map fails the build rather

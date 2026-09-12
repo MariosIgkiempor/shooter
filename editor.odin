@@ -928,6 +928,21 @@ map_mode_ui :: proc() {
 		ui.text("Bevel (derived)")
 		color_swatch("map_bevel_swatch", map_bevel_color(game.editing_map))
 	}
+
+	// the ambient set, one toggle per effect. Previews live like the colours
+	// do: update_ambience and draw_world_contents read the editing Map
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Ambient")
+		ambient_effect_toggle("map_ambient_motes", "Motes", .Motes)
+		ambient_effect_toggle("map_ambient_patches", "Floor Patches", .Floor_Patches)
+		ambient_effect_toggle("map_ambient_wash", "Light Wash", .Light_Wash)
+	}
+}
+
+ambient_effect_toggle :: proc(key: string, label: string, effect: Ambient_Effect) {
+	if selectable_button(key, label, effect in game.editing_map.ambient) {
+		game.editing_map.ambient ~= {effect}
+	}
 }
 
 // ui.slider is f32-only, so an int rides an f32 proxy - the same idiom

@@ -36,8 +36,9 @@ Map :: struct {
 	// world does not have.
 	floor_color:        Color,
 	wall_color:         Color,
-	// the decorative layers this Map runs continuously. Empty is a valid
-	// authoring choice and means the Map looks exactly as its tiles do.
+	// the decorative layers this Map runs continuously (ambience.odin). Empty
+	// is a valid authoring choice and means the Map looks exactly as its
+	// tiles do.
 	ambient:            Ambient_Set `json:"-"`,
 	// the on-disk form of `ambient`: one identity string per effect
 	// (ADR-0028), resolved by load_map and rebuilt by save_map. Nil at
@@ -81,6 +82,17 @@ map_swatch_color :: proc(map_data: Map) -> Color {
 	return map_data.wall_color
 }
 
+// the accent that tints a Map theme's ambience - its motes and the top of
+// its light wash - pushed off the wall toward white (CONTEXT.md's Map theme
+// entry). Derived like the bevel, and for the same reason: an authored third
+// colour would be free to belong to no place in particular (ADR-0024). The
+// mix is the prototype's, judged in motion on content-expansion ticket 07.
+MAP_ACCENT_MIX :: 0.45
+
+map_accent_color :: proc(map_data: Map) -> Color {
+	return color_mix(map_data.wall_color, {255, 255, 255, 255}, MAP_ACCENT_MIX)
+}
+
 // channel-wise lerp, keeping a's alpha - the colours it mixes are opaque
 // world colours, and an interpolated transparency has no meaning for any of
 // them
@@ -90,6 +102,17 @@ color_mix :: proc(a, b: Color, t: f32) -> Color {
 		u8(f32(a.g) + (f32(b.g) - f32(a.g)) * t),
 		u8(f32(a.b) + (f32(b.b) - f32(a.b)) * t),
 		a.a,
+	}
+}
+
+// channel-wise scale toward black, keeping alpha - color_mix's sibling for
+// "this colour, dimmed", used where a theme darkens its own floor
+color_scale :: proc(c: Color, factor: f32) -> Color {
+	return Color {
+		u8(clamp(f32(c.r) * factor, 0, 255)),
+		u8(clamp(f32(c.g) * factor, 0, 255)),
+		u8(clamp(f32(c.b) * factor, 0, 255)),
+		c.a,
 	}
 }
 
