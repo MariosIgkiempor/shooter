@@ -1056,7 +1056,11 @@ ACTOR_PLAYER_COLOR :: rl.SKYBLUE
 // it is derived from health rather than authored, so nothing can be drawn
 // heavier than it actually is.
 ENEMY_SIZE_MIN: f32 = 10.0
-ENEMY_SIZE_MAX: f32 = 48.0
+// high enough that the boss (ticket 21, ~220 health) draws at its authored
+// health without the derivation changing. Ordinary Kinds stop well short of
+// it: the one-tile inflation envelope every shared-field body must fit is
+// 48px (~136 health), pinned by enemy_preset_test rather than by this clamp
+ENEMY_SIZE_MAX: f32 = 72.0
 ENEMY_SIZE_PER_MAX_HEALTH: f32 = 0.28
 
 enemy_body_size :: proc(max_health: f32) -> f32 {
@@ -1667,7 +1671,7 @@ draw_game :: proc() {
 	}
 
 	// F8 debug panel visualizer: each enemy's attack-trigger radius - a single circle at
-	// attack_range for Melee (contact distance to land a hit), two
+	// melee_contact_distance for Melee (where the player's centre is in reach), two
 	// circles (min_range/max_range) for Ranged marking the band it holds
 	// inside to fire rather than chase or retreat, or the engagement range
 	// (reach + radius) for Tell_Area - the claimed disc itself is already on
@@ -1678,7 +1682,7 @@ draw_game :: proc() {
 			center := Vec2{enemy.x, enemy.y}
 			switch a in enemy.attack {
 			case Melee:
-				rl.DrawCircleLinesV(center, a.attack_range, rl.ORANGE)
+				rl.DrawCircleLinesV(center, melee_contact_distance(enemy, a), rl.ORANGE)
 			case Ranged:
 				rl.DrawCircleLinesV(center, a.min_range, rl.ORANGE)
 				rl.DrawCircleLinesV(center, a.max_range, rl.ORANGE)
@@ -1711,7 +1715,7 @@ draw_game :: proc() {
 
 			switch m in enemy.movement {
 			case Swarmer:
-				rl.DrawCircleLinesV(player_pos, swarmer_surround_radius(enemy.attack), rl.PURPLE)
+				rl.DrawCircleLinesV(player_pos, swarmer_surround_radius(enemy), rl.PURPLE)
 			case Charger:
 				rl.DrawCircleLinesV(center, m.dash_distance, rl.PURPLE)
 			case Grounded, Floater:

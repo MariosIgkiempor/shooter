@@ -1,5 +1,6 @@
 package shooter
 
+import "core:math"
 import "core:testing"
 import rl "vendor:raylib"
 
@@ -224,11 +225,11 @@ test_every_tell_area_preset_authors_a_playable_rotation :: proc(t: ^testing.T) {
 
 // the roster's speed rule (content-expansion's Enemy catalog): nothing
 // sustains a pace the player cannot walk away from, and the one thing that
-// exceeds it does so only for its dash. Both halves are checked against the
-// player's base speed, since a Charger authored between the two would be
-// either a footrace or a dash that never catches anyone. The "at least one"
-// clause keeps the Movement Style from silently falling off the roster when
-// the eight Kinds are re-authored (ticket 11).
+// exceeds it does so only for its dash. The sustained half is the roster-
+// wide rule below and covers a Charger's approach with everything else;
+// this pins the other half, that the dash itself does catch the player.
+// The "at least one" clause keeps the Movement Style from silently falling
+// off the roster.
 @(test)
 test_every_charger_preset_outruns_the_player_only_while_dashing :: proc(t: ^testing.T) {
 	carriers := 0
@@ -238,11 +239,161 @@ test_every_charger_preset_outruns_the_player_only_while_dashing :: proc(t: ^test
 			continue
 		}
 		carriers += 1
-		testing.expectf(t, c.speed > 0 && c.speed < PLAYER_BASE_MOVE_SPEED, "%v sustains %v against the player's %v - a footrace", kind, c.speed, PLAYER_BASE_MOVE_SPEED)
+		testing.expectf(t, c.speed > 0, "%v never approaches", kind)
 		testing.expectf(t, c.dash_speed > PLAYER_BASE_MOVE_SPEED, "%v dashes at %v, which the player outruns", kind, c.dash_speed)
 		testing.expectf(t, c.dash_distance > 0, "%v's dash goes nowhere", kind)
 		testing.expectf(t, c.tell_seconds > 0, "%v's lane has no Tell to read", kind)
 		testing.expectf(t, c.recovery_seconds > 0 && c.cooldown_seconds > 0, "%v would dash again the frame its dash ended", kind)
 	}
 	testing.expect(t, carriers > 0, "no Kind is a Charger, so nothing in the game can catch a running player")
+}
+
+// -- the roster's rulebook (ticket 11) --------------------------------------
+//
+// The rules below are the content-expansion catalog's authoring conventions
+// turned into checks. Each is a rule an author would otherwise have to
+// remember, and each has a failure mode that nothing else catches: a body
+// past the envelope routes through walls it visibly overlaps, a footrace
+// enemy makes kiting stop working everywhere at once, a mispriced Kind
+// bends the ladder's economy, and a Kind no Map places is dead content.
+
+// size derives from health (enemy_body_size) and reads as toughness only
+// while the clamp never bites an ordinary Kind - a body pinned at the clamp
+// would draw the same at 200 health as at 136. And every ordinary Kind
+// shares one flow field inflated by FLOW_FIELD_INFLATION_RADIUS, so its
+// drawn body must fit the corridor that field keeps clear of walls:
+// ADR-0020's amendment puts that at 48px (~136 health) for a one-tile
+// radius. The boss is the one body allowed past it, and it gets its own
+// field (ticket 21) rather than a licence here.
+@(test)
+test_every_presets_body_fits_the_clamp_and_the_inflation_envelope :: proc(t: ^testing.T) {
+	tile := max(f32)
+	for name in Map_Name {
+		tile = min(tile, maps[name].tilemap.tile_size.x)
+	}
+	envelope := 2 * (f32(FLOW_FIELD_INFLATION_RADIUS) * tile + tile / 2)
+
+	for kind in Enemy_Kind {
+		preset := enemy_presets[kind]
+		unclamped := ENEMY_SIZE_MIN + preset.max_health * ENEMY_SIZE_PER_MAX_HEALTH
+		testing.expectf(
+			t,
+			unclamped <= ENEMY_SIZE_MAX,
+			"%v's %.0f health derives a %.0fpx body, which the %.0fpx clamp would hide",
+			kind,
+			preset.max_health,
+			unclamped,
+			ENEMY_SIZE_MAX,
+		)
+		size := enemy_body_size(preset.max_health)
+		testing.expectf(
+			t,
+			size <= envelope,
+			"%v's %.0fpx body overflows the %.0fpx corridor the shared flow field keeps clear of walls",
+			kind,
+			size,
+			envelope,
+		)
+	}
+}
+
+// nothing on the roster can catch a player who keeps moving: pressure comes
+// from ground and angles, not a footrace. The catalog's rule is a ceiling
+// well under the player's speed, not merely below it - the margin is what
+// makes kiting *work* rather than barely hold - so the ceiling is pinned
+// against the player too. The Charger's dash is the named exception and
+// its own test pins that half; its sustained approach is held here with
+// everything else.
+ENEMY_SUSTAINED_SPEED_CEILING :: f32(70)
+
+@(test)
+test_every_presets_sustained_speed_is_under_the_players :: proc(t: ^testing.T) {
+	testing.expectf(
+		t,
+		ENEMY_SUSTAINED_SPEED_CEILING < PLAYER_BASE_MOVE_SPEED,
+		"the roster's speed ceiling %v is not under the player's %v",
+		ENEMY_SUSTAINED_SPEED_CEILING,
+		PLAYER_BASE_MOVE_SPEED,
+	)
+	for kind in Enemy_Kind {
+		speed := movement_sustained_speed(enemy_presets[kind].movement)
+		testing.expectf(
+			t,
+			speed < ENEMY_SUSTAINED_SPEED_CEILING,
+			"%v sustains %v against a ceiling of %v (the player runs at %v)",
+			kind,
+			speed,
+			ENEMY_SUSTAINED_SPEED_CEILING,
+			PLAYER_BASE_MOVE_SPEED,
+		)
+	}
+}
+
+// payout sits on ENEMY_GOLD_PER_MAX_HEALTH's anchor unless the Kind is
+// named here, with the direction it deviates in - so a named Kind must
+// actually deviate, and that way round, or the list rots into a blanket
+// exemption
+ENEMY_GOLD_ANCHOR_TOLERANCE :: 3 // Gold; room to round a payout to a readable number
+
+Payout_Deviation :: enum {
+	None,
+	Below,
+	Above,
+}
+
+@(test)
+test_every_presets_payout_sits_on_the_anchor_or_is_a_named_deviation :: proc(t: ^testing.T) {
+	named_deviation: [Enemy_Kind]Payout_Deviation
+	named_deviation[.Sentry] = .Below // a body that never moves is the safest kill on the roster
+	named_deviation[.Lancer] = .Above // the highest threat per body
+	named_deviation[.Mite] = .Below // far below: Gold rolls per body, so at swarm density an anchored Mite out-earns the ladder
+
+	for kind in Enemy_Kind {
+		preset := enemy_presets[kind]
+		anchor := int(math.round(preset.max_health * ENEMY_GOLD_PER_MAX_HEALTH))
+		actual: Payout_Deviation = .None
+		if preset.gold - anchor > ENEMY_GOLD_ANCHOR_TOLERANCE {
+			actual = .Above
+		} else if anchor - preset.gold > ENEMY_GOLD_ANCHOR_TOLERANCE {
+			actual = .Below
+		}
+		testing.expectf(
+			t,
+			actual == named_deviation[kind],
+			"%v pays %d against an anchor of %d (%v), but is authored as %v",
+			kind,
+			preset.gold,
+			anchor,
+			actual,
+			named_deviation[kind],
+		)
+	}
+}
+
+// a Kind no authored composition places is content the player never meets;
+// the check is over the baked table, so it holds for what ships rather than
+// for what the editor could load
+@(test)
+test_every_enemy_kind_appears_in_an_authored_composition :: proc(t: ^testing.T) {
+	seen: [Enemy_Kind]bool
+	for name in Map_Name {
+		for trigger in maps[name].spawn_triggers {
+			for entry in trigger.composition {
+				testing.expectf(t, entry.count > 0, "%v places %d %v, which spawns nothing", name, entry.count, entry.kind)
+				seen[entry.kind] = true
+			}
+		}
+	}
+	for kind in Enemy_Kind {
+		testing.expectf(t, seen[kind], "no authored Map places a %v", kind)
+	}
+}
+
+// the same "at least one" clause the Tell_Area and Charger tests carry: the
+// family that holds still is a player response of its own (you must cross to
+// it), and it falls off the roster silently if no Kind is authored Inert
+@(test)
+test_an_inert_preset_holds_the_line :: proc(t: ^testing.T) {
+	_, found := a_kind_moving_as(.Inert)
+	testing.expect(t, found, "no Kind is Inert, so nothing on the roster makes the player cross open ground")
 }

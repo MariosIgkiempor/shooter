@@ -2603,7 +2603,7 @@ maps: [Map_Name]Map = {
 		Tile{world_coords = {53, 47}, collides = true},
 	}}, spawn_triggers = {
 		Spawn_Trigger{condition = Time_Elapsed{seconds = 0}, mode = Repeating{interval = 2.5, duration = 120}, composition = {Spawn_Composition_Entry{kind = .Grunt, count = 1}, Spawn_Composition_Entry{kind = .Spitter, count = 1}}},
-		Spawn_Trigger{condition = Kills_Reached{count = 12}, mode = Repeating{interval = 3, duration = 100}, composition = {Spawn_Composition_Entry{kind = .Wraith, count = 1}, Spawn_Composition_Entry{kind = .Gazer, count = 1}, Spawn_Composition_Entry{kind = .Breaker, count = 1}, Spawn_Composition_Entry{kind = .Lancer, count = 1}}},
+		Spawn_Trigger{condition = Kills_Reached{count = 12}, mode = Repeating{interval = 3, duration = 100}, composition = {Spawn_Composition_Entry{kind = .Wraith, count = 1}, Spawn_Composition_Entry{kind = .Gazer, count = 1}, Spawn_Composition_Entry{kind = .Breaker, count = 1}, Spawn_Composition_Entry{kind = .Sentry, count = 1}, Spawn_Composition_Entry{kind = .Lancer, count = 1}}},
 		Spawn_Trigger{condition = Time_Elapsed{seconds = 150}, mode = Repeating{interval = 3, duration = 120}, composition = {Spawn_Composition_Entry{kind = .Mite, count = 3}, Spawn_Composition_Entry{kind = .Spitter, count = 1}}},
 	}, time_limit = 300, victory_multiplier = 1.7, rung = 2, floor_color = Color{38, 44, 56, 255}, wall_color = Color{96, 110, 134, 255}, ambient = {.Floor_Patches, .Light_Wash}},
 	.Desert_Dungeon = Map{name = "Desert Dungeon", player_start = {464, 254}, tilemap = Tilemap{tile_size = {16, 16}, tiles = {
