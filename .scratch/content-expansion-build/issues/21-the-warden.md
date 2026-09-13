@@ -68,6 +68,19 @@ so `time_limit` re-derives to 210 unchanged.
 which left the Warden's body unchanged through its Tells; a body above
 `TELL_FLASH_LIGHT_BODY_LUMA` now swings toward dark instead.
 
+**Review findings left open.** (1) The stamp is `inflated`, not solid, so when
+the player stands inside the Warden's disc (any melee exchange, the 30px-
+reach slam) the flood walks out through it and adds on the far side route
+through the Boss for those frames - the price of the source-under-obstacle
+rule the field needs to keep flooding at all. (2) The Warden's spawn point
+is tested against the shared radius-1 field, since its own does not exist
+until it does; on an open court that never matters. (3) The phase notches
+on the bar and the `LITERAL` colour swatch in Presets mode were not asked
+for - both are one line to remove. (4) `Player.kills` is indexed by
+`Enemy_Kind` and persisted positionally, an ordinal contract ADR-0028
+rejects; the Warden is appended last and the hazard is now named on the
+enum rather than fixed.
+
 **Balance caveat, not fixed here.** 220 health is pinned by size derivation
 (`ENEMY_SIZE_MAX` = 72 allows ≤ 221), and a bare Pistol is 75 DPS - the
 Warden dies in ~3 s of sustained fire. Phase legibility therefore depends on

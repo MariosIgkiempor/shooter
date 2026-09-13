@@ -56,7 +56,7 @@ reset_pickups :: proc() {
 // the roll: the Boss always drops, and drops Gold - a minute spent killing
 // it that paid out one time in eight would read as a bug.
 maybe_spawn_pickup :: proc(position: Vec2, kind: Enemy_Kind) {
-	if enemy_presets[kind].boss {
+	if enemy_kind_is_boss(kind) {
 		append(&game.pickups, Pickup{position = position, kind = .Gold, gold = enemy_gold_value(kind)})
 		return
 	}

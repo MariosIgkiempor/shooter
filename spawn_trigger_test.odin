@@ -209,7 +209,7 @@ test_fire_spawn_composition_silently_skips_spawns_past_max_enemies :: proc(t: ^t
 test_fire_spawn_composition_keeps_the_last_slot_for_the_boss :: proc(t: ^testing.T) {
 	// flagged for the test rather than found in the table, so this pins the
 	// reservation to the flag and not to whichever Kind currently carries it
-	boss := Enemy_Kind.Grunt
+	boss := Enemy_Kind.Gazer // not the zero Kind: the blank fillers below would otherwise all be Bosses
 	previous_preset := enemy_presets[boss]
 	defer enemy_presets[boss] = previous_preset
 	enemy_presets[boss].boss = true
@@ -229,4 +229,26 @@ test_fire_spawn_composition_keeps_the_last_slot_for_the_boss :: proc(t: ^testing
 
 	fire_spawn_composition(composition)
 	testing.expectf(t, len(game.enemies) == MAX_ENEMIES, "MAX_ENEMIES is still the ceiling for the Boss, got %v", len(game.enemies))
+}
+
+// once the Boss is on the field its slot is occupied, not still reserved:
+// ordinary Kinds may then fill to the cap
+@(test)
+test_the_reservation_is_spent_once_the_boss_is_alive :: proc(t: ^testing.T) {
+	boss := Enemy_Kind.Gazer // not the zero Kind: the blank fillers below would otherwise all be Bosses
+	previous_preset := enemy_presets[boss]
+	defer enemy_presets[boss] = previous_preset
+	enemy_presets[boss].boss = true
+
+	previous_map, previous_player, previous_enemies, previous_camera := spawn_trigger_test_setup()
+	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
+
+	for _ in 0 ..< MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS - 1 {
+		append(&game.enemies, Enemy{})
+	}
+	fire_spawn_composition([]Spawn_Composition_Entry{{kind = boss, count = 1}})
+	testing.expect_value(t, len(game.enemies), MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS)
+
+	fire_spawn_composition([]Spawn_Composition_Entry{{kind = .Spitter, count = 3}})
+	testing.expectf(t, len(game.enemies) == MAX_ENEMIES, "with the Boss alive an ordinary Kind should fill to the cap, got %v", len(game.enemies))
 }

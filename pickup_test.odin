@@ -52,7 +52,7 @@ test_every_pickup_kind_changes_something_the_player_can_read :: proc(t: ^testing
 test_a_boss_kill_always_drops_its_gold :: proc(t: ^testing.T) {
 	// flagged for the test, so this pins the drop to the flag and not to
 	// whichever Kind currently carries it
-	boss := Enemy_Kind.Grunt
+	boss := Enemy_Kind.Gazer // not the zero Kind: the blank fillers below would otherwise all be Bosses
 	previous_preset := enemy_presets[boss]
 	defer enemy_presets[boss] = previous_preset
 	enemy_presets[boss].boss = true

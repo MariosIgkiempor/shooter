@@ -527,7 +527,8 @@ update_game :: proc() {
 		// next frame, so without it the first step on a new Map would be
 		// resolved against the previous Map's walls. On every other frame it
 		// is a handful of compares that find nothing changed.
-		// the Boss's bulk is the one obstacle the shared field routes around.
+		//
+		// The Boss's bulk is the one obstacle the shared field routes around.
 		// Read once and handed to both ensures below: given to only one, each
 		// would see the other's stamp as a change and the field would
 		// re-flood twice a frame.

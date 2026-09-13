@@ -128,7 +128,7 @@ write_attack_literal :: proc(b: ^strings.Builder, attack: Attack_Style) {
 		// and the literal's indexed form leaves them zero on the next build
 		// exactly as a hand-written one does
 		strings.write_string(b, "Tell_Area{phases = {")
-		phase_count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+		phase_count := tell_area_phase_count(a)
 		for p in 0 ..< phase_count {
 			if p > 0 {
 				strings.write_string(b, ", ")

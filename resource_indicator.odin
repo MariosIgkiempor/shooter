@@ -13,8 +13,7 @@ import rl "vendor:raylib"
 // Boss is the one enemy that keeps an indicator, because opacity cannot
 // resolve a fraction on a body the player spends a minute killing (see the
 // Boss entry in CONTEXT.md). The player additionally shows exactly one
-// secondary indicator at a time,
-// keyed by the equipped Weapon's family: an Ammo indicator for Gun, or a
+// secondary indicator at a time, keyed by the equipped Weapon's family: an Ammo indicator for Gun, or a
 // Cooldown indicator for Melee_Weapon/Magic. Every indicator is
 // fraction-only (no numeric readout): an icon beside a flat rect bar (no
 // nine-slice - see the map's Out of scope) whose translucent fill is
@@ -308,8 +307,7 @@ update_boss_resource_indicator :: proc(enemies: []Enemy, dt: f32) {
 		return
 	}
 	boss := enemies[index]
-	frac := boss.max_health > 0 ? clamp(boss.health / boss.max_health, 0, 1) : 0
-	update_resource_bar_particles(boss_health_bar_particles[:], boss_health_bar_rect(boss), frac, false, dt)
+	update_resource_bar_particles(boss_health_bar_particles[:], boss_health_bar_rect(boss), enemy_health_fraction(boss), false, dt)
 }
 
 // the same fill the player's Health indicator uses, so health reads the
@@ -322,7 +320,7 @@ draw_boss_resource_indicator :: proc(enemies: []Enemy) {
 		return
 	}
 	boss := enemies[index]
-	frac := boss.max_health > 0 ? clamp(boss.health / boss.max_health, 0, 1) : 0
+	frac := enemy_health_fraction(boss)
 	bar := boss_health_bar_rect(boss)
 	draw_resource_bar(bar, frac, rl.ColorLerp(RESOURCE_CRITICAL_COLOR, RESOURCE_HEALTHY_COLOR, frac), boss_health_bar_particles[:])
 	if a, is_tell := boss.attack.(Tell_Area); is_tell {
@@ -333,7 +331,7 @@ draw_boss_resource_indicator :: proc(enemies: []Enemy) {
 BOSS_BAR_NOTCH_COLOR :: Color{30, 32, 38, 255} // the bar's own background, cut through the fill
 
 draw_boss_phase_notches :: proc(bar: Rect, a: Tell_Area) {
-	for p in 1 ..< clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES) {
+	for p in 1 ..< tell_area_phase_count(a) {
 		x := bar.x + bar.width * clamp(a.phases[p].enter_below, 0, 1)
 		draw_rectangle({math.floor(x), bar.y, 1, bar.height}, BOSS_BAR_NOTCH_COLOR)
 	}

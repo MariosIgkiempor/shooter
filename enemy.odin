@@ -92,8 +92,11 @@ Enemy_Kind :: enum {
 	// would out-earn every other Kind.
 	Mite,
 	Gazer,
-	// the Boss (roster row 9): the one body a Run ends on, and the last
-	// entry because Player.kills is indexed by this enum. Grounded and slow,
+	// the Boss (roster row 9): the one body a Run ends on. Appended last
+	// because Player.kills is indexed by this enum and persisted
+	// positionally - an ordinal contract ADR-0028 would reject, predating
+	// this Kind and not fixed with it; a reorder above this line silently
+	// re-attributes a save's kill counts. Grounded and slow,
 	// so it never catches a player who keeps moving; what it does is claim
 	// ground in three phases (66% / 33%), each a longer rotation on a shorter
 	// recovery (1.5 -> 1.15 -> 0.8s) so the fight visibly quickens as the
@@ -955,6 +958,7 @@ update_spawn_triggers :: proc(dt: f32) {
 // per-enemy (not all-or-nothing), so a batch that partially fits still
 // spawns what it can (ticket 03: "One_Shot's batch may come up short")
 fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
+	_, boss_alive := find_boss(game.enemies[:])
 	visible_rect := camera_visible_world_rect(game.camera)
 	player_pos := Vec2{game.player.x, game.player.y}
 	// the tilemap doesn't change mid-batch, so this is computed once per
@@ -973,8 +977,13 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 		must_reach := movement_style_collides_with_terrain[style]
 
 		// per entry rather than per batch, so an ordinary entry that fills
-		// the field does not drop a Boss entry behind it in the same batch
-		cap := enemy_presets[entry.kind].boss ? MAX_ENEMIES : MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS
+		// the field does not drop a Boss entry behind it in the same batch.
+		// Once a Boss is on the field it occupies its slot and the
+		// reservation is spent: ordinary Kinds may then fill to the cap.
+		cap := MAX_ENEMIES
+		if !enemy_kind_is_boss(entry.kind) && !boss_alive {
+			cap -= ENEMY_BOSS_RESERVED_SLOTS
+		}
 		for _ in 0 ..< entry.count {
 			if len(game.enemies) >= cap {
 				break
@@ -987,8 +996,22 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 
 // -- the Boss's seams ------------------------------------------------------
 
+enemy_kind_is_boss :: proc(kind: Enemy_Kind) -> bool {
+	return enemy_presets[kind].boss
+}
+
 enemy_is_boss :: proc(enemy: Enemy) -> bool {
-	return enemy_presets[enemy.kind].boss
+	return enemy_kind_is_boss(enemy.kind)
+}
+
+// remaining health as 0..1 - what a phase threshold is read against and
+// what the Boss's Health indicator fills to. A body with no max_health is a
+// test fixture, and reads as untouched rather than dead.
+enemy_health_fraction :: proc(enemy: Enemy) -> f32 {
+	if enemy.max_health <= 0 {
+		return 1
+	}
+	return clamp(enemy.health / enemy.max_health, 0, 1)
 }
 
 // the first Boss body alive, for the seams that want one: its field, its
@@ -1287,8 +1310,7 @@ update_enemies :: proc(dt: f32) {
 				a.fire_timer = 1.0 / a.fire_rate
 			}
 		case Tell_Area:
-			health_fraction := enemy.max_health > 0 ? enemy.health / enemy.max_health : 1
-			tick := update_tell_area(&a, pos, game.player.rect, health_fraction, dt)
+			tick := update_tell_area(&a, pos, game.player.rect, enemy_health_fraction(enemy), dt)
 			if tick.planted {
 				delta = {}
 			}
@@ -1339,10 +1361,16 @@ Tell_Area_Tick :: struct {
 	damage:   f32, // > 0 only when the resolve caught the player's collision rect
 }
 
+// the live phases, 0..TELL_AREA_MAX_PHASES - the one place phase_count is
+// clamped, so a slider or a hand edit past the array cannot index off it
+tell_area_phase_count :: proc(a: Tell_Area) -> int {
+	return clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+}
+
 // the phase the body is in; false when no phase is authored, which makes
 // a mis-authored preset inert rather than an index out of range
 tell_area_current_phase :: proc(a: Tell_Area) -> (Tell_Phase, bool) {
-	count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+	count := tell_area_phase_count(a)
 	if count <= 0 || a.phase_index < 0 || a.phase_index >= count {
 		return {}, false
 	}
@@ -1407,7 +1435,7 @@ tell_area_progress :: proc(a: Tell_Area) -> (progress: f32, telling: bool) {
 // free attack.
 update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, health_fraction: f32, dt: f32) -> (tick: Tell_Area_Tick) {
 	if a.tell_remaining <= 0 {
-		count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+		count := tell_area_phase_count(a^)
 		for a.phase_index + 1 < count && health_fraction < a.phases[a.phase_index + 1].enter_below {
 			a.phase_index += 1
 			a.rotation_index = 0

@@ -1471,7 +1471,7 @@ attack_style_rows :: proc(kind: Enemy_Kind, attack: ^Attack_Style) {
 		preset_f32_row(fmt.tprintf("preset_{}_attack_bullet_lifetime", kind), "Bullet Lifetime", &a.bullet_lifetime, 0, 10)
 	case Tell_Area:
 		int_slider_row(fmt.tprintf("preset_{}_attack_phase_count", kind), "Phase Count", &a.phase_count, 1, TELL_AREA_MAX_PHASES)
-		for p in 0 ..< clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES) {
+		for p in 0 ..< tell_area_phase_count(a) {
 			phase := &a.phases[p]
 			ui.text("Phase {}", p)
 			if p > 0 {
