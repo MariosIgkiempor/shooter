@@ -111,6 +111,12 @@ game: struct {
 	// first frame after any load anyway.
 	flow_field:             Flow_Field `json:"-"`,
 
+	// the live Map theme's ambient effects - the mote field and the floor
+	// patches (ambience.odin, ADR-0024). Here and not on Map for the flow
+	// field's reason: derived runtime state, re-placed from the live Map on
+	// the first frame it is seen. Never persisted.
+	ambience:               Ambience `json:"-"`,
+
 	// true while the Run End modal is open (see end_run); simulation is
 	// paused. Never saved - a save taken mid-modal simply reopens closed,
 	// which is fine since no Run state is lost (the Gold settle is already
@@ -382,6 +388,14 @@ update_game :: proc() {
 	// run_ended/shopping - so a Dismiss window that finishes this frame is
 	// already reflected in every guard/switch further down (ADR-0014)
 	update_menu_transition()
+
+	// every mode, outside update_game_state's pause, on purpose: the world is
+	// drawn behind every Screen and the Shop and Run End blur, and ambience
+	// is steady-state (CONTEXT.md's Ambient effect entry) - it keeps
+	// drifting wherever the world is visible. In Editing it reads the Map
+	// being edited, so the Ambient toggles preview live like the colour
+	// sliders do.
+	update_ambience(rl.GetFrameTime())
 
 	if is_key_pressed(.F1) {
 		switch game.program_mode {
@@ -1250,8 +1264,13 @@ draw_game :: proc() {
 		// (content-expansion-build ticket 14). The two are the same place by
 		// default - F1 enters on a clone of current_map - so this only
 		// diverges once an edit or a map switch makes it diverge.
-		draw_tilemap(game.program_mode == .Editing ? &game.editing_map : &game.current_map)
-		draw_ground_layer(game.enemies[:])
+		map_data := game.program_mode == .Editing ? &game.editing_map : &game.current_map
+		draw_tilemap(map_data)
+		// the Map theme's light, before anything the world or the player
+		// puts on the floor, so it tints the place and never the information
+		// on it (ambience.odin)
+		draw_ambient_light_wash(map_data, game.camera)
+		draw_ground_layer(map_data, game.ambience.patches[:game.ambience.patch_count], game.enemies[:])
 		// under the bodies rather than over them: the field is terrain
 		// furniture, and it is one drawing for the whole map rather than one
 		// per enemy - there are no per-enemy routes to draw any more
@@ -1286,6 +1305,9 @@ draw_game :: proc() {
 		draw_poison_clouds(game.poison_clouds[:])
 		draw_pickups(game.pickups[:])
 		draw_particles(game.particles[:])
+		// dust in the air above the bodies, under everything that carries
+		// information (ambience.odin)
+		draw_ambient_motes(map_data, game.ambience.motes[:], game.ambience.time)
 		draw_damage_numbers(game.damage_numbers[:])
 		if game.program_mode == .Playing {
 			draw_player_resource_indicators(game.player)

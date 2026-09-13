@@ -750,6 +750,8 @@ open_editing_map :: proc(map_data: Map, path: string) {
 	game.editing_map = map_data
 	game.editing_map_path = path
 	adopt_editing_map_name()
+	// the Map the ambience decorates has just been replaced too (ambience.odin)
+	ambience_invalidate(&game.ambience)
 
 	clear(&editor.expanded_spawn_triggers)
 	editor.placing_player_start = false
@@ -927,6 +929,21 @@ map_mode_ui :: proc() {
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Bevel (derived)")
 		color_swatch("map_bevel_swatch", map_bevel_color(game.editing_map))
+	}
+
+	// the ambient set, one toggle per effect. Previews live like the colours
+	// do: update_ambience and draw_world_contents read the editing Map
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Ambient")
+		ambient_effect_toggle("map_ambient_motes", "Motes", .Motes)
+		ambient_effect_toggle("map_ambient_patches", "Floor Patches", .Floor_Patches)
+		ambient_effect_toggle("map_ambient_wash", "Light Wash", .Light_Wash)
+	}
+}
+
+ambient_effect_toggle :: proc(key: string, label: string, effect: Ambient_Effect) {
+	if selectable_button(key, label, effect in game.editing_map.ambient) {
+		game.editing_map.ambient ~= {effect}
 	}
 }
 

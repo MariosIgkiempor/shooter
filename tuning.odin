@@ -335,6 +335,7 @@ Tuning_Group :: enum {
 	Poison_Gas,
 	Damage_Numbers,
 	World_Render,
+	Ambience,
 }
 
 tuning_group_display_name := [Tuning_Group]string {
@@ -378,6 +379,7 @@ tuning_group_display_name := [Tuning_Group]string {
 	.Poison_Gas                 = "Poison Gas",
 	.Damage_Numbers             = "Damage Numbers",
 	.World_Render               = "World Render",
+	.Ambience                   = "Ambience",
 }
 
 weapon_tuning_group := [Weapon_Kind]Tuning_Group {
@@ -788,4 +790,20 @@ register_feel_tunables :: proc() {
 	register_tunable(.World_Render, "world.tell_zone.claim_alpha", "Tell Zone Claim Alpha", &TELL_ZONE_CLAIM_ALPHA, 0, 1)
 	register_tunable(.World_Render, "world.tell_zone.fill_alpha", "Tell Zone Fill Alpha", &TELL_ZONE_FILL_ALPHA, 0, 1)
 	register_tunable(.World_Render, "world.tell_zone.edge_alpha", "Tell Zone Edge Alpha", &TELL_ZONE_EDGE_ALPHA, 0, 1)
+
+	// the ambient layers' alphas and motion (ambience.odin). Their colours
+	// derive from the Map's own and are not tunable; their budgets are
+	// constants
+	register_tunable(.Ambience, "ambience.mote.drift_max", "Mote Drift Max", &AMBIENT_MOTE_DRIFT_MAX, 0, 40)
+	register_tunable(.Ambience, "ambience.mote.radius_min", "Mote Radius Min", &AMBIENT_MOTE_RADIUS_MIN, 0.2, 4)
+	register_tunable(.Ambience, "ambience.mote.radius_max", "Mote Radius Max", &AMBIENT_MOTE_RADIUS_MAX, 0.2, 6)
+	register_tunable(.Ambience, "ambience.mote.alpha_base", "Mote Alpha Base", &AMBIENT_MOTE_ALPHA_BASE, 0, 1)
+	register_tunable(.Ambience, "ambience.mote.alpha_shimmer", "Mote Alpha Shimmer", &AMBIENT_MOTE_ALPHA_SHIMMER, 0, 0.5)
+	register_tunable(.Ambience, "ambience.mote.shimmer_rate", "Mote Shimmer Rate", &AMBIENT_MOTE_SHIMMER_RATE, 0, 10)
+	register_tunable(.Ambience, "ambience.patch.alpha", "Patch Alpha", &AMBIENT_PATCH_ALPHA, 0, 1)
+	register_tunable(.Ambience, "ambience.patch.darker_scale", "Patch Darker Scale", &AMBIENT_PATCH_DARKER_SCALE, 0, 1)
+	register_tunable(.Ambience, "ambience.patch.lift_mix", "Patch Lift Mix", &AMBIENT_PATCH_LIFT_MIX, 0, 1)
+	register_tunable(.Ambience, "ambience.wash.top_alpha", "Wash Top Alpha", &AMBIENT_WASH_TOP_ALPHA, 0, 0.5)
+	register_tunable(.Ambience, "ambience.wash.bottom_alpha", "Wash Bottom Alpha", &AMBIENT_WASH_BOTTOM_ALPHA, 0, 0.5)
+	register_tunable(.Ambience, "ambience.wash.bottom_scale", "Wash Bottom Scale", &AMBIENT_WASH_BOTTOM_SCALE, 0, 1)
 }
