@@ -78,8 +78,10 @@ editor: struct {
 	// table has been edited.
 	built_enemy_presets:   [Enemy_Kind]Enemy_Preset,
 	// what the last Export did, shown in the panel - the log is not the
-	// editor's user interface (see save_refused below)
-	presets_export_status: string,
+	// editor's user interface (see save_refused below). An enum formatted at
+	// draw time rather than a message: the temp allocator is freed every
+	// frame, so a string kept here would be read after it was.
+	presets_export:        Presets_Export_Outcome,
 	// which rows of the always-visible Spawn Trigger list (editor_window)
 	// are expanded, keyed by index into game.editing_map.spawn_triggers -
 	// purely a UI toggle, unrelated to the persisted Spawn_Trigger itself,
@@ -110,6 +112,12 @@ editor: struct {
 	// a Save button that does nothing and says nothing is a Save button an
 	// author believes. Cleared by anything that could change the answer.
 	save_refused:          bool,
+}
+
+Presets_Export_Outcome :: enum {
+	Not_Yet,
+	Wrote,
+	Refused,
 }
 
 initialize_editor :: proc() {
@@ -926,7 +934,7 @@ map_mode_ui :: proc() {
 		ui.text("Click a cell to start every Run on this Map in it.")
 	}
 
-	map_int_row("map_rung", "Rung", &game.editing_map.rung, 1, EDITOR_RUNG_MAX)
+	int_slider_row("map_rung", "Rung", &game.editing_map.rung, 1, EDITOR_RUNG_MAX)
 
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Time Limit")
@@ -976,8 +984,9 @@ ambient_effect_toggle :: proc(key: string, label: string, effect: Ambient_Effect
 }
 
 // ui.slider is f32-only, so an int rides an f32 proxy - the same idiom
-// tuning_row and the Kills_Reached count already use
-map_int_row :: proc(key: string, label: string, value: ^int, min_value, max_value: f32) {
+// tuning_row and the Kills_Reached count already use. Shared by Map mode
+// and Presets mode
+int_slider_row :: proc(key: string, label: string, value: ^int, min_value, max_value: f32) {
 	proxy := f32(value^)
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("{}", label)
@@ -1277,10 +1286,11 @@ tunable_value_text :: proc(tunable: Tunable) -> string {
 	return ""
 }
 
-// two literal format strings rather than one with a runtime precision:
-// Odin's fmt has no `{:.*f}`, and writing it emits its own error text into
-// the label. A 0..1 ratio needs more digits to read as changing at all than
-// a 0..800 speed does.
+// two literal format strings rather than a runtime precision: fmt's `{}`
+// syntax has no spelling for one (`%.*f` exists on the printf side, which
+// write_preset_number uses, but two literals read plainer here). A 0..1
+// ratio needs more digits to read as changing at all than a 0..800 speed
+// does.
 slider_value_text :: proc(value: f32, max_value: f32) -> string {
 	if max_value <= 2 {
 		return fmt.tprintf("{:.3f}", value)
@@ -1303,26 +1313,29 @@ slider_value_text :: proc(value: f32, max_value: f32) -> string {
 // Deliberately not exported on drag, for the reason Tuning isn't autosaved.
 
 presets_mode_ui :: proc() {
-	differing := 0
+	moved := 0
 	for kind in Enemy_Kind {
-		if enemy_presets[kind] != editor.built_enemy_presets[kind] {
-			differing += 1
+		if preset_moved(kind) {
+			moved += 1
 		}
 	}
 
 	if ui.row({gap = ui.theme.gap}) {
 		if ui.button("Export Source") {
-			editor.presets_export_status =
-				export_enemy_presets() ? fmt.tprintf("wrote {}", ENEMY_PRESETS_SOURCE_PATH) : fmt.tprintf("couldn't write {}", ENEMY_PRESETS_SOURCE_PATH)
+			editor.presets_export = export_enemy_presets() ? .Wrote : .Refused
 		}
 		if ui.button("Revert All") {
 			enemy_presets = editor.built_enemy_presets
 		}
 		ui.spacer()
-		ui.text("{} of {} differ from the build", differing, len(Enemy_Kind))
+		ui.text("{} of {} differ from the build", moved, len(Enemy_Kind))
 	}
-	if editor.presets_export_status != "" {
-		ui.text("{}", editor.presets_export_status)
+	switch editor.presets_export {
+	case .Not_Yet:
+	case .Wrote:
+		ui.text("Wrote {}", ENEMY_PRESETS_SOURCE_PATH)
+	case .Refused:
+		ui.text("Couldn't write {} - see the log", ENEMY_PRESETS_SOURCE_PATH)
 	}
 	ui.text("edits reach the next spawn; bodies on the field keep what they were born with")
 
@@ -1338,6 +1351,12 @@ presets_mode_ui :: proc() {
 	}
 }
 
+// whether a Kind's live preset differs from the one this build compiled
+// with - tunable_overridden's question, asked of a whole row
+preset_moved :: proc(kind: Enemy_Kind) -> bool {
+	return enemy_presets[kind] != editor.built_enemy_presets[kind]
+}
+
 preset_kind_list :: proc() {
 	for kind in Enemy_Kind {
 		expanded := false
@@ -1348,7 +1367,7 @@ preset_kind_list :: proc() {
 		// a collapsed Kind still says whether it has been moved, the way a
 		// collapsed Tuning Group carries its override count
 		label := fmt.tprintf("{}", kind)
-		if enemy_presets[kind] != editor.built_enemy_presets[kind] {
+		if preset_moved(kind) {
 			label = fmt.tprintf("{} *", kind)
 		}
 
@@ -1374,6 +1393,11 @@ preset_rows :: proc(kind: Enemy_Kind) {
 			key := fmt.tprintf("preset_{}_movement_{}", kind, family)
 			if selectable_button(key, fmt.tprintf("{}", family), movement_style_kind(preset.movement) == family) {
 				preset.movement = default_movement_style(family)
+				// hue means family (the preset test's rule), so a Kind that
+				// changes family is repainted unless its colour already fits
+				if !enemy_color_is_familys(preset.color, family) {
+					preset.color = enemy_family_base_color(family)
+				}
 			}
 		}
 	}
@@ -1391,10 +1415,10 @@ preset_rows :: proc(kind: Enemy_Kind) {
 	attack_style_rows(kind, &preset.attack)
 
 	preset_f32_row(fmt.tprintf("preset_{}_max_health", kind), "Max Health", &preset.max_health, 1, 500)
-	map_int_row(fmt.tprintf("preset_{}_gold", kind), "Gold", &preset.gold, 0, 500)
-	preset_color_row(kind, &preset.color)
+	int_slider_row(fmt.tprintf("preset_{}_gold", kind), "Gold", &preset.gold, 0, 500)
+	preset_color_row(kind, movement_style_kind(preset.movement), &preset.color)
 
-	if preset^ != editor.built_enemy_presets[kind] {
+	if preset_moved(kind) {
 		if ui.row({gap = ui.theme.gap}) {
 			ui.spacer()
 			if selectable_button(fmt.tprintf("preset_{}_revert", kind), "Revert", false) {
@@ -1405,51 +1429,53 @@ preset_rows :: proc(kind: Enemy_Kind) {
 }
 
 // the authored half of each variant, reached through the union so the
-// slider writes into the table itself; the runtime half is not offered
+// slider writes into the table itself; the runtime half is not offered. Keys
+// carry the style as well as the Kind: Charger and Tell_Area both have a
+// cooldown_seconds, and the family switch can pair them
 movement_style_rows :: proc(kind: Enemy_Kind, movement: ^Movement_Style) {
 	switch &m in movement {
 	case Grounded:
-		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_speed", kind), "Speed", &m.speed, 0, 120)
 	case Floater:
-		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
-		preset_f32_row(fmt.tprintf("preset_{}_wobble_amplitude", kind), "Wobble Amplitude", &m.wobble_amplitude, 0, 200)
-		preset_f32_row(fmt.tprintf("preset_{}_wobble_frequency", kind), "Wobble Frequency", &m.wobble_frequency, 0, 10)
-		preset_f32_row(fmt.tprintf("preset_{}_pull_strength", kind), "Pull Strength", &m.pull_strength, 0, 1)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_wobble_amplitude", kind), "Wobble Amplitude", &m.wobble_amplitude, 0, 200)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_wobble_frequency", kind), "Wobble Frequency", &m.wobble_frequency, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_pull_strength", kind), "Pull Strength", &m.pull_strength, 0, 1)
 	case Swarmer:
-		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_speed", kind), "Speed", &m.speed, 0, 120)
 	case Charger:
-		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
-		preset_f32_row(fmt.tprintf("preset_{}_dash_speed", kind), "Dash Speed", &m.dash_speed, 0, 600)
-		preset_f32_row(fmt.tprintf("preset_{}_dash_distance", kind), "Dash Distance", &m.dash_distance, 0, 400)
-		preset_f32_row(fmt.tprintf("preset_{}_tell_seconds", kind), "Tell Seconds", &m.tell_seconds, 0, 3)
-		preset_f32_row(fmt.tprintf("preset_{}_recovery_seconds", kind), "Recovery Seconds", &m.recovery_seconds, 0, 3)
-		preset_f32_row(fmt.tprintf("preset_{}_cooldown_seconds", kind), "Cooldown Seconds", &m.cooldown_seconds, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_dash_speed", kind), "Dash Speed", &m.dash_speed, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_dash_distance", kind), "Dash Distance", &m.dash_distance, 0, 400)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_tell_seconds", kind), "Tell Seconds", &m.tell_seconds, 0, 3)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_recovery_seconds", kind), "Recovery Seconds", &m.recovery_seconds, 0, 3)
+		preset_f32_row(fmt.tprintf("preset_{}_movement_cooldown_seconds", kind), "Cooldown Seconds", &m.cooldown_seconds, 0, 10)
 	}
 }
 
 attack_style_rows :: proc(kind: Enemy_Kind, attack: ^Attack_Style) {
 	switch &a in attack {
 	case Melee:
-		preset_f32_row(fmt.tprintf("preset_{}_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
-		preset_f32_row(fmt.tprintf("preset_{}_attack_range", kind), "Range", &a.attack_range, 0, 60)
-		preset_f32_row(fmt.tprintf("preset_{}_attack_cooldown", kind), "Cooldown", &a.attack_cooldown, 0, 5)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_attack_range", kind), "Range", &a.attack_range, 0, 60)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_attack_cooldown", kind), "Cooldown", &a.attack_cooldown, 0, 5)
 	case Ranged:
-		preset_f32_row(fmt.tprintf("preset_{}_min_range", kind), "Min Range", &a.min_range, 0, 400)
-		preset_f32_row(fmt.tprintf("preset_{}_max_range", kind), "Max Range", &a.max_range, 0, 600)
-		preset_f32_row(fmt.tprintf("preset_{}_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
-		preset_f32_row(fmt.tprintf("preset_{}_projectile_speed", kind), "Projectile Speed", &a.projectile_speed, 0, 600)
-		preset_f32_row(fmt.tprintf("preset_{}_fire_rate", kind), "Fire Rate", &a.fire_rate, 0, 10)
-		preset_f32_row(fmt.tprintf("preset_{}_bullet_lifetime", kind), "Bullet Lifetime", &a.bullet_lifetime, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_min_range", kind), "Min Range", &a.min_range, 0, 400)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_max_range", kind), "Max Range", &a.max_range, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_projectile_speed", kind), "Projectile Speed", &a.projectile_speed, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_fire_rate", kind), "Fire Rate", &a.fire_rate, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_bullet_lifetime", kind), "Bullet Lifetime", &a.bullet_lifetime, 0, 10)
 	case Tell_Area:
-		map_int_row(fmt.tprintf("preset_{}_rotation_count", kind), "Rotation Count", &a.rotation_count, 1, TELL_AREA_MAX_ROTATION)
-		preset_f32_row(fmt.tprintf("preset_{}_cooldown_seconds", kind), "Cooldown Seconds", &a.cooldown_seconds, 0, 10)
+		int_slider_row(fmt.tprintf("preset_{}_attack_rotation_count", kind), "Rotation Count", &a.rotation_count, 1, TELL_AREA_MAX_ROTATION)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_cooldown_seconds", kind), "Cooldown Seconds", &a.cooldown_seconds, 0, 10)
 		for i in 0 ..< clamp(a.rotation_count, 0, TELL_AREA_MAX_ROTATION) {
 			area := &a.rotation[i]
 			ui.text("Rotation {}", i)
-			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_radius", kind, i), "Radius", &area.radius, 0, 150)
-			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_reach", kind, i), "Reach", &area.reach, 0, 300)
-			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_damage", kind, i), "Damage", &area.damage, 0, 100)
-			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_tell_seconds", kind, i), "Tell Seconds", &area.tell_seconds, 0, 3)
+			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_radius", kind, i), "Radius", &area.radius, 0, 150)
+			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_reach", kind, i), "Reach", &area.reach, 0, 300)
+			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_damage", kind, i), "Damage", &area.damage, 0, 100)
+			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_tell_seconds", kind, i), "Tell Seconds", &area.tell_seconds, 0, 3)
 		}
 	}
 }
@@ -1464,14 +1490,17 @@ preset_f32_row :: proc(key: string, label: string, value: ^f32, min_value, max_v
 	ui.slider(key, value, min_value, max_value)
 }
 
-// a swatch per family constant rather than channel sliders: a Kind's colour
-// is always one of the family constants (hue means Movement Style, which the
-// preset test holds), and the literal writer names the constant a Kind uses
-// - so the picker offers exactly the colours that have a name
-preset_color_row :: proc(kind: Enemy_Kind, color: ^Color) {
+// a swatch per named colour of the Kind's own family rather than channel
+// sliders: hue means Movement Style (the preset test's rule), and the literal
+// writer names the constant a Kind uses - so the picker offers exactly the
+// colours the exported table may say, and only the ones that keep the rule
+preset_color_row :: proc(kind: Enemy_Kind, family: Movement_Style_Kind, color: ^Color) {
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Colour")
 		for constant, i in enemy_color_constants {
+			if constant.family != family {
+				continue
+			}
 			key := fmt.tprintf("preset_{}_color_{}", kind, i)
 			color_swatch(fmt.tprintf("{}_swatch", key), constant.color)
 			// ENEMY_GROUNDED_PALE_COLOR reads as "GROUNDED_PALE" on the button

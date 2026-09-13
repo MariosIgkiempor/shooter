@@ -181,3 +181,15 @@ test_every_family_has_a_default_style_of_its_kind :: proc(t: ^testing.T) {
 		}
 	}
 }
+
+// the swatch picker offers a Kind only its family's named colours, and a
+// family switch repaints with the family's base hue - both stand on every
+// family having an entry in the palette table
+@(test)
+test_every_movement_family_has_a_named_colour_to_be_painted_with :: proc(t: ^testing.T) {
+	for family in Movement_Style_Kind {
+		base := enemy_family_base_color(family)
+		testing.expectf(t, enemy_color_is_familys(base, family), "%v's base colour is not one of its own named colours", family)
+	}
+	testing.expect(t, !enemy_color_is_familys(ENEMY_CHARGER_COLOR, .Grounded), "a family's colour should not pass as another's")
+}

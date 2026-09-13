@@ -497,8 +497,10 @@ attack_style_kind :: proc(attack: Attack_Style) -> Attack_Style_Kind {
 }
 
 // what the editor's Presets mode stamps when a Kind switches family: a
-// template of that family's authored half, taken from the roster row that
-// introduced it, so a fresh switch already obeys the rules enemy_preset_test
+// template of that family's authored half, seeded from the roster row that
+// introduced it. A template rather than a read of the live table, so a
+// switch starts from the same place whatever the session has done to that
+// row; enemy_presets_source_test holds each to the rules enemy_preset_test
 // holds the table to (sustained speed under the player's, a rotation to run)
 default_movement_style :: proc(family: Movement_Style_Kind) -> Movement_Style {
 	switch family {
@@ -548,24 +550,47 @@ default_attack_style :: proc(family: Attack_Style_Kind) -> Attack_Style {
 	return nil
 }
 
-// the family palette by source name, for the two readers that need a colour
-// as a *name* rather than a value: the Presets mode's swatch picker, which
-// offers exactly these so a Kind cannot be painted off its family, and the
-// literal writer, which emits the constant rather than its channels so the
-// generated table still reads as "this family's colour" (ADR-0027)
+// the family palette by source name and family, for the two readers that
+// need a colour as a *name* rather than a value: the Presets mode's swatch
+// picker, which offers a Kind only its own family's entries so the table it
+// exports keeps the hue rule by construction, and the literal writer, which
+// emits the constant rather than its channels so the generated table still
+// reads as "this family's colour" (ADR-0027). Ordered so a family's first
+// entry is its base hue, which is what a family switch paints a Kind with.
 Enemy_Color_Constant :: struct {
-	name:  string,
-	color: Color,
+	name:   string,
+	family: Movement_Style_Kind,
+	color:  Color,
 }
 
 enemy_color_constants := []Enemy_Color_Constant {
-	{"ENEMY_GROUNDED_COLOR", ENEMY_GROUNDED_COLOR},
-	{"ENEMY_GROUNDED_PALE_COLOR", ENEMY_GROUNDED_PALE_COLOR},
-	{"ENEMY_FLOATER_COLOR", ENEMY_FLOATER_COLOR},
-	{"ENEMY_FLOATER_PALE_COLOR", ENEMY_FLOATER_PALE_COLOR},
-	{"ENEMY_SWARMER_COLOR", ENEMY_SWARMER_COLOR},
-	{"ENEMY_CHARGER_COLOR", ENEMY_CHARGER_COLOR},
-	{"ENEMY_INERT_COLOR", ENEMY_INERT_COLOR},
+	{"ENEMY_GROUNDED_COLOR", .Grounded, ENEMY_GROUNDED_COLOR},
+	{"ENEMY_GROUNDED_PALE_COLOR", .Grounded, ENEMY_GROUNDED_PALE_COLOR},
+	{"ENEMY_FLOATER_COLOR", .Floater, ENEMY_FLOATER_COLOR},
+	{"ENEMY_FLOATER_PALE_COLOR", .Floater, ENEMY_FLOATER_PALE_COLOR},
+	{"ENEMY_SWARMER_COLOR", .Swarmer, ENEMY_SWARMER_COLOR},
+	{"ENEMY_CHARGER_COLOR", .Charger, ENEMY_CHARGER_COLOR},
+	{"ENEMY_INERT_COLOR", .Inert, ENEMY_INERT_COLOR},
+}
+
+// whether a colour is one of `family`'s named entries above
+enemy_color_is_familys :: proc(color: Color, family: Movement_Style_Kind) -> bool {
+	for constant in enemy_color_constants {
+		if constant.family == family && constant.color == color {
+			return true
+		}
+	}
+	return false
+}
+
+// the family's base hue: the first of its entries
+enemy_family_base_color :: proc(family: Movement_Style_Kind) -> Color {
+	for constant in enemy_color_constants {
+		if constant.family == family {
+			return constant.color
+		}
+	}
+	return ENEMY_GROUNDED_COLOR // unreachable: every family has an entry (enemy_presets_source_test)
 }
 
 // -- Separation ---------------------------------------------------------
