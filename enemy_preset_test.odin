@@ -193,8 +193,14 @@ a_kind_moving_as :: proc(family: Movement_Style_Kind) -> (kind: Enemy_Kind, foun
 // a Tell_Area whose rotation is empty is inert (update_tell_area guards the
 // modulo), and one whose entry has a zero radius or damage telegraphs nothing
 // worth dodging - either is an authoring slip with no second place to catch
-// it. The "at least one" clause keeps the variant from silently falling off
-// the roster when the eight Kinds are re-authored (ticket 11).
+// it. Phases add their own: a threshold outside (0, 1) is never or always
+// crossed, and thresholds that do not fall strictly with the phase index
+// would skip or shadow a stretch. The Tell floor is boss-telegraph-and-
+// phase-feel's finding that 0.35s was unreadable when caught adjacent. The
+// "at least one" clause keeps the variant from silently falling off the
+// roster when the Kinds are re-authored (ticket 11).
+TELL_AREA_MIN_TELL_SECONDS :: f32(0.45)
+
 @(test)
 test_every_tell_area_preset_authors_a_playable_rotation :: proc(t: ^testing.T) {
 	carriers := 0
@@ -206,18 +212,45 @@ test_every_tell_area_preset_authors_a_playable_rotation :: proc(t: ^testing.T) {
 		carriers += 1
 		testing.expectf(
 			t,
-			a.rotation_count >= 1 && a.rotation_count <= TELL_AREA_MAX_ROTATION,
-			"%v's rotation has %d live entries, outside 1..%d",
+			a.phase_count >= 1 && a.phase_count <= TELL_AREA_MAX_PHASES,
+			"%v has %d live phases, outside 1..%d",
 			kind,
-			a.rotation_count,
-			TELL_AREA_MAX_ROTATION,
+			a.phase_count,
+			TELL_AREA_MAX_PHASES,
 		)
-		testing.expectf(t, a.cooldown_seconds > 0, "%v would Tell again the frame it resolved", kind)
-		for i in 0 ..< min(a.rotation_count, TELL_AREA_MAX_ROTATION) {
-			attack := a.rotation[i]
-			testing.expectf(t, attack.radius > 0, "%v's attack %d claims no ground", kind, i)
-			testing.expectf(t, attack.damage > 0, "%v's attack %d lands for nothing", kind, i)
-			testing.expectf(t, attack.tell_seconds > 0, "%v's attack %d has no Tell to read", kind, i)
+		for p in 0 ..< min(a.phase_count, TELL_AREA_MAX_PHASES) {
+			phase := a.phases[p]
+			if p >= 1 {
+				testing.expectf(t, phase.enter_below > 0 && phase.enter_below < 1, "%v's phase %d is entered below %v, which is never or always", kind, p, phase.enter_below)
+			}
+			if p >= 2 {
+				testing.expectf(t, phase.enter_below < a.phases[p - 1].enter_below, "%v's phase %d threshold does not fall below phase %d's", kind, p, p - 1)
+			}
+			testing.expectf(
+				t,
+				phase.rotation_count >= 1 && phase.rotation_count <= TELL_AREA_MAX_ROTATION,
+				"%v's phase %d rotation has %d live entries, outside 1..%d",
+				kind,
+				p,
+				phase.rotation_count,
+				TELL_AREA_MAX_ROTATION,
+			)
+			testing.expectf(t, phase.cooldown_seconds > 0, "%v's phase %d would Tell again the frame it resolved", kind, p)
+			for i in 0 ..< min(phase.rotation_count, TELL_AREA_MAX_ROTATION) {
+				attack := phase.rotation[i]
+				testing.expectf(t, attack.radius > 0, "%v's phase %d attack %d claims no ground", kind, p, i)
+				testing.expectf(t, attack.damage > 0, "%v's phase %d attack %d lands for nothing", kind, p, i)
+				testing.expectf(
+					t,
+					attack.tell_seconds >= TELL_AREA_MIN_TELL_SECONDS,
+					"%v's phase %d attack %d Tells for %vs, under the %vs a player can read",
+					kind,
+					p,
+					i,
+					attack.tell_seconds,
+					TELL_AREA_MIN_TELL_SECONDS,
+				)
+			}
 		}
 	}
 	testing.expect(t, carriers > 0, "no Kind carries a Tell_Area, so nothing in the game ever telegraphs")

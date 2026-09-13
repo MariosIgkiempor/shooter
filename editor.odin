@@ -1394,8 +1394,10 @@ preset_rows :: proc(kind: Enemy_Kind) {
 			if selectable_button(key, fmt.tprintf("{}", family), movement_style_kind(preset.movement) == family) {
 				preset.movement = default_movement_style(family)
 				// hue means family (the preset test's rule), so a Kind that
-				// changes family is repainted unless its colour already fits
-				if !enemy_color_is_familys(preset.color, family) {
+				// changes family is repainted unless its colour already fits.
+				// The Boss's licence is on value, not hue: its near-white is
+				// no family's and must survive a family switch.
+				if !preset.boss && !enemy_color_is_familys(preset.color, family) {
 					preset.color = enemy_family_base_color(family)
 				}
 			}
@@ -1416,6 +1418,7 @@ preset_rows :: proc(kind: Enemy_Kind) {
 
 	preset_f32_row(fmt.tprintf("preset_{}_max_health", kind), "Max Health", &preset.max_health, 1, 500)
 	int_slider_row(fmt.tprintf("preset_{}_gold", kind), "Gold", &preset.gold, 0, 500)
+	preset_bool_row(fmt.tprintf("preset_{}_boss", kind), "Boss", &preset.boss)
 	preset_color_row(kind, movement_style_kind(preset.movement), &preset.color)
 
 	if preset_moved(kind) {
@@ -1467,15 +1470,23 @@ attack_style_rows :: proc(kind: Enemy_Kind, attack: ^Attack_Style) {
 		preset_f32_row(fmt.tprintf("preset_{}_attack_fire_rate", kind), "Fire Rate", &a.fire_rate, 0, 10)
 		preset_f32_row(fmt.tprintf("preset_{}_attack_bullet_lifetime", kind), "Bullet Lifetime", &a.bullet_lifetime, 0, 10)
 	case Tell_Area:
-		int_slider_row(fmt.tprintf("preset_{}_attack_rotation_count", kind), "Rotation Count", &a.rotation_count, 1, TELL_AREA_MAX_ROTATION)
-		preset_f32_row(fmt.tprintf("preset_{}_attack_cooldown_seconds", kind), "Cooldown Seconds", &a.cooldown_seconds, 0, 10)
-		for i in 0 ..< clamp(a.rotation_count, 0, TELL_AREA_MAX_ROTATION) {
-			area := &a.rotation[i]
-			ui.text("Rotation {}", i)
-			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_radius", kind, i), "Radius", &area.radius, 0, 150)
-			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_reach", kind, i), "Reach", &area.reach, 0, 300)
-			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_damage", kind, i), "Damage", &area.damage, 0, 100)
-			preset_f32_row(fmt.tprintf("preset_{}_attack_rotation_{}_tell_seconds", kind, i), "Tell Seconds", &area.tell_seconds, 0, 3)
+		int_slider_row(fmt.tprintf("preset_{}_attack_phase_count", kind), "Phase Count", &a.phase_count, 1, TELL_AREA_MAX_PHASES)
+		for p in 0 ..< clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES) {
+			phase := &a.phases[p]
+			ui.text("Phase {}", p)
+			if p > 0 {
+				preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_enter_below", kind, p), "Enter Below", &phase.enter_below, 0, 1)
+			}
+			preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_cooldown_seconds", kind, p), "Cooldown Seconds", &phase.cooldown_seconds, 0, 10)
+			int_slider_row(fmt.tprintf("preset_{}_attack_phase_{}_rotation_count", kind, p), "Rotation Count", &phase.rotation_count, 1, TELL_AREA_MAX_ROTATION)
+			for i in 0 ..< clamp(phase.rotation_count, 0, TELL_AREA_MAX_ROTATION) {
+				area := &phase.rotation[i]
+				ui.text("Phase {} Rotation {}", p, i)
+				preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_rotation_{}_radius", kind, p, i), "Radius", &area.radius, 0, 150)
+				preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_rotation_{}_reach", kind, p, i), "Reach", &area.reach, 0, 300)
+				preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_rotation_{}_damage", kind, p, i), "Damage", &area.damage, 0, 100)
+				preset_f32_row(fmt.tprintf("preset_{}_attack_phase_{}_rotation_{}_tell_seconds", kind, p, i), "Tell Seconds", &area.tell_seconds, 0, 3)
+			}
 		}
 	}
 }
@@ -1494,9 +1505,28 @@ preset_f32_row :: proc(key: string, label: string, value: ^f32, min_value, max_v
 // sliders: hue means Movement Style (the preset test's rule), and the literal
 // writer names the constant a Kind uses - so the picker offers exactly the
 // colours the exported table may say, and only the ones that keep the rule
+// tuning_row's ^bool shape for a preset field that has no Tunable
+preset_bool_row :: proc(key: string, label: string, value: ^bool) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text(label)
+		ui.spacer()
+		if selectable_button(key, value^ ? "ON" : "OFF", value^) {
+			value^ = !value^
+		}
+	}
+}
+
+// the swatches are the family's named constants, which is every colour an
+// ordinary Kind may wear. A colour that is none of them (the Boss's
+// near-white literal) is shown first, selected, so the row says what the
+// table holds; the mode cannot author such a colour, only keep it.
 preset_color_row :: proc(kind: Enemy_Kind, family: Movement_Style_Kind, color: ^Color) {
 	if ui.row({gap = ui.theme.gap}) {
 		ui.text("Colour")
+		if !enemy_color_is_familys(color^, family) {
+			color_swatch(fmt.tprintf("preset_{}_color_literal_swatch", kind), color^)
+			selectable_button(fmt.tprintf("preset_{}_color_literal", kind), "LITERAL", true)
+		}
 		for constant, i in enemy_color_constants {
 			if constant.family != family {
 				continue

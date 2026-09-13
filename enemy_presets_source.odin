@@ -52,7 +52,7 @@ enemy_presets_source :: proc(presets: [Enemy_Kind]Enemy_Preset, allocator := con
 		write_preset_number(&b, preset.max_health)
 		strings.write_string(&b, ",\n\t\tcolor = ")
 		write_enemy_color_literal(&b, preset.color)
-		fmt.sbprintf(&b, ",\n\t\tgold = %v,\n\t}},\n", preset.gold)
+		fmt.sbprintf(&b, ",\n\t\tgold = %v,\n\t\tboss = %v,\n\t}},\n", preset.gold, preset.boss)
 	}
 	strings.write_string(&b, "}\n")
 
@@ -123,32 +123,48 @@ write_attack_literal :: proc(b: ^strings.Builder, attack: Attack_Style) {
 		write_preset_number(b, a.bullet_lifetime)
 		strings.write_string(b, "}")
 	case Tell_Area:
-		// only the live entries: the rest of the fixed array is whatever the
-		// editor last left there, and the literal's indexed form leaves them
-		// zero on the next build exactly as a hand-written one does
-		strings.write_string(b, "Tell_Area{rotation = {")
-		count := clamp(a.rotation_count, 0, TELL_AREA_MAX_ROTATION)
-		for i in 0 ..< count {
-			if i > 0 {
+		// only the live phases and, inside each, only the live entries: the
+		// rest of either fixed array is whatever the editor last left there,
+		// and the literal's indexed form leaves them zero on the next build
+		// exactly as a hand-written one does
+		strings.write_string(b, "Tell_Area{phases = {")
+		phase_count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+		for p in 0 ..< phase_count {
+			if p > 0 {
 				strings.write_string(b, ", ")
 			}
-			area := a.rotation[i]
-			fmt.sbprintf(b, "%v = {{radius = ", i)
-			write_preset_number(b, area.radius)
-			strings.write_string(b, ", reach = ")
-			write_preset_number(b, area.reach)
-			strings.write_string(b, ", damage = ")
-			write_preset_number(b, area.damage)
-			strings.write_string(b, ", tell_seconds = ")
-			write_preset_number(b, area.tell_seconds)
+			phase := a.phases[p]
+			fmt.sbprintf(b, "%v = {{enter_below = ", p)
+			write_preset_number(b, phase.enter_below)
+			strings.write_string(b, ", rotation = {")
+			count := clamp(phase.rotation_count, 0, TELL_AREA_MAX_ROTATION)
+			for i in 0 ..< count {
+				if i > 0 {
+					strings.write_string(b, ", ")
+				}
+				fmt.sbprintf(b, "%v = ", i)
+				write_area_attack_literal(b, phase.rotation[i])
+			}
+			fmt.sbprintf(b, "}}, rotation_count = %v, cooldown_seconds = ", phase.rotation_count)
+			write_preset_number(b, phase.cooldown_seconds)
 			strings.write_string(b, "}")
 		}
-		fmt.sbprintf(b, "}}, rotation_count = %v, cooldown_seconds = ", a.rotation_count)
-		write_preset_number(b, a.cooldown_seconds)
-		strings.write_string(b, "}")
+		fmt.sbprintf(b, "}}, phase_count = %v}}", a.phase_count)
 	case:
 		strings.write_string(b, "nil")
 	}
+}
+
+write_area_attack_literal :: proc(b: ^strings.Builder, area: Area_Attack) {
+	strings.write_string(b, "{radius = ")
+	write_preset_number(b, area.radius)
+	strings.write_string(b, ", reach = ")
+	write_preset_number(b, area.reach)
+	strings.write_string(b, ", damage = ")
+	write_preset_number(b, area.damage)
+	strings.write_string(b, ", tell_seconds = ")
+	write_preset_number(b, area.tell_seconds)
+	strings.write_string(b, "}")
 }
 
 // a family colour keeps its constant's name, so the literal still says which

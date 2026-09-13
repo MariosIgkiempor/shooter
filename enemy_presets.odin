@@ -11,6 +11,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 50,
 		color = ENEMY_GROUNDED_COLOR,
 		gold = 30,
+		boss = false,
 	},
 	.Spitter = {
 		movement = Grounded{speed = 35},
@@ -18,6 +19,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 35,
 		color = ENEMY_GROUNDED_PALE_COLOR,
 		gold = 20,
+		boss = false,
 	},
 	.Wraith = {
 		movement = Floater{speed = 45, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35},
@@ -25,6 +27,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 55,
 		color = ENEMY_FLOATER_COLOR,
 		gold = 35,
+		boss = false,
 	},
 	.Lancer = {
 		movement = Charger{speed = 55, dash_speed = 260, dash_distance = 140, tell_seconds = 0.5, recovery_seconds = 0.5, cooldown_seconds = 1.5},
@@ -32,6 +35,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 60,
 		color = ENEMY_CHARGER_COLOR,
 		gold = 50,
+		boss = false,
 	},
 	.Sentry = {
 		movement = nil,
@@ -39,13 +43,15 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 70,
 		color = ENEMY_INERT_COLOR,
 		gold = 35,
+		boss = false,
 	},
 	.Breaker = {
 		movement = Grounded{speed = 30},
-		attack = Tell_Area{rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}}, rotation_count = 1, cooldown_seconds = 1.5},
+		attack = Tell_Area{phases = {0 = {enter_below = 0, rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}}, rotation_count = 1, cooldown_seconds = 1.5}}, phase_count = 1},
 		max_health = 130,
 		color = ENEMY_GROUNDED_COLOR,
 		gold = 80,
+		boss = false,
 	},
 	.Mite = {
 		movement = Swarmer{speed = 65},
@@ -53,6 +59,7 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 20,
 		color = ENEMY_SWARMER_COLOR,
 		gold = 3,
+		boss = false,
 	},
 	.Gazer = {
 		movement = Floater{speed = 25, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35},
@@ -60,5 +67,6 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		max_health = 30,
 		color = ENEMY_FLOATER_PALE_COLOR,
 		gold = 20,
+		boss = false,
 	},
 }

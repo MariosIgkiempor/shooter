@@ -83,39 +83,79 @@ test_the_exporter_writes_only_a_variants_authored_fields :: proc(t: ^testing.T) 
 		bullet_lifetime  = 2,
 	}
 	dirty[.Breaker].attack = Tell_Area {
-		rotation         = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}, 1 = {radius = 99, reach = 99, damage = 99, tell_seconds = 9}},
-		rotation_count   = 1,
-		cooldown_seconds = 1.5,
-		rotation_index   = 3,
-		tell_remaining   = 0.4,
-		tell_centre      = {50, 50},
-		cooldown_timer   = 1,
+		phases = {
+			0 = {
+				rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}, 1 = {radius = 99, reach = 99, damage = 99, tell_seconds = 9}},
+				rotation_count = 1,
+				cooldown_seconds = 1.5,
+			},
+			1 = {enter_below = 0.5, rotation = {0 = {radius = 99, reach = 99, damage = 99, tell_seconds = 9}}, rotation_count = 1, cooldown_seconds = 9},
+		},
+		phase_count = 1,
+		phase_index = 2,
+		rotation_index = 3,
+		tell_remaining = 0.4,
+		tell_centre = {50, 50},
+		cooldown_timer = 1,
 	}
 	clean[.Breaker].attack = Tell_Area {
-		rotation         = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
-		rotation_count   = 1,
-		cooldown_seconds = 1.5,
+		phases = {
+			0 = {
+				rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
+				rotation_count = 1,
+				cooldown_seconds = 1.5,
+			},
+		},
+		phase_count = 1,
 	}
 
 	testing.expect(
 		t,
 		enemy_presets_source(dirty, context.temp_allocator) == enemy_presets_source(clean, context.temp_allocator),
-		"runtime fields, and rotation entries past rotation_count, should not reach the literal",
+		"runtime fields, rotation entries past rotation_count and phases past phase_count should not reach the literal",
 	)
 }
 
 @(test)
-test_the_exporter_writes_every_live_rotation_entry :: proc(t: ^testing.T) {
+test_the_exporter_writes_every_live_rotation_entry_and_phase :: proc(t: ^testing.T) {
 	presets := enemy_presets
 	presets[.Breaker].attack = Tell_Area {
-		rotation         = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}, 1 = {radius = 60, reach = 0, damage = 30, tell_seconds = 1.2}},
-		rotation_count   = 2,
-		cooldown_seconds = 1.5,
+		phases = {
+			0 = {
+				rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}, 1 = {radius = 60, reach = 0, damage = 30, tell_seconds = 1.2}},
+				rotation_count = 2,
+				cooldown_seconds = 1.5,
+			},
+			1 = {enter_below = 0.5, rotation = {0 = {radius = 70, reach = 10, damage = 31, tell_seconds = 0.8}}, rotation_count = 1, cooldown_seconds = 1.15},
+		},
+		phase_count = 2,
 	}
 
 	source := enemy_presets_source(presets, context.temp_allocator)
 	testing.expect(t, strings.contains(source, "1 = {radius = 60, reach = 0, damage = 30, tell_seconds = 1.2}"), "the second rotation entry should be written")
 	testing.expect(t, strings.contains(source, "rotation_count = 2"), "the rotation count should be written")
+	testing.expect(
+		t,
+		strings.contains(source, "1 = {enter_below = 0.5, rotation = {0 = {radius = 70, reach = 10, damage = 31, tell_seconds = 0.8}}, rotation_count = 1, cooldown_seconds = 1.15}"),
+		"the second phase should be written whole",
+	)
+	testing.expect(t, strings.contains(source, "phase_count = 2"), "the phase count should be written")
+}
+
+// the Boss flag is authored like any other preset field, so the literal
+// carries it for every Kind - false is written rather than omitted, because
+// an omitted field is one a reader has to know the default of
+@(test)
+test_the_exporter_writes_the_boss_flag_for_every_kind :: proc(t: ^testing.T) {
+	presets := enemy_presets
+	for &preset in presets {
+		preset.boss = false
+	}
+	presets[.Grunt].boss = true
+
+	source := enemy_presets_source(presets, context.temp_allocator)
+	testing.expect_value(t, strings.count(source, "boss = true,"), 1)
+	testing.expect_value(t, strings.count(source, "boss = false,"), len(Enemy_Kind) - 1)
 }
 
 // a family colour is the named constant, so the literal keeps saying which
@@ -177,7 +217,7 @@ test_every_family_has_a_default_style_of_its_kind :: proc(t: ^testing.T) {
 		attack := default_attack_style(family)
 		testing.expectf(t, attack_style_kind(attack) == family, "the default %v attack is a %v", family, attack_style_kind(attack))
 		if area, is_area := attack.(Tell_Area); is_area {
-			testing.expect(t, area.rotation_count >= 1, "a default Tell_Area should have a rotation to run")
+			testing.expect(t, area.phase_count >= 1 && area.phases[0].rotation_count >= 1, "a default Tell_Area should have a phase with a rotation to run")
 		}
 	}
 }

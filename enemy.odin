@@ -100,8 +100,15 @@ Enemy_Preset :: struct {
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	max_health: f32, // also what the body's drawn size derives from (enemy_body_size)
-	color:      Color, // always one of the family constants above
+	color:      Color, // one of the family constants above, except the Boss, whose licence is on value (near-white) rather than hue
 	gold:       int, // Gold this Kind's death is worth before Fortune scaling
+	// the Boss (CONTEXT.md): the one Kind that holds a reserved slot against
+	// MAX_ENEMIES, keeps a world-space Health indicator, always drops its
+	// Gold, is stamped into the shared flow field as an obstacle and steers by
+	// a field of its own at its size-derived radius. A flag rather than a
+	// derivation from phases or size so the seams all read one fact; the
+	// radii themselves stay derived from max_health (enemy_body_size).
+	boss:       bool,
 }
 
 // Gold anchors at this fraction of a Kind's max health: health is what the
@@ -249,28 +256,47 @@ Area_Attack :: struct {
 	tell_seconds: f32, // absolute seconds (ADR-0023), never a fraction of anything
 }
 
-// backs a fixed-size array, so it stays a compile-time constant (the same
-// exclusion ADR-0020 makes for SWORD_ECHO_COUNT). Rotations are stamped by
-// copy with the rest of the preset; a slice would alias the table.
+// back fixed-size arrays, so a preset stays a compile-time constant (the
+// same exclusion ADR-0020 makes for SWORD_ECHO_COUNT). Rotations and phases
+// are stamped by copy with the rest of the preset; a slice would alias the
+// table. Three phases is what the Boss entry in CONTEXT.md promises - "three
+// recognisable stretches" - and the ordinary roster authors one.
 TELL_AREA_MAX_ROTATION :: 4
+TELL_AREA_MAX_PHASES :: 3
 
-// the Tell-carrying Attack Style: a rotation of committed area attacks, each
-// shown on the ground for its own authored seconds before it lands. Once a
-// Tell starts it always resolves (ADR-0023) - the running branch never reads
-// the player - so the only way not to be hit is to have left the disc. The
-// authored half is what a preset writes; the runtime half is zero on a fresh
-// stamp (Melee.attack_timer's "runtime countdown, not editor-set"), which is
-// why spawn_enemy_at needs no init for it and a body still compares equal
-// to its preset. Ticket 21's boss stacks phases on top of this shape.
-Tell_Area :: struct {
+// one stretch of a Tell-carrying body's life: the rotation it cycles and the
+// recovery it takes between resolves. A body is born in phase 0 and enters
+// phase n once its health fraction drops strictly below phases[n].enter_below
+// (phase 0's threshold is ignored). Recovery is per phase, not per Kind,
+// because pacing is what makes a phase change legible alongside the bar
+// (boss-telegraph-and-phase-feel): the body visibly gets busier at the
+// moment the threshold is crossed.
+Tell_Phase :: struct {
+	enter_below:      f32, // health fraction this phase is entered below; ignored on phase 0
 	rotation:         [TELL_AREA_MAX_ROTATION]Area_Attack, // cycled in order
 	rotation_count:   int, // live entries of `rotation`, 1..TELL_AREA_MAX_ROTATION; 0 makes the body inert rather than a panic
 	cooldown_seconds: f32, // seconds from a resolve until the next Tell may start (Melee's attack_cooldown analogue)
+}
 
-	rotation_index:   int, // runtime: the entry the running (or next) Tell uses; advances on resolve, so mid-Tell it is the attack in flight
-	tell_remaining:   f32, // runtime: > 0 while a Tell is running; counted down in raw dt seconds, scaled by nothing
-	tell_centre:      Vec2, // runtime: the claimed disc's centre, locked at Tell start and never re-read
-	cooldown_timer:   f32, // runtime countdown between Tells, not editor-set
+// the Tell-carrying Attack Style: phases of committed area attacks, each
+// attack shown on the ground for its own authored seconds before it lands.
+// Once a Tell starts it always resolves (ADR-0023) - the running branch never
+// reads the player - so the only way not to be hit is to have left the disc,
+// and a phase change waits for the Tell in flight for the same reason. The
+// authored half is what a preset writes; the runtime half is zero on a fresh
+// stamp (Melee.attack_timer's "runtime countdown, not editor-set"), which is
+// why spawn_enemy_at needs no init for it and a body still compares equal
+// to its preset. The Boss is this shape with phase_count above one; nothing
+// about phases is boss-only.
+Tell_Area :: struct {
+	phases:         [TELL_AREA_MAX_PHASES]Tell_Phase,
+	phase_count:    int, // live entries of `phases`, 1..TELL_AREA_MAX_PHASES; 0 makes the body inert
+
+	phase_index:    int, // runtime: the phase the body is in; only ever advances (health is never regained), and only between Tells
+	rotation_index: int, // runtime: the entry the running (or next) Tell uses; advances on resolve, so mid-Tell it is the attack in flight
+	tell_remaining: f32, // runtime: > 0 while a Tell is running; counted down in raw dt seconds, scaled by nothing
+	tell_centre:    Vec2, // runtime: the claimed disc's centre, locked at Tell start and never re-read
+	cooldown_timer: f32, // runtime countdown between Tells, not editor-set
 }
 
 // one entry in a Map's spawn timeline, replacing the old fixed-position
@@ -540,9 +566,14 @@ default_attack_style :: proc(family: Attack_Style_Kind) -> Attack_Style {
 		}
 	case .Tell_Area:
 		return Tell_Area {
-			rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
-			rotation_count = 1,
-			cooldown_seconds = 1.5,
+			phases = {
+				0 = {
+					rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
+					rotation_count = 1,
+					cooldown_seconds = 1.5,
+				},
+			},
+			phase_count = 1,
 		}
 	case .None:
 		return nil
@@ -1179,7 +1210,8 @@ update_enemies :: proc(dt: f32) {
 				a.fire_timer = 1.0 / a.fire_rate
 			}
 		case Tell_Area:
-			tick := update_tell_area(&a, pos, game.player.rect, dt)
+			health_fraction := enemy.max_health > 0 ? enemy.health / enemy.max_health : 1
+			tick := update_tell_area(&a, pos, game.player.rect, health_fraction, dt)
 			if tick.planted {
 				delta = {}
 			}
@@ -1230,13 +1262,25 @@ Tell_Area_Tick :: struct {
 	damage:   f32, // > 0 only when the resolve caught the player's collision rect
 }
 
-// the attack the running (or next) Tell uses; false when the rotation is
-// empty, which makes a mis-authored preset inert rather than a modulo by zero
-tell_area_current_attack :: proc(a: Tell_Area) -> (Area_Attack, bool) {
-	if a.rotation_count <= 0 {
+// the phase the body is in; false when no phase is authored, which makes
+// a mis-authored preset inert rather than an index out of range
+tell_area_current_phase :: proc(a: Tell_Area) -> (Tell_Phase, bool) {
+	count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+	if count <= 0 || a.phase_index < 0 || a.phase_index >= count {
 		return {}, false
 	}
-	return a.rotation[a.rotation_index % a.rotation_count], true
+	return a.phases[a.phase_index], true
+}
+
+// the attack the running (or next) Tell uses; false when the phase's
+// rotation is empty, which makes a mis-authored preset inert rather than a
+// modulo by zero
+tell_area_current_attack :: proc(a: Tell_Area) -> (Area_Attack, bool) {
+	phase, ok := tell_area_current_phase(a)
+	if !ok || phase.rotation_count <= 0 {
+		return {}, false
+	}
+	return phase.rotation[a.rotation_index % phase.rotation_count], true
 }
 
 // where the disc lands: the player's feet at Tell start, clamped to `reach`
@@ -1277,28 +1321,44 @@ tell_area_progress :: proc(a: Tell_Area) -> (progress: f32, telling: bool) {
 // runs nothing here reads the player - leaving reach, god mode or dying does
 // not stop it (ADR-0023: a committed Tell always resolves). The only thing
 // that ends one early is the body's own death, which is not a bluff.
-update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: f32) -> (tick: Tell_Area_Tick) {
+//
+// `health_fraction` is the phase machine's one input: between Tells the body
+// advances into whichever authored phase its health has fallen below - all
+// the way, so one hit through two thresholds lands in the last - and never
+// back. The new phase's rotation starts from its head, but the recovery
+// still owed from the last resolve carries over: a phase change is not a
+// free attack.
+update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, health_fraction: f32, dt: f32) -> (tick: Tell_Area_Tick) {
+	if a.tell_remaining <= 0 {
+		count := clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+		for a.phase_index + 1 < count && health_fraction < a.phases[a.phase_index + 1].enter_below {
+			a.phase_index += 1
+			a.rotation_index = 0
+		}
+	}
+
+	phase, has_phase := tell_area_current_phase(a^)
 	attack, ok := tell_area_current_attack(a^)
-	if !ok {
+	if !has_phase || !ok {
 		return
 	}
 	player_box := actor_collision_rect(player_rect)
 
-	resolve := proc(a: ^Tell_Area, attack: Area_Attack, player_box: Rect, tick: ^Tell_Area_Tick) {
+	resolve := proc(a: ^Tell_Area, phase: Tell_Phase, attack: Area_Attack, player_box: Rect, tick: ^Tell_Area_Tick) {
 		tick.resolved = true
 		if rl.CheckCollisionCircleRec(a.tell_centre, attack.radius, player_box) {
 			tick.damage = attack.damage
 		}
 		a.tell_remaining = 0
-		a.cooldown_timer = a.cooldown_seconds
-		a.rotation_index = (a.rotation_index + 1) % a.rotation_count
+		a.cooldown_timer = phase.cooldown_seconds
+		a.rotation_index = (a.rotation_index + 1) % phase.rotation_count
 	}
 
 	if a.tell_remaining > 0 {
 		a.tell_remaining -= dt
 		tick.planted = true
 		if a.tell_remaining <= 0 {
-			resolve(a, attack, player_box, &tick)
+			resolve(a, phase, attack, player_box, &tick)
 		}
 		return
 	}
@@ -1323,7 +1383,7 @@ update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: 
 	if a.tell_remaining <= 0 {
 		// a zero-length Tell resolves the instant it starts, the way a
 		// zero-length Windup does (weapon.odin) - no frame of dead time
-		resolve(a, attack, player_box, &tick)
+		resolve(a, phase, attack, player_box, &tick)
 	}
 	return
 }
