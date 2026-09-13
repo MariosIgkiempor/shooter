@@ -170,8 +170,10 @@ test_load_map_reports_a_kind_name_this_build_does_not_know :: proc(t: ^testing.T
 
 // Fourth checkbox of
 // .scratch/content-expansion-build/issues/03-enums-persist-by-identity-string.md:
-// the one committed map fixture, migrated from ordinals to
-// identity strings, still loads and still means what it meant.
+// the first committed map fixture, migrated from ordinals to identity
+// strings, still loads and still means what it meant. Re-pinned by ticket
+// 17 to rung 1's own timeline: two Time_Elapsed triggers, Grunt and Spitter
+// only, no kill gate (that is rung 3's tool).
 @(test)
 test_the_committed_desert_dungeon_map_still_loads :: proc(t: ^testing.T) {
 	loaded, ok := load_map("data/maps/desert_dungeon.json")
@@ -182,18 +184,18 @@ test_the_committed_desert_dungeon_map_still_loads :: proc(t: ^testing.T) {
 	defer delete_map(loaded)
 	defer delete(loaded.name)
 
-	testing.expect_value(t, len(loaded.spawn_triggers), 3)
+	testing.expect_value(t, len(loaded.spawn_triggers), 2)
 
 	_, first_time_ok := loaded.spawn_triggers[0].condition.(Time_Elapsed)
 	testing.expect(t, first_time_ok, "trigger 0 should still be Time_Elapsed")
-	kills, kills_ok := loaded.spawn_triggers[1].condition.(Kills_Reached)
-	testing.expect(t, kills_ok, "trigger 1 should still be Kills_Reached")
-	testing.expect_value(t, kills.count, 15)
+	second, second_time_ok := loaded.spawn_triggers[1].condition.(Time_Elapsed)
+	testing.expect(t, second_time_ok, "trigger 1 should be Time_Elapsed")
+	testing.expect_value(t, second.seconds, f32(120))
 
 	testing.expect_value(t, loaded.spawn_triggers[0].composition[0].kind, Enemy_Kind.Grunt)
 	testing.expect_value(t, loaded.spawn_triggers[0].composition[1].kind, Enemy_Kind.Spitter)
-	testing.expect_value(t, loaded.spawn_triggers[1].composition[0].kind, Enemy_Kind.Wraith)
-	testing.expect_value(t, loaded.spawn_triggers[2].composition[0].kind, Enemy_Kind.Mite)
+	testing.expect_value(t, loaded.spawn_triggers[1].composition[0].kind, Enemy_Kind.Grunt)
+	testing.expect_value(t, loaded.spawn_triggers[1].composition[0].count, 2)
 }
 
 // -- The Map's own look (ADR-0024) --------------------------------------
@@ -291,14 +293,19 @@ test_the_accent_is_the_wall_pushed_toward_white :: proc(t: ^testing.T) {
 	testing.expect(t, accent.r > accent.b, "pushing toward white keeps the wall's own hue, so a warm wall gives a warm accent")
 }
 
-// the two shipped Maps run the ambient sets authored for them (ticket 22):
-// motes in the dust of the Desert, patches on the Hall's stone, both lit.
-// Reads the baked table, since a set that survived the file but not the bake
-// is a Map one layer short of the place it was authored to be.
+// the five shipped Maps run the ambient sets authored for them (tickets 22
+// and 17), each its own: motes in the dust of the Desert, unlit patches on
+// the Warren's loam, lit patches on the Hall's stone, ash motes over the
+// Ring's embers, and everything at once in the Keep. Reads the baked table,
+// since a set that survived the file but not the bake is a Map one layer
+// short of the place it was authored to be.
 @(test)
 test_the_baked_maps_run_their_authored_ambient_sets :: proc(t: ^testing.T) {
 	testing.expect_value(t, maps[.Desert_Dungeon].ambient, Ambient_Set{.Motes, .Light_Wash})
+	testing.expect_value(t, maps[.Root_Warren].ambient, Ambient_Set{.Floor_Patches})
 	testing.expect_value(t, maps[.Cold_Hall].ambient, Ambient_Set{.Floor_Patches, .Light_Wash})
+	testing.expect_value(t, maps[.Ember_Ring].ambient, Ambient_Set{.Motes, .Floor_Patches})
+	testing.expect_value(t, maps[.Pale_Keep].ambient, Ambient_Set{.Motes, .Floor_Patches, .Light_Wash})
 }
 
 // -- Map validity (ticket 15) ---------------------------------------------
@@ -341,10 +348,9 @@ test_every_baked_maps_player_start_is_on_a_floor_tile :: proc(t: ^testing.T) {
 // Flooded at radius 0 rather than the radius the game runs at, and that is
 // the whole design of this test. At FLOW_FIELD_INFLATION_RADIUS the flood
 // refuses to re-enter the envelope around a wall, so 741 of Desert Dungeon's
-// 2239 standable cells and 388 of Cold Hall's 2108 carry no distance - and 47
-// and 16 of those respectively have no filled neighbour either, so even
-// flow_field_reaches rejects them. Both Maps are connected; it is the radius
-// that is opinionated. At radius 0 `inflated` is stamped only on the wall
+// 2239 standable cells carry no distance - and 47 of those have no filled
+// neighbour either, so even flow_field_reaches rejects them. The Map is
+// connected; it is the radius that is opinionated. At radius 0 `inflated` is stamped only on the wall
 // cells themselves, so the filled set is exactly the source's walkable
 // component and "every walkable cell in the extent is filled" is the
 // connectivity question with nothing left over.
@@ -494,8 +500,8 @@ test_every_baked_maps_extent_is_within_bound :: proc(t: ^testing.T) {
 }
 
 // 1..N with N the number of authored Maps, not a number written here: the
-// ladder is however long it is, and ticket 17's four Maps make this "1
-// through 5" the moment they land. Gaps and duplicates both break ticket 16's
+// ladder is however long it is - five since ticket 17, and this test did not
+// change when it grew from two. Gaps and duplicates both break ticket 16's
 // gating, which opens rung n+1 on clearing rung n.
 @(test)
 test_the_baked_maps_rungs_cover_the_ladder_once_each :: proc(t: ^testing.T) {
@@ -553,6 +559,114 @@ test_every_baked_maps_time_limit_clears_its_own_timeline :: proc(t: ^testing.T) 
 			name,
 			map_data.time_limit,
 			end,
+		)
+	}
+}
+
+// -- The ladder as a whole (ticket 17) -------------------------------------
+// Two checks the single-Map sweep above cannot make, because they are about
+// how the five Maps relate: which Kinds each rung introduces, and that the
+// stakes climb with the rung.
+
+// The rung each Kind debuts on, from the enemy catalog
+// (.scratch/content-expansion/issues/04-enemy-catalog.md). Authored here
+// rather than on the preset: it is a fact about the ladder, not about the
+// Kind, and the preset table has no business knowing how many rungs there
+// are. Nothing debuts on rung 5 until the boss does.
+@(private = "file")
+kind_debut_rung := [Enemy_Kind]int {
+	.Grunt   = 1,
+	.Spitter = 1,
+	.Wraith  = 2,
+	.Lancer  = 2,
+	.Sentry  = 3,
+	.Breaker = 3,
+	.Mite    = 4,
+	.Gazer   = 4,
+}
+
+@(private = "file")
+map_places_kind :: proc(map_data: Map, kind: Enemy_Kind) -> bool {
+	for trigger in map_data.spawn_triggers {
+		for entry in trigger.composition {
+			if entry.kind == kind && entry.count > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// third checkbox of ticket 17, both halves: a rung places every Kind that
+// debuts on it, and no rung places a Kind from above it - climbing the
+// ladder is how a player first meets each Kind, so a Kind seen early is a
+// debut spent.
+@(test)
+test_every_baked_map_places_the_kinds_that_debut_on_its_rung :: proc(t: ^testing.T) {
+	for name in Map_Name {
+		map_data := maps[name]
+		for kind in Enemy_Kind {
+			debut := kind_debut_rung[kind]
+			placed := map_places_kind(map_data, kind)
+			if debut == map_data.rung {
+				testing.expectf(t, placed, "%v (rung %v): does not place %v, which debuts on this rung", name, map_data.rung, kind)
+			}
+			if debut > map_data.rung {
+				testing.expectf(t, !placed, "%v (rung %v): places %v, which does not debut until rung %v", name, map_data.rung, kind, debut)
+			}
+		}
+	}
+}
+
+// the mop-up slack a Map's time limit leaves past the earliest its timeline
+// can finish. Untimed (time_limit <= 0) is ok=false: it leaves infinite
+// slack, which no comparison below should be asked to order. `bounded` is
+// dropped, since the time-limit test above already fails an unbounded Map.
+@(private = "file")
+rung_slack :: proc(map_data: Map) -> (slack: f32, ok: bool) {
+	if map_data.time_limit <= 0 {
+		return 0, false
+	}
+	end, _ := map_timeline_earliest_end(map_data.spawn_triggers[:])
+	return map_data.time_limit - end, true
+}
+
+// the ladder's shape (ADR-0022): the multiplier rises with the rung, and the
+// slack tightens. Only the shape is pinned; the numbers are content tuning.
+// An untimed rung has no slack to order, so that half is skipped across it.
+@(test)
+test_the_ladders_stakes_escalate_with_its_rungs :: proc(t: ^testing.T) {
+	names := maps_in_rung_order()
+	for index in 1 ..< len(names) {
+		below := maps[names[index - 1]]
+		above := maps[names[index]]
+		testing.expectf(
+			t,
+			above.victory_multiplier > below.victory_multiplier,
+			"%v (rung %v) pays x%v, not more than %v (rung %v) at x%v",
+			names[index],
+			above.rung,
+			above.victory_multiplier,
+			names[index - 1],
+			below.rung,
+			below.victory_multiplier,
+		)
+
+		below_slack, below_timed := rung_slack(below)
+		above_slack, above_timed := rung_slack(above)
+		if !below_timed || !above_timed {
+			continue
+		}
+		testing.expectf(
+			t,
+			above_slack <= below_slack,
+			"%v (rung %v) leaves %v s of slack, looser than %v (rung %v) at %v s",
+			names[index],
+			above.rung,
+			above_slack,
+			names[index - 1],
+			below.rung,
+			below_slack,
 		)
 	}
 }
