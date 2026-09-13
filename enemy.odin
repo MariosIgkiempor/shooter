@@ -48,13 +48,45 @@ ENEMY_FLOATER_PALE_COLOR :: Color{200, 160, 240, 255}
 // it was added: a composition entry persists its Kind by identity string
 // (ADR-0028), so this enum can be reordered freely without renumbering the
 // maps. See CONTEXT.md's Enemy Kind entry and ADR-0020.
+//
+// The roster's design notes live here rather than on the preset table: that
+// table is generated source (enemy_presets.odin, written by the editor's
+// Presets mode), and a regenerated literal cannot carry a comment. Numbers
+// quoted below are playtest starting points that the Presets mode exists to
+// move; the deviations from the payout anchor are also pinned by name in
+// enemy_preset_test.
 Enemy_Kind :: enum {
 	Grunt,
 	Spitter,
+	// it drifts, so its touch is a little forgiving (a wider attack_range
+	// than the walkers')
 	Wraith,
+	// the first Kind that can catch a running player (roster row 4): it
+	// punishes kiting in a straight line, and is answered by stepping out of
+	// its lane during the Tell. The lane a Melee Lancer claims is ~40px to
+	// either side of its bearing (charger_lane_half_width), which at
+	// PLAYER_BASE_MOVE_SPEED takes ~0.4s to leave, so a 0.5s Tell leaves
+	// ~0.1s to read it; 140px at 260 px/s is a dash of just over half a
+	// second, arriving a touch further than a walk. Paid above the payout
+	// anchor on purpose: the highest threat per body on the roster.
 	Lancer,
+	// the Kind that holds a line (roster row 5): it never moves, so its
+	// pressure is fixed ground the player must cross open space to clear -
+	// the one answer on the roster that is neither kiting nor dodging. An
+	// Inert body cannot retreat, so its band has no floor; the ceiling is
+	// wide enough that a player approaching from the edge of view is already
+	// under fire. Paid below the payout anchor on purpose: a body that never
+	// moves is the safest kill on the roster.
 	Sentry,
+	// the first Kind that claims ground (roster row 6): heavy, slow, and
+	// answered by stepping out of its claimed disc rather than by kiting. At
+	// PLAYER_BASE_MOVE_SPEED leaving a 28px disc from its centre takes ~0.4s,
+	// so a 0.6s Tell leaves ~0.2s to read it. Its health puts it at 46px, the
+	// heaviest body the one-tile inflation envelope allows.
 	Breaker,
+	// a small body that lands at contact. Paid far below the payout anchor
+	// on purpose: Gold rolls per body, so at swarm density an anchored Mite
+	// would out-earn every other Kind.
 	Mite,
 	Gazer,
 }
@@ -79,129 +111,11 @@ Enemy_Preset :: struct {
 // rather than a drift
 ENEMY_GOLD_PER_MAX_HEALTH :: f32(0.6)
 
-// tuned by editing this table and rebuilding, exactly as weapon_presets is -
-// a Map picks Kinds and counts and cannot tune an enemy, so there is no
-// data/enemies.json and the level editor has no per-enemy sliders (ADR-0020).
-enemy_presets: [Enemy_Kind]Enemy_Preset = {
-	.Grunt = {
-		movement = Grounded{speed = 40},
-		attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
-		max_health = 50,
-		color = ENEMY_GROUNDED_COLOR,
-		gold = 30,
-	},
-	.Spitter = {
-		movement = Grounded{speed = 35},
-		attack = Ranged {
-			min_range = 60,
-			max_range = 120,
-			attack_damage = 8,
-			projectile_speed = 200,
-			fire_rate = 1,
-			bullet_lifetime = 2,
-		},
-		max_health = 35,
-		color = ENEMY_GROUNDED_PALE_COLOR,
-		gold = 20,
-	},
-	.Wraith = {
-		movement = Floater {
-			speed = 45,
-			wobble_amplitude = 80,
-			wobble_frequency = 3,
-			pull_strength = 0.35,
-		},
-		attack = Melee{attack_damage = 10, attack_range = 12, attack_cooldown = 1}, // it drifts, so its touch is a little forgiving
-		max_health = 55,
-		color = ENEMY_FLOATER_COLOR,
-		gold = 35,
-	},
-	// the first Kind that can catch a running player (roster row 4): it
-	// punishes kiting in a straight line, and is answered by stepping out of
-	// its lane during the Tell. Numbers are a playtest starting point - the
-	// lane a Melee Lancer claims is ~40px to either side of its bearing
-	// (charger_lane_half_width), which at PLAYER_BASE_MOVE_SPEED takes ~0.4s
-	// to leave, so 0.5s leaves ~0.1s to read it; 140px at 260 px/s is a
-	// dash of just over half a second.
-	.Lancer = {
-		movement = Charger {
-			speed = 55,
-			dash_speed = 260,
-			dash_distance = 140,
-			tell_seconds = 0.5,
-			recovery_seconds = 0.5,
-			cooldown_seconds = 1.5,
-		},
-		attack = Melee{attack_damage = 10, attack_range = 14, attack_cooldown = 1}, // a dash arriving reaches a touch further than a walk
-		max_health = 60,
-		color = ENEMY_CHARGER_COLOR,
-		gold = 50, // above the payout anchor on purpose: the highest threat per body on the roster
-	},
-	// the Kind that holds a line (roster row 5): it never moves, so its
-	// pressure is fixed ground the player must cross open space to clear -
-	// the one answer on the roster that is neither kiting nor dodging. An
-	// Inert body cannot retreat, so its band has no floor; the ceiling is
-	// wide enough that a player approaching from the edge of view is already
-	// under fire. Numbers are a playtest starting point.
-	.Sentry = {
-		movement = nil,
-		attack = Ranged {
-			min_range = 0,
-			max_range = 200,
-			attack_damage = 8,
-			projectile_speed = 180,
-			fire_rate = 0.8,
-			bullet_lifetime = 2,
-		},
-		max_health = 70,
-		color = ENEMY_INERT_COLOR,
-		gold = 35, // below the payout anchor on purpose: a body that never moves is the safest kill on the roster
-	},
-	// the first Kind that claims ground (roster row 6): heavy, slow, and
-	// answered by stepping out of its claimed disc rather than by kiting.
-	// Numbers are a playtest starting point - at PLAYER_BASE_MOVE_SPEED
-	// leaving a 28px disc from its centre takes ~0.4s, so 0.6s leaves ~0.2s
-	// to read it.
-	.Breaker = {
-		movement = Grounded{speed = 30},
-		attack = Tell_Area {
-			rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
-			rotation_count = 1,
-			cooldown_seconds = 1.5,
-		},
-		max_health = 130, // -> 46px, the heaviest body the one-tile inflation envelope allows
-		color = ENEMY_GROUNDED_COLOR,
-		gold = 80,
-	},
-	.Mite = {
-		movement = Swarmer{speed = 65},
-		attack = Melee{attack_damage = 10, attack_range = 8, attack_cooldown = 1}, // a small body lands at contact
-		max_health = 20,
-		color = ENEMY_SWARMER_COLOR,
-		// far below the payout anchor on purpose: Gold rolls per body, so at
-		// swarm density an anchored Mite would out-earn every other Kind
-		gold = 3,
-	},
-	.Gazer = {
-		movement = Floater {
-			speed = 25,
-			wobble_amplitude = 80,
-			wobble_frequency = 3,
-			pull_strength = 0.35,
-		},
-		attack = Ranged {
-			min_range = 60,
-			max_range = 120,
-			attack_damage = 8,
-			projectile_speed = 200,
-			fire_rate = 1,
-			bullet_lifetime = 2,
-		},
-		max_health = 30,
-		color = ENEMY_FLOATER_PALE_COLOR,
-		gold = 20,
-	},
-}
+// the table itself is enemy_presets.odin: generated source, edited from the
+// editor's Presets mode and written back by its Export, never loaded from a
+// data file (ADR-0027). A Map picks Kinds and counts and cannot tune an
+// enemy, so there is no data/enemies.json and no per-composition sliders
+// (ADR-0020).
 
 Enemy :: struct {
 	using rect: Rect, // bottom-center "feet" anchor, same convention as Player
@@ -558,6 +472,100 @@ movement_style_kind :: proc(movement: Movement_Style) -> Movement_Style_Kind {
 		return .Charger
 	}
 	return .Inert
+}
+
+// Attack_Style's discriminant, the sibling of Movement_Style_Kind above and
+// for the same reader: the editor's Presets mode switches a Kind's family by
+// it, and the roster tests iterate it.
+Attack_Style_Kind :: enum {
+	Melee,
+	Ranged,
+	Tell_Area,
+	None,
+}
+
+attack_style_kind :: proc(attack: Attack_Style) -> Attack_Style_Kind {
+	switch _ in attack {
+	case Melee:
+		return .Melee
+	case Ranged:
+		return .Ranged
+	case Tell_Area:
+		return .Tell_Area
+	}
+	return .None
+}
+
+// what the editor's Presets mode stamps when a Kind switches family: a
+// template of that family's authored half, taken from the roster row that
+// introduced it, so a fresh switch already obeys the rules enemy_preset_test
+// holds the table to (sustained speed under the player's, a rotation to run)
+default_movement_style :: proc(family: Movement_Style_Kind) -> Movement_Style {
+	switch family {
+	case .Grounded:
+		return Grounded{speed = 40}
+	case .Floater:
+		return Floater{speed = 45, wobble_amplitude = 80, wobble_frequency = 3, pull_strength = 0.35}
+	case .Swarmer:
+		return Swarmer{speed = 65}
+	case .Charger:
+		return Charger {
+			speed = 55,
+			dash_speed = 260,
+			dash_distance = 140,
+			tell_seconds = 0.5,
+			recovery_seconds = 0.5,
+			cooldown_seconds = 1.5,
+		}
+	case .Inert:
+		return nil
+	}
+	return nil
+}
+
+default_attack_style :: proc(family: Attack_Style_Kind) -> Attack_Style {
+	switch family {
+	case .Melee:
+		return Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1}
+	case .Ranged:
+		return Ranged {
+			min_range = 60,
+			max_range = 120,
+			attack_damage = 8,
+			projectile_speed = 200,
+			fire_rate = 1,
+			bullet_lifetime = 2,
+		}
+	case .Tell_Area:
+		return Tell_Area {
+			rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
+			rotation_count = 1,
+			cooldown_seconds = 1.5,
+		}
+	case .None:
+		return nil
+	}
+	return nil
+}
+
+// the family palette by source name, for the two readers that need a colour
+// as a *name* rather than a value: the Presets mode's swatch picker, which
+// offers exactly these so a Kind cannot be painted off its family, and the
+// literal writer, which emits the constant rather than its channels so the
+// generated table still reads as "this family's colour" (ADR-0027)
+Enemy_Color_Constant :: struct {
+	name:  string,
+	color: Color,
+}
+
+enemy_color_constants := []Enemy_Color_Constant {
+	{"ENEMY_GROUNDED_COLOR", ENEMY_GROUNDED_COLOR},
+	{"ENEMY_GROUNDED_PALE_COLOR", ENEMY_GROUNDED_PALE_COLOR},
+	{"ENEMY_FLOATER_COLOR", ENEMY_FLOATER_COLOR},
+	{"ENEMY_FLOATER_PALE_COLOR", ENEMY_FLOATER_PALE_COLOR},
+	{"ENEMY_SWARMER_COLOR", ENEMY_SWARMER_COLOR},
+	{"ENEMY_CHARGER_COLOR", ENEMY_CHARGER_COLOR},
+	{"ENEMY_INERT_COLOR", ENEMY_INERT_COLOR},
 }
 
 // -- Separation ---------------------------------------------------------

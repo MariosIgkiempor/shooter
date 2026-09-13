@@ -35,6 +35,12 @@ EditorMode :: enum {
 	// rather than an always-visible section because it's mutually exclusive
 	// with the work Tiles/Collisions do.
 	Tuning,
+	// the enemy roster's numbers (enemy_presets), edited live and persisted
+	// only by writing the table back out as source (ADR-0027). Its own mode
+	// for the reason Tuning has one, and one more: presets are global and
+	// shared by every Map, so editing one from inside a particular Map has
+	// nothing to do with that Map.
+	Presets,
 }
 
 EditorTool :: enum {
@@ -62,6 +68,18 @@ editor: struct {
 	// single value since a Tuning Group list is a menu rather than a set of
 	// independently-inspectable rows
 	expanded_tuning_group: Maybe(Tuning_Group),
+	// which Enemy Kind is expanded in Presets mode, the same one-open-at-a-
+	// time shape as expanded_tuning_group and for the same node-budget reason
+	expanded_preset_kind:  Maybe(Enemy_Kind),
+	// the table as this build compiled it, captured before anything could
+	// move a number: what Presets mode's Revert restores and what its "differs
+	// from the build" readout compares against. A copy rather than a
+	// re-read, since the build's numbers exist nowhere else once the live
+	// table has been edited.
+	built_enemy_presets:   [Enemy_Kind]Enemy_Preset,
+	// what the last Export did, shown in the panel - the log is not the
+	// editor's user interface (see save_refused below)
+	presets_export_status: string,
 	// which rows of the always-visible Spawn Trigger list (editor_window)
 	// are expanded, keyed by index into game.editing_map.spawn_triggers -
 	// purely a UI toggle, unrelated to the persisted Spawn_Trigger itself,
@@ -99,6 +117,7 @@ initialize_editor :: proc() {
 	rl.SetTextLineSpacing(0)
 	ui.set_measure_text_proc(editor_measure_text)
 
+	editor.built_enemy_presets = enemy_presets
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
@@ -225,6 +244,11 @@ update_editor :: proc() {
 
 	if editor.mode == .Collisions {
 		update_collisions_mode(hovered_coord)
+		return
+	}
+
+	// nothing in the world to edit: presets are global, not map content
+	if editor.mode == .Presets {
 		return
 	}
 
@@ -470,6 +494,7 @@ editor_window :: proc() {
 			mode_button("Collisions", .Collisions)
 			mode_button("Map", .Map)
 			mode_button("Tuning", .Tuning)
+			mode_button("Presets", .Presets)
 		}
 
 		switch editor.mode {
@@ -481,12 +506,15 @@ editor_window :: proc() {
 			map_mode_ui()
 		case .Tuning:
 			tuning_mode_ui()
+		case .Presets:
+			presets_mode_ui()
 		}
 
-		// Tuning edits globals, not the open Map - the Spawn Trigger panel and
-		// the map Save/Clear footer below would both be misleading next to it,
-		// so Tuning mode ends here with its own footer (see tuning_mode_ui)
-		if editor.mode == .Tuning {
+		// Tuning and Presets edit globals, not the open Map - the Spawn Trigger
+		// panel and the map Save/Clear footer below would both be misleading
+		// next to them, so both modes end here with their own footer (see
+		// tuning_mode_ui / presets_mode_ui)
+		if editor.mode == .Tuning || editor.mode == .Presets {
 			return
 		}
 
@@ -1244,16 +1272,215 @@ tunable_value_text :: proc(tunable: Tunable) -> string {
 	case ^int:
 		return fmt.tprintf("{}", value^)
 	case ^f32:
-		// two literal format strings rather than one with a runtime precision:
-		// Odin's fmt has no `{:.*f}`, and writing it emits its own error text
-		// into the label. A 0..1 ratio needs more digits to read as changing at
-		// all than a 0..800 speed does.
-		if tunable.max <= 2 {
-			return fmt.tprintf("{:.3f}", value^)
-		}
-		return fmt.tprintf("{:.1f}", value^)
+		return slider_value_text(value^, tunable.max)
 	}
 	return ""
+}
+
+// two literal format strings rather than one with a runtime precision:
+// Odin's fmt has no `{:.*f}`, and writing it emits its own error text into
+// the label. A 0..1 ratio needs more digits to read as changing at all than
+// a 0..800 speed does.
+slider_value_text :: proc(value: f32, max_value: f32) -> string {
+	if max_value <= 2 {
+		return fmt.tprintf("{:.3f}", value)
+	}
+	return fmt.tprintf("{:.1f}", value)
+}
+
+// -- Presets mode ------------------------------------------------------------
+// Every Enemy Kind as a collapsible row, at most one expanded (see
+// editor.expanded_preset_kind), editing enemy_presets in place. Edits are
+// live the way the table is read: the next body a Spawn Trigger stamps takes
+// the new numbers, and a colour shows on bodies already on the field since
+// draw_enemy reads it through the Kind every frame - but a body keeps the
+// numbers it was born with (ADR-0020), so a health or speed edit is judged
+// on the next spawn, not the current one.
+//
+// Persisted by Export alone, which writes the table back out as
+// enemy_presets.odin (ADR-0027): a tuning session is a diff to source, not a
+// data file, and the game can only ever run a roster it was built with.
+// Deliberately not exported on drag, for the reason Tuning isn't autosaved.
+
+presets_mode_ui :: proc() {
+	differing := 0
+	for kind in Enemy_Kind {
+		if enemy_presets[kind] != editor.built_enemy_presets[kind] {
+			differing += 1
+		}
+	}
+
+	if ui.row({gap = ui.theme.gap}) {
+		if ui.button("Export Source") {
+			editor.presets_export_status =
+				export_enemy_presets() ? fmt.tprintf("wrote {}", ENEMY_PRESETS_SOURCE_PATH) : fmt.tprintf("couldn't write {}", ENEMY_PRESETS_SOURCE_PATH)
+		}
+		if ui.button("Revert All") {
+			enemy_presets = editor.built_enemy_presets
+		}
+		ui.spacer()
+		ui.text("{} of {} differ from the build", differing, len(Enemy_Kind))
+	}
+	if editor.presets_export_status != "" {
+		ui.text("{}", editor.presets_export_status)
+	}
+	ui.text("edits reach the next spawn; bodies on the field keep what they were born with")
+
+	// explicitly keyed, as ui.scroll_area requires (see tuning_mode_ui)
+	if ui.scroll_area(
+		"preset_kinds",
+		{
+			size = {y = layout.fixed(game.window_height * TUNING_LIST_HEIGHT_FRACTION)},
+			gap = ui.theme.gap,
+		},
+	) {
+		preset_kind_list()
+	}
+}
+
+preset_kind_list :: proc() {
+	for kind in Enemy_Kind {
+		expanded := false
+		if current, ok := editor.expanded_preset_kind.?; ok {
+			expanded = current == kind
+		}
+
+		// a collapsed Kind still says whether it has been moved, the way a
+		// collapsed Tuning Group carries its override count
+		label := fmt.tprintf("{}", kind)
+		if enemy_presets[kind] != editor.built_enemy_presets[kind] {
+			label = fmt.tprintf("{} *", kind)
+		}
+
+		if selectable_button(fmt.tprintf("preset_kind_{}", kind), label, expanded) {
+			editor.expanded_preset_kind = expanded ? nil : kind
+		}
+
+		if expanded {
+			preset_rows(kind)
+		}
+	}
+}
+
+// every authored field of one Kind's preset, in the order the literal writes
+// them: the two style families with a family switch and the variant's own
+// numbers, then the body's health, colour and Gold
+preset_rows :: proc(kind: Enemy_Kind) {
+	preset := &enemy_presets[kind]
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Movement")
+		for family in Movement_Style_Kind {
+			key := fmt.tprintf("preset_{}_movement_{}", kind, family)
+			if selectable_button(key, fmt.tprintf("{}", family), movement_style_kind(preset.movement) == family) {
+				preset.movement = default_movement_style(family)
+			}
+		}
+	}
+	movement_style_rows(kind, &preset.movement)
+
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Attack")
+		for family in Attack_Style_Kind {
+			key := fmt.tprintf("preset_{}_attack_{}", kind, family)
+			if selectable_button(key, fmt.tprintf("{}", family), attack_style_kind(preset.attack) == family) {
+				preset.attack = default_attack_style(family)
+			}
+		}
+	}
+	attack_style_rows(kind, &preset.attack)
+
+	preset_f32_row(fmt.tprintf("preset_{}_max_health", kind), "Max Health", &preset.max_health, 1, 500)
+	map_int_row(fmt.tprintf("preset_{}_gold", kind), "Gold", &preset.gold, 0, 500)
+	preset_color_row(kind, &preset.color)
+
+	if preset^ != editor.built_enemy_presets[kind] {
+		if ui.row({gap = ui.theme.gap}) {
+			ui.spacer()
+			if selectable_button(fmt.tprintf("preset_{}_revert", kind), "Revert", false) {
+				preset^ = editor.built_enemy_presets[kind]
+			}
+		}
+	}
+}
+
+// the authored half of each variant, reached through the union so the
+// slider writes into the table itself; the runtime half is not offered
+movement_style_rows :: proc(kind: Enemy_Kind, movement: ^Movement_Style) {
+	switch &m in movement {
+	case Grounded:
+		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+	case Floater:
+		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_wobble_amplitude", kind), "Wobble Amplitude", &m.wobble_amplitude, 0, 200)
+		preset_f32_row(fmt.tprintf("preset_{}_wobble_frequency", kind), "Wobble Frequency", &m.wobble_frequency, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_pull_strength", kind), "Pull Strength", &m.pull_strength, 0, 1)
+	case Swarmer:
+		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+	case Charger:
+		preset_f32_row(fmt.tprintf("preset_{}_speed", kind), "Speed", &m.speed, 0, 120)
+		preset_f32_row(fmt.tprintf("preset_{}_dash_speed", kind), "Dash Speed", &m.dash_speed, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_dash_distance", kind), "Dash Distance", &m.dash_distance, 0, 400)
+		preset_f32_row(fmt.tprintf("preset_{}_tell_seconds", kind), "Tell Seconds", &m.tell_seconds, 0, 3)
+		preset_f32_row(fmt.tprintf("preset_{}_recovery_seconds", kind), "Recovery Seconds", &m.recovery_seconds, 0, 3)
+		preset_f32_row(fmt.tprintf("preset_{}_cooldown_seconds", kind), "Cooldown Seconds", &m.cooldown_seconds, 0, 10)
+	}
+}
+
+attack_style_rows :: proc(kind: Enemy_Kind, attack: ^Attack_Style) {
+	switch &a in attack {
+	case Melee:
+		preset_f32_row(fmt.tprintf("preset_{}_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_range", kind), "Range", &a.attack_range, 0, 60)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_cooldown", kind), "Cooldown", &a.attack_cooldown, 0, 5)
+	case Ranged:
+		preset_f32_row(fmt.tprintf("preset_{}_min_range", kind), "Min Range", &a.min_range, 0, 400)
+		preset_f32_row(fmt.tprintf("preset_{}_max_range", kind), "Max Range", &a.max_range, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_attack_damage", kind), "Damage", &a.attack_damage, 0, 100)
+		preset_f32_row(fmt.tprintf("preset_{}_projectile_speed", kind), "Projectile Speed", &a.projectile_speed, 0, 600)
+		preset_f32_row(fmt.tprintf("preset_{}_fire_rate", kind), "Fire Rate", &a.fire_rate, 0, 10)
+		preset_f32_row(fmt.tprintf("preset_{}_bullet_lifetime", kind), "Bullet Lifetime", &a.bullet_lifetime, 0, 10)
+	case Tell_Area:
+		map_int_row(fmt.tprintf("preset_{}_rotation_count", kind), "Rotation Count", &a.rotation_count, 1, TELL_AREA_MAX_ROTATION)
+		preset_f32_row(fmt.tprintf("preset_{}_cooldown_seconds", kind), "Cooldown Seconds", &a.cooldown_seconds, 0, 10)
+		for i in 0 ..< clamp(a.rotation_count, 0, TELL_AREA_MAX_ROTATION) {
+			area := &a.rotation[i]
+			ui.text("Rotation {}", i)
+			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_radius", kind, i), "Radius", &area.radius, 0, 150)
+			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_reach", kind, i), "Reach", &area.reach, 0, 300)
+			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_damage", kind, i), "Damage", &area.damage, 0, 100)
+			preset_f32_row(fmt.tprintf("preset_{}_rotation_{}_tell_seconds", kind, i), "Tell Seconds", &area.tell_seconds, 0, 3)
+		}
+	}
+}
+
+// a label+value line then the slider, tuning_row's shape for a field that
+// has no Tunable - the key folds in the Kind, since every Kind of one family
+// has a field by the same name
+preset_f32_row :: proc(key: string, label: string, value: ^f32, min_value, max_value: f32) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("{}: {}", label, slider_value_text(value^, max_value))
+	}
+	ui.slider(key, value, min_value, max_value)
+}
+
+// a swatch per family constant rather than channel sliders: a Kind's colour
+// is always one of the family constants (hue means Movement Style, which the
+// preset test holds), and the literal writer names the constant a Kind uses
+// - so the picker offers exactly the colours that have a name
+preset_color_row :: proc(kind: Enemy_Kind, color: ^Color) {
+	if ui.row({gap = ui.theme.gap}) {
+		ui.text("Colour")
+		for constant, i in enemy_color_constants {
+			key := fmt.tprintf("preset_{}_color_{}", kind, i)
+			color_swatch(fmt.tprintf("{}_swatch", key), constant.color)
+			// ENEMY_GROUNDED_PALE_COLOR reads as "GROUNDED_PALE" on the button
+			label := strings.trim_suffix(strings.trim_prefix(constant.name, "ENEMY_"), "_COLOR")
+			if selectable_button(key, label, constant.color == color^) {
+				color^ = constant.color
+			}
+		}
+	}
 }
 
 DEFAULT_SPAWN_TRIGGER_INTERVAL :: 3

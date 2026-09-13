@@ -555,22 +555,11 @@ register_enemy_tunables :: proc() {
 	register_tunable(.Enemies, "enemy.spawn_margin", "Off-screen Spawn Margin", &OFFSCREEN_SPAWN_MARGIN, 0, 300)
 	register_tunable(.Enemies, "enemy.spawn_max_retries", "Spawn Retries", &OFFSCREEN_SPAWN_MAX_RETRIES, 1, 30)
 
-	// per-Enemy Kind, since max health is authored on the Kind's preset now
-	// rather than shared by every enemy - the same loop-by-enum shape the
-	// weapon registry uses. Speed and attack numbers live inside the preset's
-	// bare unions and have no address a Tunable can hold; reaching those is
-	// the editor's Presets mode (content-expansion ticket 12).
-	for kind in Enemy_Kind {
-		name := tuning_slug_part(fmt.tprintf("{}", kind))
-		register_tunable(
-			.Enemies,
-			fmt.tprintf("enemy.{}.max_health", name),
-			fmt.tprintf("{} Max Health", kind),
-			&enemy_presets[kind].max_health,
-			1,
-			500,
-		)
-	}
+	// deliberately nothing from enemy_presets: a Kind's numbers, max health
+	// and Gold included, are the editor's Presets mode's, which persists them
+	// only by writing the table back out as source (ADR-0027). A Tunable over
+	// one would let Save Tuning persist a preset as data in tuning.json, a
+	// second authority the roster is not allowed to have.
 
 	// per-Movement Style, the same loop-by-enum shape the weapon registry uses
 	for style in Movement_Style_Kind {
@@ -673,10 +662,6 @@ register_economy_tunables :: proc() {
 	register_tunable(.Progression, "progression.weapon_tier_price_growth", "Weapon Tier Growth", &WEAPON_TIER_PRICE_GROWTH, 1, 4)
 	register_tunable(.Progression, "progression.level_base", "Level Base", &LEVEL_BASE, 1, 5000)
 	register_tunable(.Progression, "progression.level_growth", "Level Growth", &LEVEL_GROWTH, 1, 3)
-	for kind in Enemy_Kind {
-		name := tuning_slug_part(fmt.tprintf("{}", kind))
-		register_tunable(.Progression, fmt.tprintf("gold.{}", name), fmt.tprintf("{} Gold", kind), &enemy_presets[kind].gold, 0, 500)
-	}
 	register_tunable(.Progression, "progression.debug_gold_grant", "Debug Gold Grant", &DEBUG_GOLD_GRANT, 0, 10000)
 }
 
