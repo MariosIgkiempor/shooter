@@ -819,24 +819,18 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 
 	for entry in composition {
 		// geometry can only strand a body that geometry stops, so only those
-		// styles have their candidate tested against the field. Handing a
-		// Floater the field would reject every cell beside every wall - the
-		// flood's inflation envelope, 741 of Desert Dungeon's 2239 standable
-		// cells (ticket 04) - for a style that flies straight over them.
+		// styles have their candidate tested against the flood. Asking it for
+		// a Floater would reject every cell beside every wall - the flood's
+		// inflation envelope, 741 of Desert Dungeon's 2239 standable cells
+		// (ticket 04) - for a style that flies straight over them.
 		style := movement_style_kind(enemy_presets[entry.kind].movement)
-		field := movement_style_collides_with_terrain[style] ? &game.flow_field : nil
+		must_reach := movement_style_collides_with_terrain[style]
 
 		for _ in 0 ..< entry.count {
 			if len(game.enemies) >= MAX_ENEMIES {
 				return
 			}
-			point := pick_offscreen_spawn_point(
-				player_pos,
-				visible_rect,
-				map_bounds,
-				&game.current_map.tilemap,
-				field,
-			)
+			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.flow_field, must_reach)
 			spawn_enemy_at(point, entry.kind)
 		}
 	}
@@ -883,10 +877,10 @@ OFFSCREEN_SPAWN_MAX_RETRIES: int = 6
 // the tilemap's own world-space extent, spanning every authored tile - used
 // to clamp a chosen spawn point back onto the playable map. Computed by
 // scanning tiles rather than a stored width/height, since Tilemap only ever
-// grows sparse tile-by-tile (tilemap_place_tile) - the same "just scan every
-// tile" approach move_actor already uses rather than maintaining a cached
-// bound. (The flow field is the one thing that does index cells, and it
-// derives its own extent in cell space - see tilemap_cell_bounds.)
+// grows sparse tile-by-tile (tilemap_place_tile); it runs once per trigger
+// fire, not per body, so the scan is cheap enough to keep. (The flow field
+// is the one thing that does index cells, and it derives its own extent in
+// cell space - see tilemap_cell_bounds.)
 tilemap_world_bounds :: proc(tilemap: ^Tilemap) -> World_Bounds {
 	if len(tilemap.tiles) == 0 {
 		return {}
@@ -903,19 +897,16 @@ tilemap_world_bounds :: proc(tilemap: ^Tilemap) -> World_Bounds {
 	return bounds
 }
 
-// true if point falls inside a solid tile - mirrors move_actor's own
-// per-tile CheckCollisionRecs loop, just against a point instead of a moving
-// actor's box, since a spawn candidate has no size of its own to sweep
-tile_blocks_point :: proc(tilemap: ^Tilemap, point: Vec2) -> bool {
-	for tile in tilemap.tiles {
-		if !tile.collides {
-			continue
-		}
-		if rl.CheckCollisionPointRec(point, tile_world_rect(tile.world_coords, tilemap.tile_size)) {
-			return true
-		}
+// true if point falls inside a solid tile - the field's solid set read for a
+// point instead of a moving actor's box (move_actor), since a spawn candidate
+// has no size of its own to sweep. Flooring the point into a cell is the
+// same half-open test as the point-in-rect this replaced: a tile owns its
+// near edge and not its far one.
+tile_blocks_point :: proc(field: ^Flow_Field, point: Vec2) -> bool {
+	if !flow_field_is_usable(field) {
+		return false
 	}
-	return false
+	return flow_field_is_solid(field, world_to_cell_coord(point, field.tile_size))
 }
 
 // angle-around-player at (visible-rect half-diagonal + margin), retried up
@@ -927,10 +918,12 @@ tile_blocks_point :: proc(tilemap: ^Tilemap, point: Vec2) -> bool {
 // panning, wall-collision-retry, and map-edge-clamp scenarios - see the
 // enemy-spawn-revamp map's ticket 02.
 //
-// `field` is the flow field the spawned body must be able to walk out of, or
-// nil for a Movement Style geometry does not stop. It is passed rather than
-// read off `game` so this stays testable against a throwaway field, like every
-// other proc in this file's neighbourhood.
+// `field` is the live Map's flow field, read for its walls by every style and
+// for its flood - the cells the spawned body must be able to walk out of -
+// only when `must_reach`, which a Movement Style geometry does not stop
+// passes false. It is passed rather than read off `game` so this stays
+// testable against a throwaway field, like every other proc in this file's
+// neighbourhood.
 //
 // On exhausted retries it still spawns rather than dropping the spawn - a
 // trigger that silently under-spawns is the worse failure - but not
@@ -943,8 +936,8 @@ pick_offscreen_spawn_point :: proc(
 	player_pos: Vec2,
 	visible_rect: World_Bounds,
 	map_bounds: World_Bounds,
-	tilemap: ^Tilemap,
 	field: ^Flow_Field,
+	must_reach: bool,
 ) -> Vec2 {
 	half_w := (visible_rect.max_x - visible_rect.min_x) / 2
 	half_h := (visible_rect.max_y - visible_rect.min_y) / 2
@@ -955,7 +948,7 @@ pick_offscreen_spawn_point :: proc(
 	// cell outside the authored map, where the flood has nothing to say and an
 	// enemy falls back to straight-line chasing. Half a tile in is inside the
 	// last cell whatever the arithmetic rounds to.
-	inset := tilemap.tile_size * 0.5
+	inset := field.tile_size * 0.5
 	max_x := max(map_bounds.min_x, map_bounds.max_x - inset.x)
 	max_y := max(map_bounds.min_y, map_bounds.max_y - inset.y)
 
@@ -968,7 +961,7 @@ pick_offscreen_spawn_point :: proc(
 		point.x = clamp(point.x, map_bounds.min_x, max_x)
 		point.y = clamp(point.y, map_bounds.min_y, max_y)
 
-		if !flow_field_reaches(field, point) {
+		if must_reach && !flow_field_reaches(field, point) {
 			continue
 		}
 		if !found_reachable {
@@ -976,7 +969,7 @@ pick_offscreen_spawn_point :: proc(
 			found_reachable = true
 		}
 
-		if !point_in_world_bounds(point, visible_rect) && !tile_blocks_point(tilemap, point) {
+		if !point_in_world_bounds(point, visible_rect) && !tile_blocks_point(field, point) {
 			return point
 		}
 	}
@@ -1108,7 +1101,7 @@ update_enemies :: proc(dt: f32) {
 		// resolution and applies its delta directly - the same split that
 		// decided whether it read the flow field above
 		if movement_style_collides_with_terrain[kind] {
-			blocked := move_actor(&enemy.rect, &game.current_map.tilemap, delta)
+			blocked := move_actor(&enemy.rect, &game.flow_field, delta)
 			// a dash into a wall ends early into recovery rather than burning
 			// out against the geometry - so a wall is something the player can
 			// bait a Charger into (ADR-0025)

@@ -429,7 +429,7 @@ test_every_baked_maps_spawn_ring_is_reachable :: proc(t: ^testing.T) {
 			// ordinary. A candidate on open ground the player can never walk
 			// to is the permanent failure: a body spawned there holds the
 			// Map's Cleared condition open for the rest of the Run.
-			if tile_blocks_point(&map_data.tilemap, point) {
+			if tile_blocks_point(&field, point) {
 				continue
 			}
 			if !flow_field_reaches(&field, point) {

@@ -497,18 +497,28 @@ update_game :: proc() {
 		update_actor_squash(&game.player.squash, input.x != 0 || input.y != 0, rl.GetFrameTime())
 
 		input = linalg.normalize0(input)
-		move_actor(
-			&game.player.rect,
-			&game.current_map.tilemap,
-			input * rl.GetFrameTime() * game.player.move_speed,
-		)
 
-		// re-floods only when the player has crossed into a new cell, so the
-		// goal is a cell rather than a point and the field is exact rather
-		// than merely fresh. Placed here, right after the player moves and
-		// before update_spawn_triggers, so every later system this frame -
-		// spawn placement included - reads one field describing where the
-		// player actually is.
+		// the field is ensured twice around the player's move, and the two
+		// calls guard different things. This one guards the solid set that
+		// move_actor reads: apply_chosen_map invalidates the field when the
+		// Map is replaced, and the player moves before anything else on the
+		// next frame, so without it the first step on a new Map would be
+		// resolved against the previous Map's walls. On every other frame it
+		// is a handful of compares that find nothing changed.
+		flow_field_ensure(
+			&game.flow_field,
+			&game.current_map.tilemap,
+			Vec2{game.player.x, game.player.y},
+			i32(FLOW_FIELD_INFLATION_RADIUS),
+		)
+		move_actor(&game.player.rect, &game.flow_field, input * rl.GetFrameTime() * game.player.move_speed)
+
+		// this one guards the flood: it re-floods only when the player has
+		// crossed into a new cell, so the goal is a cell rather than a point
+		// and the field is exact rather than merely fresh. Placed right after
+		// the player moves and before update_spawn_triggers, so every later
+		// system this frame - spawn placement included - reads one field
+		// describing where the player actually is.
 		flow_field_ensure(
 			&game.flow_field,
 			&game.current_map.tilemap,
@@ -606,54 +616,106 @@ actor_collision_rect :: proc(rect: Rect) -> Rect {
 // Reports whether any tile resolved the move - a slide along a wall counts,
 // since one axis was stopped - which is the signal a Charger's dash ends on;
 // every other caller discards it.
-move_actor :: proc(rect: ^Rect, tilemap: ^Tilemap, delta: Vec2) -> (blocked: bool) {
+//
+// Walls come from the field's solid set (flow_field_is_solid), and only the
+// cells the box sweeps through on the axis's step are asked - 3x3 or so for a
+// 24px body on 16px cells at any speed the game moves at - where this used to
+// test every tile on the Map twice per body per frame (ADR-0025). The result
+// is identical for a body that is not already inside a wall, whatever the
+// step: resolution only ever pushes the box back toward where it started, so
+// every tile it can be pushed against lies in the swept range. A body already
+// embedded in a wall is the one case that differs, and it was never a
+// supported state - the old answer there depended on the tiles' authoring
+// order.
+//
+// The field must describe the live Map: update_game_state ensures it before
+// the player moves, and everything after that in the frame reads it built.
+move_actor :: proc(rect: ^Rect, field: ^Flow_Field, delta: Vec2) -> (blocked: bool) {
 	box := actor_collision_rect(rect^)
 
-	box.x += delta.x
+	// no tiles, or a Map{} with a zero tile_size: nothing to collide with,
+	// and no cell size to divide by
+	if !flow_field_is_usable(field) {
+		rect.x += delta.x
+		rect.y += delta.y
+		return false
+	}
 
-	for tile in tilemap.tiles {
-		if !tile.collides {
-			continue
-		}
+	// an axis with no step cannot be resolved (neither branch below fires),
+	// so it is not read at all - half the work for a body standing still
+	if delta.x != 0 {
+		swept := box
+		box.x += delta.x
 
-		tile_rect := tile_world_rect(tile.world_coords, tilemap.tile_size)
-		if !rl.CheckCollisionRecs(box, tile_rect) {
-			continue
-		}
+		min_cell, max_cell := swept_box_cell_range(swept, box, field.tile_size)
+		for y in min_cell.y ..= max_cell.y {
+			for x in min_cell.x ..= max_cell.x {
+				if !flow_field_is_solid(field, {x, y}) {
+					continue
+				}
 
-		if delta.x > 0 {
-			box.x = tile_rect.x - box.width
-			blocked = true
-		} else if delta.x < 0 {
-			box.x = tile_rect.x + tile_rect.width
-			blocked = true
+				tile_rect := tile_world_rect({x, y}, field.tile_size)
+				if !rl.CheckCollisionRecs(box, tile_rect) {
+					continue
+				}
+
+				if delta.x > 0 {
+					box.x = tile_rect.x - box.width
+					blocked = true
+				} else if delta.x < 0 {
+					box.x = tile_rect.x + tile_rect.width
+					blocked = true
+				}
+			}
 		}
 	}
 
-	box.y += delta.y
+	if delta.y != 0 {
+		swept := box
+		box.y += delta.y
 
-	for tile in tilemap.tiles {
-		if !tile.collides {
-			continue
-		}
+		min_cell, max_cell := swept_box_cell_range(swept, box, field.tile_size)
+		for y in min_cell.y ..= max_cell.y {
+			for x in min_cell.x ..= max_cell.x {
+				if !flow_field_is_solid(field, {x, y}) {
+					continue
+				}
 
-		tile_rect := tile_world_rect(tile.world_coords, tilemap.tile_size)
-		if !rl.CheckCollisionRecs(box, tile_rect) {
-			continue
-		}
+				tile_rect := tile_world_rect({x, y}, field.tile_size)
+				if !rl.CheckCollisionRecs(box, tile_rect) {
+					continue
+				}
 
-		if delta.y > 0 {
-			box.y = tile_rect.y - box.height
-			blocked = true
-		} else if delta.y < 0 {
-			box.y = tile_rect.y + tile_rect.height
-			blocked = true
+				if delta.y > 0 {
+					box.y = tile_rect.y - box.height
+					blocked = true
+				} else if delta.y < 0 {
+					box.y = tile_rect.y + tile_rect.height
+					blocked = true
+				}
+			}
 		}
 	}
 
 	// resolved box back to the bottom-center anchor
 	rect.x = box.x + box.width / 2
 	rect.y = box.y + box.height
+	return
+}
+
+// the cells the hull of a box's before-and-after positions falls in,
+// inclusive - every cell the box could be resolved against on that step. A
+// far edge exactly on a cell boundary names one cell more than the hull
+// strictly overlaps; that cell fails CheckCollisionRecs (touching is not
+// overlapping), so the range is safe to over-read and never under-reads.
+swept_box_cell_range :: proc(before, after: Rect, tile_size: Vec2) -> (min_cell, max_cell: Vec2i) {
+	min_corner := Vec2{min(before.x, after.x), min(before.y, after.y)}
+	max_corner := Vec2{
+		max(before.x + before.width, after.x + after.width),
+		max(before.y + before.height, after.y + after.height),
+	}
+	min_cell = world_to_cell_coord(min_corner, tile_size)
+	max_cell = world_to_cell_coord(max_corner, tile_size)
 	return
 }
 
