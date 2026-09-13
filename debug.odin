@@ -85,6 +85,20 @@ draw_debug_panel_ui :: proc() {
 				game.player.run_start_gold += DEBUG_GOLD_GRANT
 			}
 
+			// the Boss on demand, on any Map, so its fight can be watched
+			// without clearing four rungs first. Goes through
+			// fire_spawn_composition like a Spawn Trigger would - off-screen
+			// placement, the reserved slot - so what spawns is what Pale Keep
+			// spawns, only sooner.
+			for preset, kind in enemy_presets {
+				if !preset.boss {
+					continue
+				}
+				if ui.button(fmt.tprintf("Spawn {}", kind)) {
+					fire_spawn_composition([]Spawn_Composition_Entry{{kind = kind, count = 1}})
+				}
+			}
+
 			god_mode_label := fmt.tprintf("God Mode: {}", game.debug.god_mode ? "ON" : "OFF")
 			if ui.button(god_mode_label) {
 				game.debug.god_mode = !game.debug.god_mode
