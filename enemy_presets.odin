@@ -69,4 +69,12 @@ enemy_presets: [Enemy_Kind]Enemy_Preset = {
 		gold = 20,
 		boss = false,
 	},
+	.Warden = {
+		movement = Grounded{speed = 28},
+		attack = Tell_Area{phases = {0 = {enter_below = 0, rotation = {0 = {radius = 40, reach = 110, damage = 18, tell_seconds = 0.55}, 1 = {radius = 64, reach = 30, damage = 24, tell_seconds = 0.7}}, rotation_count = 2, cooldown_seconds = 1.5}, 1 = {enter_below = 0.66, rotation = {0 = {radius = 40, reach = 130, damage = 18, tell_seconds = 0.55}, 1 = {radius = 64, reach = 30, damage = 24, tell_seconds = 0.65}, 2 = {radius = 44, reach = 130, damage = 18, tell_seconds = 0.5}}, rotation_count = 3, cooldown_seconds = 1.15}, 2 = {enter_below = 0.33, rotation = {0 = {radius = 44, reach = 150, damage = 20, tell_seconds = 0.5}, 1 = {radius = 72, reach = 30, damage = 28, tell_seconds = 0.6}, 2 = {radius = 44, reach = 150, damage = 20, tell_seconds = 0.45}, 3 = {radius = 72, reach = 30, damage = 28, tell_seconds = 0.6}}, rotation_count = 4, cooldown_seconds = 0.8}}, phase_count = 3},
+		max_health = 220,
+		color = Color{236, 236, 230, 255},
+		gold = 250,
+		boss = true,
+	},
 }

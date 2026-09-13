@@ -44,6 +44,9 @@ test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
 
 	for kind in Enemy_Kind {
 		preset := enemy_presets[kind]
+		if preset.boss {
+			continue // its licence is on value, not hue: see the test below
+		}
 		family := movement_style_kind(preset.movement)
 		drift := hue_degrees_apart(preset.color, family_color[family])
 		testing.expectf(
@@ -55,6 +58,59 @@ test_every_presets_hue_is_its_movement_familys :: proc(t: ^testing.T) {
 			drift,
 		)
 	}
+}
+
+// the Boss's licence to break the hue rule is a licence on *value*, not hue
+// (content-expansion's Enemy catalog): five evenly-spaced families leave no
+// hue free, so the Boss is near-white - which no family occupies and no
+// Map's wall may either (Pale Keep's is kept off it). Low saturation is what
+// makes the exemption above honest: a hue nobody can read is a hue nobody
+// can mistake for a family's.
+@(test)
+test_the_boss_is_near_white_and_claims_no_familys_hue :: proc(t: ^testing.T) {
+	for kind in Enemy_Kind {
+		preset := enemy_presets[kind]
+		if !preset.boss {
+			continue
+		}
+		hsv := rl.ColorToHSV(preset.color)
+		testing.expectf(t, hsv.y < 0.15, "%v is the Boss and should be near-white, but its saturation is %.2f", kind, hsv.y)
+		testing.expectf(t, hsv.z > 0.9, "%v is the Boss and should be near-white, but its value is %.2f", kind, hsv.z)
+	}
+}
+
+// exactly one Boss, and it is what CONTEXT.md says it is: the heaviest Kind
+// on the roster, distinguished by phases. Two would mean two reserved
+// slots and two bars this code does not draw; none would mean rung 5 has
+// nothing to end a Run with.
+@(test)
+test_exactly_one_kind_is_the_boss_and_it_is_the_heaviest_with_every_phase :: proc(t: ^testing.T) {
+	bosses := 0
+	for kind in Enemy_Kind {
+		preset := enemy_presets[kind]
+		if !preset.boss {
+			continue
+		}
+		bosses += 1
+		for other in Enemy_Kind {
+			if other != kind {
+				testing.expectf(t, preset.max_health > enemy_presets[other].max_health, "the Boss (%v) should out-weigh %v", kind, other)
+			}
+		}
+		a, is_tell := preset.attack.(Tell_Area)
+		testing.expectf(t, is_tell, "%v is the Boss and should carry a Tell_Area, whose phases are what make it one", kind)
+		if is_tell {
+			testing.expectf(t, a.phase_count == TELL_AREA_MAX_PHASES, "%v should have all %d phases, has %d", kind, TELL_AREA_MAX_PHASES, a.phase_count)
+			for p in 0 ..< min(a.phase_count, TELL_AREA_MAX_PHASES) {
+				for i in 0 ..< min(a.phases[p].rotation_count, TELL_AREA_MAX_ROTATION) {
+					// a reach-0 attack only ever starts at contact, and at 28 px/s
+					// the Boss never reaches a player who keeps moving
+					testing.expectf(t, a.phases[p].rotation[i].reach > 0, "%v's phase %d attack %d has no reach, so a kiting player never sees its Tell", kind, p, i)
+				}
+			}
+		}
+	}
+	testing.expect_value(t, bosses, 1)
 }
 
 // the five family hues must stay far enough apart that the check above can
@@ -318,6 +374,9 @@ test_every_presets_body_fits_the_clamp_and_the_inflation_envelope :: proc(t: ^te
 			unclamped,
 			ENEMY_SIZE_MAX,
 		)
+		if preset.boss {
+			continue // the one body allowed past the corridor: it steers by a field of its own at its size-derived radius
+		}
 		size := enemy_body_size(preset.max_health)
 		testing.expectf(
 			t,
@@ -380,6 +439,7 @@ test_every_presets_payout_sits_on_the_anchor_or_is_a_named_deviation :: proc(t: 
 	named_deviation[.Sentry] = .Below // a body that never moves is the safest kill on the roster
 	named_deviation[.Lancer] = .Above // the highest threat per body
 	named_deviation[.Mite] = .Below // far below: Gold rolls per body, so at swarm density an anchored Mite out-earns the ladder
+	named_deviation[.Warden] = .Above // the Boss: a Run ends on it, and its drop is the one guaranteed payout
 
 	for kind in Enemy_Kind {
 		preset := enemy_presets[kind]

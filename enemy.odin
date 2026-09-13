@@ -92,6 +92,16 @@ Enemy_Kind :: enum {
 	// would out-earn every other Kind.
 	Mite,
 	Gazer,
+	// the Boss (roster row 9): the one body a Run ends on, and the last
+	// entry because Player.kills is indexed by this enum. Grounded and slow,
+	// so it never catches a player who keeps moving; what it does is claim
+	// ground in three phases (66% / 33%), each a longer rotation on a shorter
+	// recovery (1.5 -> 1.15 -> 0.8s) so the fight visibly quickens as the
+	// bar crosses a notch. Every attack reaches past its body, since at
+	// 28 px/s a contact-only attack would never start. Its health puts it at
+	// ENEMY_SIZE_MAX; its near-white is a licence on value, not hue; its
+	// 250 is paid above the anchor and always dropped.
+	Warden,
 }
 
 // the authored facts of one Enemy Kind - deliberately not a full Enemy,

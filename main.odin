@@ -1110,16 +1110,27 @@ TELL_FLASH_PULSE_MIX: f32 = 0.65 // how much further the pulse pushes it at full
 TELL_FLASH_PULSE_HZ: f32 = 3 // pulses per Tell at its start...
 TELL_FLASH_PULSE_HZ_GAIN: f32 = 6 // ...and how many more it gains by the end
 
-// a quickening pulse toward white while a Tell runs. It moves *value* only:
-// hue still means Movement Style family and alpha still means remaining
-// health (enemy_body_color), so the target keeps the base's own alpha and
-// the blend never touches it. White rather than the zone's amber on purpose
-// - green pulsed most of the way toward amber lands on Swarmer yellow, so a
-// telling Breaker would read as a Mite at the peak of every pulse.
+// a body lighter than this (0..255 luma) pulses toward dark instead of
+// white: the Boss's near-white sits at ~235, the palest roster colour
+// (ENEMY_GROUNDED_PALE_COLOR) at ~196
+TELL_FLASH_LIGHT_BODY_LUMA :: f32(215)
+TELL_FLASH_DARK :: Color{40, 40, 44, 255}
+
+// a quickening pulse away from the body's own value while a Tell runs. It
+// moves *value* only: hue still means Movement Style family and alpha still
+// means remaining health (enemy_body_color), so the target keeps the base's
+// own alpha and the blend never touches it. Toward white for the roster
+// rather than the zone's amber on purpose - green pulsed most of the way
+// toward amber lands on Swarmer yellow, so a telling Breaker would read as
+// a Mite at the peak of every pulse. Toward dark for a body already near
+// white (the Boss), which a pulse toward white would leave exactly as it
+// was - and a Tell nobody can see is not a Tell.
 tell_flash_color :: proc(base: Color, progress: f32) -> Color {
 	pulse := 0.5 + 0.5 * math.sin(progress * math.TAU * (TELL_FLASH_PULSE_HZ + progress * TELL_FLASH_PULSE_HZ_GAIN))
 	mix := TELL_FLASH_BASE_MIX + TELL_FLASH_PULSE_MIX * pulse * progress
-	return color_lerp(base, Color{255, 255, 255, base.a}, mix)
+	target := color_luma(base) > TELL_FLASH_LIGHT_BODY_LUMA ? TELL_FLASH_DARK : Color{255, 255, 255, 255}
+	target.a = base.a
+	return color_lerp(base, target, mix)
 }
 
 // weapon-animation feel. Hoisted out of draw_game so Tunables can hold their

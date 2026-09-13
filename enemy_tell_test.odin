@@ -15,7 +15,9 @@ import "core:testing"
 // `odin test . -define:ODIN_TEST_THREADS=1`.
 //
 // Rendering (the ground zone, the body flash) is deliberately untested, per
-// the content-expansion spec.
+// the content-expansion spec - except for the one property of the flash that
+// is a correctness fact rather than a look: it has to move a body of any
+// value, or the Boss's Tell has no "when" half.
 
 @(private = "file")
 a_tell :: proc(radius, reach, tell_seconds, cooldown: f32, damage: f32 = 10) -> Tell_Area {
@@ -476,4 +478,24 @@ test_update_enemies_feeds_a_bodys_health_fraction_to_its_tell :: proc(t: ^testin
 	update_enemies(STEP)
 
 	testing.expect_value(t, game.enemies[0].attack.(Tell_Area).phase_index, 2)
+}
+
+// the flash is a swing in value away from the body's own; toward white for
+// the roster, and toward dark for a near-white body, which a pulse toward
+// white would not visibly move at all
+@(test)
+test_the_tell_flash_visibly_moves_a_dark_body_and_a_near_white_one :: proc(t: ^testing.T) {
+	swing :: proc(base: Color) -> f32 {
+		return abs(color_luma(tell_flash_color(base, 1)) - color_luma(base))
+	}
+	VISIBLE :: f32(30) // 0..255 luma, at the mid-pulse mix progress 1 lands on
+
+	testing.expectf(t, swing(ENEMY_GROUNDED_COLOR) > VISIBLE, "a green body should visibly lighten, moved %.0f", swing(ENEMY_GROUNDED_COLOR))
+	testing.expectf(t, swing(ENEMY_GROUNDED_PALE_COLOR) > VISIBLE, "the palest roster body should still visibly lighten, moved %.0f", swing(ENEMY_GROUNDED_PALE_COLOR))
+	boss := enemy_presets[.Warden].color
+	testing.expectf(t, swing(boss) > VISIBLE, "the Boss's near-white should visibly darken, moved %.0f", swing(boss))
+	testing.expect(t, color_luma(tell_flash_color(boss, 1)) < color_luma(boss), "and the direction on a near-white body is down")
+
+	faded := Color{boss.r, boss.g, boss.b, 90}
+	testing.expect_value(t, tell_flash_color(faded, 0.5).a, u8(90))
 }
