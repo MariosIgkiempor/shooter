@@ -8,8 +8,12 @@ import rl "vendor:raylib"
 //
 // Replaces the old bottom-of-screen HUD (draw_hud) and the old flat-color
 // draw_health_bar - see ADR-0011 and CONTEXT.md's Resource indicator entry.
-// Every entity (Player, Enemy) shows a Health indicator, always visible.
-// The player additionally shows exactly one secondary indicator at a time,
+// The player shows a Health indicator, always visible; ordinary enemies
+// read their health off body opacity instead (enemy_body_color), and the
+// Boss is the one enemy that keeps an indicator, because opacity cannot
+// resolve a fraction on a body the player spends a minute killing (see the
+// Boss entry in CONTEXT.md). The player additionally shows exactly one
+// secondary indicator at a time,
 // keyed by the equipped Weapon's family: an Ammo indicator for Gun, or a
 // Cooldown indicator for Melee_Weapon/Magic. Every indicator is
 // fraction-only (no numeric readout): an icon beside a flat rect bar (no
@@ -79,6 +83,12 @@ Resource_Bar_Particle :: struct {
 // being a single global value, not a collection
 player_health_bar_particles:    [PLAYER_BAR_MAX_PARTICLES]Resource_Bar_Particle
 player_secondary_bar_particles: [PLAYER_BAR_MAX_PARTICLES]Resource_Bar_Particle
+
+// the Boss's Health indicator: one set, by the same reasoning - the roster
+// authors one Boss Kind and a Map places one body (find_boss). Its bar is
+// wider than the player's, so the count is scaled up with it.
+BOSS_BAR_MAX_PARTICLES :: 48
+boss_health_bar_particles: [BOSS_BAR_MAX_PARTICLES]Resource_Bar_Particle
 
 // keeps `particles` topped up to a count proportional to `frac` (index < that
 // count stays eligible to be shown, the rest are retired), each one bouncing
@@ -157,9 +167,11 @@ spawn_resource_bar_particle :: proc(p: ^Resource_Bar_Particle, bounds_width, bar
 // stacked rows stay left-aligned regardless of has_icon; a row without an
 // icon (the Health indicator - no icon, per the user) gives that freed space
 // to the bar instead of leaving a blank gutter, so it reads as a
-// deliberately wider bar, not a shifted one
-resource_indicator_row_rects :: proc(feet, doc_size: Vec2, row: int, has_icon: bool) -> (icon_pos: Vec2, bar: Rect) {
-	row_width := f32(RESOURCE_BAR_ICON_SIZE) + RESOURCE_BAR_ELEMENT_GAP + RESOURCE_BAR_WIDTH
+// deliberately wider bar, not a shifted one. `min_width` lets a body wider
+// than the row (the Boss) carry a bar at least as wide as itself; the
+// player's rows leave it at zero and are unchanged.
+resource_indicator_row_rects :: proc(feet, doc_size: Vec2, row: int, has_icon: bool, min_width: f32 = 0) -> (icon_pos: Vec2, bar: Rect) {
+	row_width := max(f32(RESOURCE_BAR_ICON_SIZE) + RESOURCE_BAR_ELEMENT_GAP + RESOURCE_BAR_WIDTH, min_width)
 	x := feet.x - row_width / 2
 
 	row_top := feet.y - doc_size.y - RESOURCE_BAR_GAP_ABOVE_SPRITE - RESOURCE_BAR_ROW_HEIGHT
@@ -278,3 +290,51 @@ draw_player_resource_indicators :: proc(player: Player) {
 	}
 }
 
+
+// -- the Boss's Health indicator --------------------------------------------
+
+// the player's Health row, sized to the Boss: no icon, and at least as wide
+// as the body it hangs over, so a bar the player reads from across the
+// court is not a 42px sliver above a 72px body
+boss_health_bar_rect :: proc(enemy: Enemy) -> Rect {
+	size := enemy_body_size(enemy.max_health)
+	_, bar := resource_indicator_row_rects({enemy.x, enemy.y}, {size, size}, 0, false, min_width = size)
+	return bar
+}
+
+update_boss_resource_indicator :: proc(enemies: []Enemy, dt: f32) {
+	index, found := find_boss(enemies)
+	if !found {
+		return
+	}
+	boss := enemies[index]
+	frac := boss.max_health > 0 ? clamp(boss.health / boss.max_health, 0, 1) : 0
+	update_resource_bar_particles(boss_health_bar_particles[:], boss_health_bar_rect(boss), frac, false, dt)
+}
+
+// the same fill the player's Health indicator uses, so health reads the
+// same colour on both. The notches are the Boss's phase thresholds: a phase
+// change is legible on the bar alone (boss-telegraph-and-phase-feel), and a
+// mark at each threshold says where the next one is.
+draw_boss_resource_indicator :: proc(enemies: []Enemy) {
+	index, found := find_boss(enemies)
+	if !found {
+		return
+	}
+	boss := enemies[index]
+	frac := boss.max_health > 0 ? clamp(boss.health / boss.max_health, 0, 1) : 0
+	bar := boss_health_bar_rect(boss)
+	draw_resource_bar(bar, frac, rl.ColorLerp(RESOURCE_CRITICAL_COLOR, RESOURCE_HEALTHY_COLOR, frac), boss_health_bar_particles[:])
+	if a, is_tell := boss.attack.(Tell_Area); is_tell {
+		draw_boss_phase_notches(bar, a)
+	}
+}
+
+BOSS_BAR_NOTCH_COLOR :: Color{30, 32, 38, 255} // the bar's own background, cut through the fill
+
+draw_boss_phase_notches :: proc(bar: Rect, a: Tell_Area) {
+	for p in 1 ..< clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES) {
+		x := bar.x + bar.width * clamp(a.phases[p].enter_below, 0, 1)
+		draw_rectangle({math.floor(x), bar.y, 1, bar.height}, BOSS_BAR_NOTCH_COLOR)
+	}
+}

@@ -618,6 +618,7 @@ update_game :: proc() {
 		update_particles(rl.GetFrameTime())
 		update_damage_numbers(rl.GetFrameTime())
 		update_player_resource_indicators(rl.GetFrameTime())
+		update_boss_resource_indicator(game.enemies[:], rl.GetFrameTime())
 
 		update_spawn_triggers(rl.GetFrameTime())
 		// after the triggers, so the frame the Boss spawns already has its
@@ -1333,6 +1334,7 @@ draw_game :: proc() {
 		draw_damage_numbers(game.damage_numbers[:])
 		if game.program_mode == .Playing {
 			draw_player_resource_indicators(game.player)
+			draw_boss_resource_indicator(game.enemies[:])
 		}
 
 		if game.program_mode == .Editing {
