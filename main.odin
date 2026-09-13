@@ -110,6 +110,13 @@ game: struct {
 	// definition. Never persisted - it is re-flooded from current_map on the
 	// first frame after any load anyway.
 	flow_field:             Flow_Field `json:"-"`,
+	// the Boss's own field (ADR-0025: "built lazily for the radii in use"):
+	// flooded from the same cell at the Boss's size-derived inflation radius
+	// and with no obstacles, since the shared field above stamps the Boss's
+	// own bulk as ground to route around and a body cannot steer by a field
+	// it is stamped into. Ensured only while a Boss is alive; unbuilt and
+	// unread otherwise.
+	boss_flow_field:        Flow_Field `json:"-"`,
 
 	// the live Map theme's ambient effects - the mote field and the floor
 	// patches (ambience.odin, ADR-0024). Here and not on Map for the flow
@@ -370,6 +377,7 @@ initialize_program :: proc() -> runtime.Context {
 
 deinitialize_program :: proc() {
 	flow_field_destroy(&game.flow_field)
+	flow_field_destroy(&game.boss_flow_field)
 	deinit_tunables()
 	deinitialize_renderer()
 	deinitialize_logger()
@@ -519,11 +527,17 @@ update_game :: proc() {
 		// next frame, so without it the first step on a new Map would be
 		// resolved against the previous Map's walls. On every other frame it
 		// is a handful of compares that find nothing changed.
+		// the Boss's bulk is the one obstacle the shared field routes around.
+		// Read once and handed to both ensures below: given to only one, each
+		// would see the other's stamp as a change and the field would
+		// re-flood twice a frame.
+		obstacles := enemy_flow_obstacles(game.enemies[:])
 		flow_field_ensure(
 			&game.flow_field,
 			&game.current_map.tilemap,
 			Vec2{game.player.x, game.player.y},
 			i32(FLOW_FIELD_INFLATION_RADIUS),
+			obstacles,
 		)
 		move_actor(&game.player.rect, &game.flow_field, input * rl.GetFrameTime() * game.player.move_speed)
 
@@ -538,6 +552,7 @@ update_game :: proc() {
 			&game.current_map.tilemap,
 			Vec2{game.player.x, game.player.y},
 			i32(FLOW_FIELD_INFLATION_RADIUS),
+			obstacles,
 		)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
@@ -605,6 +620,9 @@ update_game :: proc() {
 		update_player_resource_indicators(rl.GetFrameTime())
 
 		update_spawn_triggers(rl.GetFrameTime())
+		// after the triggers, so the frame the Boss spawns already has its
+		// field; before the enemies, so it steers by one this frame
+		ensure_boss_flow_field()
 		update_enemies(rl.GetFrameTime())
 
 		// last, so a kill landing this frame is already reflected in
@@ -1449,6 +1467,7 @@ draw_game :: proc() {
 	FLOW_FIELD_DEBUG_BAND_TINT :: Color{255, 255, 255, 230}
 	FLOW_FIELD_DEBUG_SOURCE :: Color{120, 255, 140, 230}
 	FLOW_FIELD_DEBUG_INFLATED :: Color{200, 140, 60, 45}
+	FLOW_FIELD_DEBUG_OBSTACLE :: Color{240, 240, 235, 70} // the Boss's stamp, in its own near-white
 	FLOW_FIELD_DEBUG_UNREACHED :: Color{220, 40, 40, 55}
 
 	// F8 debug panel visualizer: the shared flow field itself. A filled cell
@@ -1491,7 +1510,7 @@ draw_game :: proc() {
 				center := cell_center_to_world(coord, field.tile_size)
 
 				if cell.distance == FLOW_UNREACHED {
-					tint := cell.inflated ? FLOW_FIELD_DEBUG_INFLATED : FLOW_FIELD_DEBUG_UNREACHED
+					tint := cell.obstacle ? FLOW_FIELD_DEBUG_OBSTACLE : cell.inflated ? FLOW_FIELD_DEBUG_INFLATED : FLOW_FIELD_DEBUG_UNREACHED
 					draw_rectangle(
 						{
 							center.x - field.tile_size.x / 2,

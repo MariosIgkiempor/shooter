@@ -975,6 +975,67 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 	}
 }
 
+// -- the Boss's seams ------------------------------------------------------
+
+enemy_is_boss :: proc(enemy: Enemy) -> bool {
+	return enemy_presets[enemy.kind].boss
+}
+
+// the first Boss body alive, for the seams that want one: its field, its
+// Health indicator. The roster authors exactly one Boss Kind and a Map places
+// one, but nothing here assumes it - a second would simply go without.
+find_boss :: proc(enemies: []Enemy) -> (index: int, found: bool) {
+	for enemy, i in enemies {
+		if enemy_is_boss(enemy) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// what the shared flow field routes around: every Boss body, at half its
+// drawn size, about the centre of its collision box (the point move_actor
+// keeps for it, rather than its feet). Temp-allocated - read once per frame
+// by update_game_state and handed to both of its ensures.
+enemy_flow_obstacles :: proc(enemies: []Enemy, allocator := context.temp_allocator) -> []Flow_Obstacle {
+	obstacles := make([dynamic]Flow_Obstacle, allocator)
+	for enemy in enemies {
+		if !enemy_is_boss(enemy) {
+			continue
+		}
+		box := actor_collision_rect(enemy.rect)
+		append(
+			&obstacles,
+			Flow_Obstacle{centre = {box.x + box.width / 2, box.y + box.height / 2}, radius = enemy_body_size(enemy.max_health) / 2},
+		)
+	}
+	return obstacles[:]
+}
+
+// the field a body steers by: the Boss cannot read the shared field it is
+// stamped into, so it reads its own (ensure_boss_flow_field). Walls are the
+// same solid set in both, so move_actor stays on the shared one.
+enemy_steering_field :: proc(enemy: Enemy) -> ^Flow_Field {
+	return enemy_is_boss(enemy) ? &game.boss_flow_field : &game.flow_field
+}
+
+// floods game.boss_flow_field while a Boss is alive, at the radius its body
+// size asks for and with no obstacles; with none alive the field is left as
+// it is, unbuilt or stale, and nothing reads it
+ensure_boss_flow_field :: proc() {
+	boss_index, has_boss := find_boss(game.enemies[:])
+	if !has_boss {
+		return
+	}
+	tilemap := &game.current_map.tilemap
+	flow_field_ensure(
+		&game.boss_flow_field,
+		tilemap,
+		Vec2{game.player.x, game.player.y},
+		flow_field_radius_for_body(enemy_body_size(game.enemies[boss_index].max_health), tilemap.tile_size.x),
+	)
+}
+
 // stamps one Enemy from its Kind's preset. The union values are *copied*
 // onto the body rather than looked up per read, because Floater.wobble_phase,
 // Melee.attack_timer, Ranged.fire_timer and Tell_Area's running Tell are
@@ -1153,7 +1214,7 @@ update_enemies :: proc(dt: f32) {
 		case Grounded:
 			intent := movement_intent(pos, player_pos, enemy.attack)
 			goal := movement_goal_point(pos, player_pos, intent)
-			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			chase_dir := field_chase_direction(enemy_steering_field(enemy), pos, intent, goal)
 			final_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			delta = final_dir * m.speed * dt
 		case Charger:
@@ -1161,7 +1222,7 @@ update_enemies :: proc(dt: f32) {
 			// nowhere else, so a body on its lane cannot be pushed off it
 			intent := movement_intent(pos, player_pos, enemy.attack)
 			goal := movement_goal_point(pos, player_pos, intent)
-			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			chase_dir := field_chase_direction(enemy_steering_field(enemy), pos, intent, goal)
 			approach_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			tick := update_charger(&m, pos, player_pos, approach_dir, dt)
 			delta = tick.delta

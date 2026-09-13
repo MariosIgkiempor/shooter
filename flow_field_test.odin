@@ -713,9 +713,107 @@ test_flow_field_destroy_zeroes_the_field_and_is_safe_twice :: proc(t: ^testing.T
 
 	flow_field_destroy(&field)
 	testing.expect(t, len(field.cells) == 0, "destroy frees the cells")
+	testing.expect(t, len(field.obstacles) == 0, "destroy frees the obstacle stamps")
 	testing.expect(t, !field.built, "destroy leaves an unbuilt field")
 
 	flow_field_destroy(&field)
+}
+
+// -- obstacles (the Boss's bulk) -------------------------------------------
+
+// a 9x9 open room with the source in one corner and an obstacle in the
+// middle, so the far corner has to route around it
+@(private = "file")
+obstacle_room :: proc() -> Tilemap {
+	return fixture_room({".........", ".........", ".........", ".........", ".........", ".........", ".........", ".........", "........."})
+}
+
+@(test)
+test_flow_field_stamps_an_obstacle_as_ground_the_flood_routes_around :: proc(t: ^testing.T) {
+	tilemap := obstacle_room()
+	defer delete(tilemap.tiles)
+
+	open, blocked: Flow_Field
+	defer flow_field_destroy(&open)
+	defer flow_field_destroy(&blocked)
+
+	source := cell_world_center({0, 0})
+	// radius 8px covers only the body's own cell; the field's own radius 1
+	// grows it to the 3x3 around it, as it grows a wall's envelope
+	obstacle := Flow_Obstacle{centre = cell_world_center({4, 4}), radius = 8}
+	flow_field_rebuild(&open, &tilemap, source, 1)
+	flow_field_rebuild(&blocked, &tilemap, source, 1, {obstacle})
+
+	for dy in i32(-1) ..= 1 {
+		for dx in i32(-1) ..= 1 {
+			cell, _ := flow_field_cell(&blocked, {4 + dx, 4 + dy})
+			testing.expectf(t, cell.obstacle && cell.inflated, "cell %v should be stamped as the obstacle's", Vec2i{4 + dx, 4 + dy})
+			testing.expectf(t, cell.distance == FLOW_UNREACHED, "the flood should not enter the obstacle at %v", Vec2i{4 + dx, 4 + dy})
+		}
+	}
+	outside, _ := flow_field_cell(&blocked, {4, 2})
+	testing.expect(t, !outside.obstacle && !outside.inflated, "a cell two past the body is ordinary ground")
+
+	far := Vec2i{8, 8}
+	straight := flow_field_distance(&open, far)
+	around := flow_field_distance(&blocked, far)
+	testing.expect(t, around != FLOW_UNREACHED, "the far corner is still reachable around the obstacle")
+	testing.expectf(t, around > straight, "the far corner should be further round the obstacle (%v) than straight through (%v)", around, straight)
+	testing.expect_value(t, len(blocked.obstacles), 1)
+}
+
+@(test)
+test_flow_field_floods_out_from_a_source_standing_under_an_obstacle :: proc(t: ^testing.T) {
+	tilemap := obstacle_room()
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	// the player stands right against the Boss: the source is inside the
+	// stamp, and the flood still has to reach the room
+	flow_field_rebuild(&field, &tilemap, cell_world_center({4, 4}), 1, {{centre = cell_world_center({4, 4}), radius = 8}})
+
+	testing.expect(t, flow_field_distance(&field, {0, 0}) != FLOW_UNREACHED, "the corner should be filled from a source under the obstacle")
+	testing.expect(t, flow_field_distance(&field, {8, 8}) != FLOW_UNREACHED, "the far corner too")
+}
+
+@(test)
+test_flow_field_ensure_rebuilds_only_when_an_obstacle_crosses_a_cell :: proc(t: ^testing.T) {
+	tilemap := obstacle_room()
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+
+	source := cell_world_center({0, 0})
+	one := [1]Flow_Obstacle{{centre = {70, 70}, radius = 8}}
+	testing.expect(t, flow_field_ensure(&field, &tilemap, source, 1, one[:]), "the first ensure builds")
+	one[0].centre = {74, 74}
+	testing.expect(t, !flow_field_ensure(&field, &tilemap, source, 1, one[:]), "moving within the same cell changes nothing")
+	one[0].centre = {86, 70}
+	testing.expect(t, flow_field_ensure(&field, &tilemap, source, 1, one[:]), "crossing into the next cell rebuilds")
+	testing.expect(t, !flow_field_ensure(&field, &tilemap, source, 1, one[:]), "and settles again")
+	one[0].radius = 20
+	testing.expect(t, flow_field_ensure(&field, &tilemap, source, 1, one[:]), "a change of radius rebuilds")
+	testing.expect(t, flow_field_ensure(&field, &tilemap, source, 1), "the obstacle going away rebuilds")
+	testing.expect(t, !flow_field_ensure(&field, &tilemap, source, 1), "and settles with none")
+	testing.expect_value(t, len(field.obstacles), 0)
+	cell, _ := flow_field_cell(&field, {4, 4})
+	testing.expect(t, !cell.obstacle && cell.distance != FLOW_UNREACHED, "a rebuild without the obstacle clears its stamp")
+}
+
+// the inverse of the preset test's envelope formula: the radius at which a
+// body of a given size does not have its route threaded through a gap it
+// cannot fit. The roster (<= 48px) is the shipped radius 1; the Boss's 72px
+// asks for 2.
+@(test)
+test_flow_field_radius_for_body_derives_the_rosters_radius_and_the_boss_s :: proc(t: ^testing.T) {
+	testing.expect_value(t, flow_field_radius_for_body(16, 16), 0)
+	testing.expect_value(t, flow_field_radius_for_body(24, 16), i32(FLOW_FIELD_INFLATION_RADIUS))
+	testing.expect_value(t, flow_field_radius_for_body(48, 16), 1)
+	testing.expect_value(t, flow_field_radius_for_body(72, 16), 2)
+	testing.expect_value(t, flow_field_radius_for_body(72, 0), i32(FLOW_FIELD_INFLATION_RADIUS))
 }
 
 // -- the Attack Style seam -------------------------------------------------

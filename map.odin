@@ -374,6 +374,7 @@ apply_chosen_map :: proc(map_data: Map, chosen_identity: string) {
 	// holds describes the previous Map. Invalidate rather than destroy: the
 	// allocation is reused by the next flood.
 	flow_field_invalidate(&game.flow_field)
+	flow_field_invalidate(&game.boss_flow_field)
 	ambience_invalidate(&game.ambience)
 
 	if chosen_identity != game.active_map_pointer {
