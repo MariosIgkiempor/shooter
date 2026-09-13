@@ -18,3 +18,16 @@ always drops.
 - [ ] It holds a reserved slot against the concurrency cap
 - [ ] The field treats it as an obstacle at its own radius
 - [ ] Its drop is guaranteed, authored as a preset field rather than a special case
+
+## Comments
+
+Ticket 17 authored rung 5 as `data/maps/pale_keep.json` without a Warden to
+place. Its second Spawn Trigger — Breaker ×2, `Time_Elapsed` 15 s, repeating
+every 30 s for 150 s — is the stand-in for the boss and is the line this
+ticket replaces (a `One_Shot` Warden, most likely). The thin Grunt/Mite adds
+on the first trigger are the "adds thin enough to leave slots for it" the
+ladder brief asks for, and are the whole of the rest of the timeline. The
+Keep's wall (`[160, 156, 148]`) was kept off near-white so the Warden's own
+value stays unclaimed. The `time_limit` (210 s) was set as 30 s past that
+stand-in timeline's end; re-derive it once the Warden's own timeline exists.
+

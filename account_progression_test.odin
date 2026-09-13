@@ -390,27 +390,6 @@ test_clearing_a_rung_opens_exactly_the_next_one :: proc(t: ^testing.T) {
 	}
 }
 
-// the "nothing further" half again, without waiting for ticket 17's third
-// rung: the baked ladder has only rungs 1 and 2 today, so the loop above
-// has nothing to check. Lifting rung 2's Map to rung 3 leaves a gap at 2,
-// and a clear of rung 1 must not reach across it.
-@(test)
-test_clearing_a_rung_does_not_open_a_rung_two_above_it :: proc(t: ^testing.T) {
-	previous_cleared := game.player.maps_cleared
-	defer game.player.maps_cleared = previous_cleared
-	game.player.maps_cleared = {}
-
-	first, _ := map_name_at_rung(1)
-	second, _ := map_name_at_rung(2)
-	previous_rung := maps[second].rung
-	defer maps[second].rung = previous_rung
-	maps[second].rung = 3
-
-	record_map_cleared(first)
-
-	testing.expect(t, !map_rung_open(second), "clearing rung 1 should not open rung 3")
-}
-
 // fourth checkbox of ticket 16: the set is one bool per Map, so a second
 // clear of the same rung is the same write
 @(test)
