@@ -186,7 +186,7 @@ test_fire_spawn_composition_silently_skips_spawns_past_max_enemies :: proc(t: ^t
 	previous_map, previous_player, previous_enemies, previous_camera := spawn_trigger_test_setup()
 	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
 
-	for _ in 0 ..< MAX_ENEMIES - 1 {
+	for _ in 0 ..< MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS - 1 {
 		append(&game.enemies, Enemy{})
 	}
 
@@ -195,8 +195,38 @@ test_fire_spawn_composition_silently_skips_spawns_past_max_enemies :: proc(t: ^t
 
 	testing.expectf(
 		t,
-		len(game.enemies) == MAX_ENEMIES,
-		"a composition batch that would exceed MAX_ENEMIES should spawn only up to the cap, got %v",
+		len(game.enemies) == MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS,
+		"an ordinary batch that would exceed MAX_ENEMIES should spawn only up to the cap less the Boss's slot, got %v",
 		len(game.enemies),
 	)
+}
+
+// the reservation: a field full of ordinary bodies still has room for the
+// Boss, and an ordinary entry hitting its cap earlier in the same batch does
+// not drop the Boss entry behind it - a rung whose Boss never spawned would
+// clear the moment its timeline ran dry
+@(test)
+test_fire_spawn_composition_keeps_the_last_slot_for_the_boss :: proc(t: ^testing.T) {
+	// flagged for the test rather than found in the table, so this pins the
+	// reservation to the flag and not to whichever Kind currently carries it
+	boss := Enemy_Kind.Grunt
+	previous_preset := enemy_presets[boss]
+	defer enemy_presets[boss] = previous_preset
+	enemy_presets[boss].boss = true
+
+	previous_map, previous_player, previous_enemies, previous_camera := spawn_trigger_test_setup()
+	defer spawn_trigger_test_teardown(previous_map, previous_player, previous_enemies, previous_camera)
+
+	for _ in 0 ..< MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS - 1 {
+		append(&game.enemies, Enemy{})
+	}
+
+	composition := []Spawn_Composition_Entry{{kind = .Spitter, count = 3}, {kind = boss, count = 1}}
+	fire_spawn_composition(composition)
+
+	testing.expectf(t, len(game.enemies) == MAX_ENEMIES, "the Boss should take the reserved slot, got %v of %v", len(game.enemies), MAX_ENEMIES)
+	testing.expect(t, game.enemies[len(game.enemies) - 1].kind == boss, "the last body spawned should be the Boss")
+
+	fire_spawn_composition(composition)
+	testing.expectf(t, len(game.enemies) == MAX_ENEMIES, "MAX_ENEMIES is still the ceiling for the Boss, got %v", len(game.enemies))
 }

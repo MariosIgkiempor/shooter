@@ -9,8 +9,11 @@ import rl "vendor:raylib"
 // is authored against: the swarm rung is authored at 150-250 concurrent, a
 // number set by screen legibility, and fire_spawn_composition silently
 // truncates a batch here so a broken timeline fills the field rather than
-// the heap
+// the heap. The last ENEMY_BOSS_RESERVED_SLOTS of it are the Boss's: an
+// ordinary Kind stops short of them, so a Map full of adds cannot crowd out
+// the one body its Run cannot be Cleared without.
 MAX_ENEMIES: int = 4096
+ENEMY_BOSS_RESERVED_SLOTS :: 1
 
 // -- the movement-family palette -------------------------------------------
 //
@@ -959,9 +962,12 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 		style := movement_style_kind(enemy_presets[entry.kind].movement)
 		must_reach := movement_style_collides_with_terrain[style]
 
+		// per entry rather than per batch, so an ordinary entry that fills
+		// the field does not drop a Boss entry behind it in the same batch
+		cap := enemy_presets[entry.kind].boss ? MAX_ENEMIES : MAX_ENEMIES - ENEMY_BOSS_RESERVED_SLOTS
 		for _ in 0 ..< entry.count {
-			if len(game.enemies) >= MAX_ENEMIES {
-				return
+			if len(game.enemies) >= cap {
+				break
 			}
 			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.flow_field, must_reach)
 			spawn_enemy_at(point, entry.kind)

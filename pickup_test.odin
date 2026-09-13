@@ -43,3 +43,34 @@ test_every_pickup_kind_changes_something_the_player_can_read :: proc(t: ^testing
 		)
 	}
 }
+
+// the Boss's drop is guaranteed and it is Gold: rolled through the ordinary
+// path a Boss would pay out roughly one kill in eight (PICKUP_DROP_CHANCE,
+// then a coin flip between kinds), and a Boss that drops nothing reads as a
+// bug. Every other Kind still rolls.
+@(test)
+test_a_boss_kill_always_drops_its_gold :: proc(t: ^testing.T) {
+	// flagged for the test, so this pins the drop to the flag and not to
+	// whichever Kind currently carries it
+	boss := Enemy_Kind.Grunt
+	previous_preset := enemy_presets[boss]
+	defer enemy_presets[boss] = previous_preset
+	enemy_presets[boss].boss = true
+
+	previous_pickups := game.pickups
+	defer {
+		delete(game.pickups)
+		game.pickups = previous_pickups
+	}
+	game.pickups = {}
+
+	for _ in 0 ..< 20 {
+		maybe_spawn_pickup({10, 10}, boss)
+	}
+
+	testing.expect_value(t, len(game.pickups), 20)
+	for pickup in game.pickups {
+		testing.expect(t, pickup.kind == .Gold, "a Boss drop is always Gold")
+		testing.expect_value(t, pickup.gold, enemy_gold_value(boss))
+	}
+}
