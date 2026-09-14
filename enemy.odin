@@ -1142,6 +1142,36 @@ tile_blocks_point :: proc(field: ^Flow_Field, point: Vec2) -> bool {
 	return flow_field_is_solid(field, world_to_cell_coord(point, field.tile_size))
 }
 
+// true if a body stood with its feet at `feet` would have its collision box
+// inside a solid tile - the test a spawn candidate needs, where
+// tile_blocks_point is the test a point needs. A candidate is a point, but
+// what is stamped on it is a 24px body, and a point on the floor cell beside
+// a wall puts that body's box into the wall. move_actor documents a body
+// already inside a wall as a state it never supported, and resolves it by
+// pushing the box out the wall's far side - through the Map's border, that
+// is off the Map for good (ticket 23's headless Run). The box and the cell
+// range are the ones move_actor collides, so the two agree on "in a wall".
+tile_blocks_body :: proc(field: ^Flow_Field, feet: Vec2) -> bool {
+	if !flow_field_is_usable(field) {
+		return false
+	}
+	box := actor_collision_rect({feet.x, feet.y, 0, 0})
+	min_cell, max_cell := swept_box_cell_range(box, box, field.tile_size)
+	for y in min_cell.y ..= max_cell.y {
+		for x in min_cell.x ..= max_cell.x {
+			if !flow_field_is_solid(field, {x, y}) {
+				continue
+			}
+			// the range over-reads by a cell on a far edge exactly on a
+			// boundary; touching is not overlapping, as move_actor has it
+			if rl.CheckCollisionRecs(box, tile_world_rect({x, y}, field.tile_size)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // angle-around-player at (visible-rect half-diagonal + margin), retried up
 // to a small cap against still-visible/wall-blocked/unreachable candidates,
 // then clamped into the map's bounds (map_bounds is a param, not recomputed
@@ -1194,6 +1224,14 @@ pick_offscreen_spawn_point :: proc(
 		point.x = clamp(point.x, map_bounds.min_x, max_x)
 		point.y = clamp(point.y, map_bounds.min_y, max_y)
 
+		// the body, not the point: a candidate on the floor beside a wall
+		// is a body inside that wall (tile_blocks_body). Tested before the
+		// candidate can be remembered as reachable, since a body the wall
+		// then pushes off the Map is the very stranding that fallback exists
+		// to avoid.
+		if tile_blocks_body(field, point) {
+			continue
+		}
 		if must_reach && !flow_field_reaches(field, point) {
 			continue
 		}
@@ -1202,7 +1240,7 @@ pick_offscreen_spawn_point :: proc(
 			found_reachable = true
 		}
 
-		if !point_in_world_bounds(point, visible_rect) && !tile_blocks_point(field, point) {
+		if !point_in_world_bounds(point, visible_rect) {
 			return point
 		}
 	}

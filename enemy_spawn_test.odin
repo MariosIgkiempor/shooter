@@ -67,6 +67,66 @@ test_tile_blocks_point_true_only_for_a_colliding_tile_under_the_point :: proc(t:
 	testing.expect(t, !tile_blocks_point(&never_built, {20, 20}), "a field never built has no walls to block with")
 }
 
+// ticket 23's headless Run found bodies leaving the Map through its border:
+// a candidate was tested as a point, but the body stamped on it is 24px
+// wide, and a point on the floor cell beside a wall puts the body's box
+// inside that wall - a state move_actor documents as unsupported and
+// resolves by pushing the box out the far side. The box is the same one
+// move_actor collides, so the two agree on what "in a wall" means.
+@(test)
+test_tile_blocks_body_true_when_the_bodys_box_overlaps_a_wall :: proc(t: ^testing.T) {
+	// a wall column on the left, a wall row along the top
+	tilemap := fixture_room({"#####", "#....", "#....", "#....", "#...."})
+	defer delete(tilemap.tiles)
+	field := fixture_field(&tilemap, {56, 56})
+	defer flow_field_destroy(&field)
+
+	// feet at the centre of cell (1, 3): the box spans x 12..36, into col 0
+	testing.expect(t, tile_blocks_body(&field, {24, 56}), "a body one cell off a wall column has its box inside the wall")
+	testing.expect(t, !tile_blocks_point(&field, {24, 56}), "the point itself is on the floor - the point test is what missed this")
+	// cell (2, 3): x 28..52, clear of col 0
+	testing.expect(t, !tile_blocks_body(&field, {40, 56}), "two cells off, the box is clear")
+	// the box hangs 24px above the feet: feet at the centre of cell (3, 1)
+	// put the box's top 16px into the wall row
+	testing.expect(t, tile_blocks_body(&field, {56, 24}), "a body one cell below a wall row has its box inside the wall")
+	testing.expect(t, !tile_blocks_body(&field, {56, 40}), "two cells below, the box is clear")
+
+	never_built: Flow_Field
+	testing.expect(t, !tile_blocks_body(&never_built, {24, 56}), "a field never built has no walls to block with")
+}
+
+@(test)
+test_pick_offscreen_spawn_point_never_embeds_the_body_in_a_wall :: proc(t: ^testing.T) {
+	// a walled 9x9 room; the player at its centre, a ring of 48px landing
+	// candidates on the floor cells that hug the walls
+	tilemap := fixture_room(
+		{
+			"#########",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#########",
+		},
+	)
+	defer delete(tilemap.tiles)
+	player_pos := Vec2{72, 72}
+	field := fixture_field(&tilemap, player_pos)
+	defer flow_field_destroy(&field)
+
+	// half-diagonal ~18 + the 30px margin: candidates 48px out
+	visible_rect := World_Bounds{player_pos.x - 13, player_pos.x + 13, player_pos.y - 13, player_pos.y + 13}
+	map_bounds := tilemap_world_bounds(&tilemap)
+
+	for _ in 0 ..< 200 {
+		point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &field, must_reach = true)
+		testing.expectf(t, !tile_blocks_body(&field, point), "spawn point %v puts the body's box inside a wall", point)
+	}
+}
+
 @(test)
 test_pick_offscreen_spawn_point_never_lands_inside_the_visible_rect :: proc(t: ^testing.T) {
 	tilemap := Tilemap {
@@ -368,6 +428,51 @@ test_pick_offscreen_spawn_point_falls_back_to_the_field_when_nothing_reachable_i
 			"the only reachable ground is the sealed room, cells {1,1}..{3,1}; got cell %v",
 			cell,
 		)
+	}
+}
+
+// the exhausted-retries fallback has the same body to place. A player
+// hugging a wall seeds the flood inside the inflation envelope, and from
+// there the flood fills the envelope too (flow_can_enter) - so the nearest
+// filled cell to a candidate clamped onto the border is the floor cell
+// hugging that border, and a body set down on it is inside the wall. Ember
+// Ring's whole first batch went off the Map this way in ticket 23's Run.
+@(test)
+test_pick_offscreen_spawn_point_falls_back_to_ground_the_body_fits_on :: proc(t: ^testing.T) {
+	tilemap := fixture_room(
+		{
+			"#########",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#.......#",
+			"#########",
+		},
+	)
+	defer delete(tilemap.tiles)
+
+	field: Flow_Field
+	defer flow_field_destroy(&field)
+	// in the corner, one cell off both walls: an inflated source
+	player := cell_center_to_world({1, 1}, tilemap.tile_size)
+	flow_field_rebuild(&field, &tilemap, player, i32(FLOW_FIELD_INFLATION_RADIUS))
+	corner_cell, _ := flow_field_cell(&field, {7, 7})
+	if !testing.expect(t, corner_cell.inflated && corner_cell.distance != FLOW_UNREACHED, "the far corner must be filled envelope, or this fixture is not the case") {
+		return
+	}
+
+	// a ring far wider than the room: every candidate clamps into the
+	// border wall and is refused, so every pick is the fallback
+	visible_rect := World_Bounds{player.x - 400, player.x + 400, player.y - 400, player.y + 400}
+	map_bounds := tilemap_world_bounds(&tilemap)
+
+	for _ in 0 ..< 200 {
+		point := pick_offscreen_spawn_point(player, visible_rect, map_bounds, &field, must_reach = true)
+		testing.expectf(t, flow_field_reaches(&field, point), "an exhausted pick must still land somewhere the player can reach, got %v", point)
+		testing.expectf(t, !tile_blocks_body(&field, point), "an exhausted pick %v puts the body's box inside a wall", point)
 	}
 }
 

@@ -416,6 +416,14 @@ SPAWN_RING_ANGLES :: 64
 @(private = "file")
 SPAWN_RING_VIEW_SIZE :: Vec2{1920 / 2, 1080 / 2}
 
+// the ring pick_offscreen_spawn_point draws in play: the shipped window's
+// half-diagonal at gameplay zoom, plus the margin. Shared with
+// run_objective_test.odin's headless Run, which widens its live ring to it.
+shipped_spawn_ring_radius :: proc() -> f32 {
+	half := SPAWN_RING_VIEW_SIZE / GAMEPLAY_ZOOM / 2
+	return math.hypot(half.x, half.y) + OFFSCREEN_SPAWN_MARGIN
+}
+
 // This one floods at FLOW_FIELD_INFLATION_RADIUS, unlike the connectivity
 // check above: these are the very points the live spawn filter tests, so the
 // question is asked at the radius the game asks it at.
@@ -433,8 +441,7 @@ test_every_baked_maps_spawn_ring_is_reachable :: proc(t: ^testing.T) {
 			continue
 		}
 
-		half := SPAWN_RING_VIEW_SIZE / GAMEPLAY_ZOOM / 2
-		ring := math.hypot(half.x, half.y) + OFFSCREEN_SPAWN_MARGIN
+		ring := shipped_spawn_ring_radius()
 
 		// pick_offscreen_spawn_point's own clamp, half a tile in from the far
 		// edge - the bounds' max is the near edge of the *next* cell
