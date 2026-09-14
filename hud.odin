@@ -15,43 +15,13 @@ import ui "vendor/ui/ui"
 // neither of which is one of the six Screens (see CONTEXT.md's Screen entry).
 // The nine-slice panel art that used to sit behind the F8 panel is gone -
 // both surfaces now draw the library's Rectangle commands as plain flat
-// fills, so they render identically apart from their theme.
-
-// how far a pressed button (and its label) sinks down. Purely a *layout*
-// offset - it feeds HUD_THEME.button_press_offset, which the ui library
-// applies to the button's label node (see layout.Node.press_offset_y) so the
-// label tracks the box instead of drifting. Nothing draw-time depends on it.
-BUTTON_PRESS_SINK :: 3
-
-// the ui library's `theme` is a single shared global, and its default values
-// are tuned for the editor's windows (a saturated blue accent, 18px text).
-// debug.odin's panel draws in real screen pixels rather than the small 180px
-// HUD camera, and reads better dark and a size up, so it gets its own theme:
-// a desaturated dark blue-gray family varying only in lightness across
-// states. Swapped in and restored around the panel's draw (see debug.odin).
-HUD_THEME :: ui.Theme {
-	window_background   = {58, 63, 74, 255},
-	title_bar           = {46, 50, 60, 255},
-	title_text          = {240, 240, 240, 255},
-	text                = {225, 225, 225, 255},
-	button              = {74, 80, 94, 255},
-	button_hot          = {96, 104, 122, 255},
-	button_active       = {110, 118, 138, 255},
-	button_text         = {240, 240, 240, 255},
-	font_size           = 22,
-	title_font_size     = 22,
-	padding             = 10,
-	gap                 = 8,
-	button_press_offset = BUTTON_PRESS_SINK,
-	scrollbar_track     = {40, 44, 52, 255},
-	scrollbar_thumb     = {96, 104, 122, 255},
-}
+// fills in the library's default theme, so they render identically.
 
 // the whole backend: walks the ui library's render commands and draws them.
 // Shared by debug.odin's F8 panel and editor.odin, so the two can't drift
 // apart. The library's `panel`/`panel_variant` fields are deliberately opaque
 // to it (layout.odin) and simply ignored - there is no decorative panel style
-// anymore, only flat fills in whichever theme is current.
+// anymore, only flat fills in the library's default theme.
 draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 	for cmd in commands {
 		// scroll containers are the library's business, not this backend's: it
@@ -379,9 +349,8 @@ Menu_Theme :: struct {
 
 // Variant C from the prototype (01-prototype-flat-rect-visual-and-motion.md)
 // - dark flat fill, 2px accent border instead of a shadow, ease_out_cubic
-// scale-in from 0.9 -> 1.0 over 0.20s. Replaces HUD_THEME for every real
-// Screen; HUD_THEME itself stays above since debug.odin's panel is still on
-// the old nine-slice/vendor-ui path.
+// scale-in from 0.9 -> 1.0 over 0.20s. The theme for every real Screen;
+// the F8 panel and the editor use vendor/ui's default theme instead.
 MENU_THEME :: Menu_Theme {
 	fill          = {40, 44, 52, 255},
 	fill_hover    = {52, 58, 68, 255},
