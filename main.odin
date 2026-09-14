@@ -284,7 +284,7 @@ load_game :: proc() {
 			window_title = "Game",
 			player = {
 				rect = {1920 / 4 - 16, 1080 / 4 - 16, 32, 32},
-				squash = {1, 1},
+				squash = actor_squash_at_rest(),
 				level = 1,
 				move_speed = PLAYER_BASE_MOVE_SPEED,
 				max_health = PLAYER_BASE_MAX_HEALTH,
@@ -362,9 +362,9 @@ initialize_program :: proc() -> runtime.Context {
 	// reset here so both fresh games and loads start at full health
 	game.player.health = game.player.max_health
 	// json:"-" (see Player.squash) - a fresh/loaded game would otherwise
-	// start at the zero-value {0,0} and draw the player invisibly for one
-	// frame until movement first eases it toward {1,1}
-	game.player.squash = {1, 1}
+	// start at the zero value and draw the player invisibly for one frame
+	// until the pulse first eases it toward rest
+	game.player.squash = actor_squash_at_rest()
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE})
 	rl.InitWindow(c.int(game.window_width), c.int(game.window_height), game.window_title)
@@ -496,6 +496,7 @@ update_game :: proc() {
 		// a live scene to be worth anything. Nothing compensates for the extra
 		// danger that brings; God Mode already sits on that very panel.
 		if game.run_ended || game.shopping {
+			decay_actor_squashes(rl.GetFrameTime())
 			return
 		}
 
@@ -515,8 +516,6 @@ update_game :: proc() {
 		if is_key_down(.S) {
 			input.y += 1
 		}
-
-		update_actor_squash(&game.player.squash, input.x != 0 || input.y != 0, rl.GetFrameTime())
 
 		input = linalg.normalize0(input)
 
@@ -540,7 +539,9 @@ update_game :: proc() {
 			i32(FLOW_FIELD_INFLATION_RADIUS),
 			obstacles,
 		)
+		player_before := Vec2{game.player.x, game.player.y}
 		move_actor(&game.player.rect, &game.flow_field, input * rl.GetFrameTime() * game.player.move_speed)
+		update_actor_squash(&game.player.squash, Vec2{game.player.x, game.player.y} - player_before, rl.GetFrameTime())
 
 		// this one guards the flood: it re-floods only when the player has
 		// crossed into a new cell, so the goal is a cell rather than a point
@@ -755,7 +756,7 @@ swept_box_cell_range :: proc(before, after: Rect, tile_size: Vec2) -> (min_cell,
 
 Player :: struct {
 	using rect:          Rect,
-	squash:              Vec2 `json:"-"`, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
+	squash:              Actor_Squash `json:"-"`, // squash pulse on rest<->moving transitions, eased back to rest (update_actor_squash, draw_actor)
 	weapon:              Weapon,
 	// Weapon.variant is a union and is tagged json:"-" (see weapon.odin) -
 	// this is the plain, persisted view of it, converted explicitly at the
@@ -1148,17 +1149,137 @@ FLAME_STAFF_PULSE_SCALE: f32 = 0.35 // extra scale at the start of a Follow-thro
 SWORD_ECHO_STEP: f32 = 0.14
 SWORD_ECHO_FADE: f32 = 0.5 // alpha multiplier on an echo's already-faded color
 
-ACTOR_SQUASH_RATE: f32 = 12.0 // exp_approach rate, 1/s
-ACTOR_MOVING_SCALE := Vec2{1.15, 0.85} // scale_x/scale_y target while moving; eases back to {1,1} at rest
+ACTOR_SQUASH_RATE: f32 = 6.0 // exp_approach rate back to rest, 1/s
+ACTOR_PULSE_ALONG: f32 = 1.15 // scale along the movement axis when a body starts moving; across it when it stops
+ACTOR_PULSE_ACROSS: f32 = 0.85 // scale across the movement axis when a body starts moving; along it when it stops
+// a frame that carries the body slower than this is "not moving": the
+// sub-pixel nudges separation and wall-sliding give a pinned body must not
+// read as travel. Well under the slowest Kind's speed (Warden, 28 px/s)
+ACTOR_MOVE_MIN_SPEED: f32 = 8
+// how long the per-frame verdict has to disagree with the settled one before
+// the settled one flips. A body pinned against a wall by the field, or
+// jostled by separation, flickers between a real step and none every frame
+// or two; without this every flicker was an edge
+ACTOR_MOVE_SETTLE_SECONDS: f32 = 0.05
+// how far a body has to get, net, after leaving rest before its start pulse
+// fires - and a stint that never got this far ends without a stop pulse. A
+// pinned body shoved a few px one way and back moves at a real speed the
+// whole time (the speed floor and the settle time see travel), yet goes
+// nowhere; measured on a wall-pinned crowd, gating on net travel cut the
+// pulses that came with under 4px of movement from 42 of 49 to a handful.
+// Net rather than path length so the shove and the shove back cancel
+ACTOR_PULSE_TRAVEL: f32 = 6
+// exp_approach rate the axis turns at while a body is moving, 1/s - so the
+// jostle of separation swings the body a little rather than snapping it
+ACTOR_SQUASH_AXIS_RATE: f32 = 15
 
-// continuous isotropic squash while moving (ticket 01's confirmed Variant A)
-// - no rotation/tilt. Called once per frame per actor from the update phase
-// (update_game_state for Player, update_enemies for Enemy); draw_actor only
-// ever reads the already-eased result.
-update_actor_squash :: proc(scale: ^Vec2, moving: bool, dt: f32) {
-	target := moving ? ACTOR_MOVING_SCALE : Vec2{1, 1}
-	scale.x = exp_approach(scale.x, target.x, ACTOR_SQUASH_RATE, dt)
-	scale.y = exp_approach(scale.y, target.y, ACTOR_SQUASH_RATE, dt)
+// a body's squash pulse: a scale along and across the axis it last moved on.
+// At rest both scales are 1, whatever the axis. Zero-valued this draws
+// nothing, so bodies are stamped actor_squash_at_rest() where they are made.
+Actor_Squash :: struct {
+	along:            f32,
+	across:           f32,
+	axis:             Vec2, // unit direction of travel; {1,0} before a body has ever moved
+	moving:           bool, // the settled verdict
+	contrary_seconds: f32, // how long the per-frame verdict has disagreed with `moving`
+	travel:           Vec2, // net displacement since the body last left rest
+	pulsed:           bool, // this stint's start pulse has fired, so its stop pulse will too
+}
+
+actor_squash_at_rest :: proc() -> Actor_Squash {
+	return {along = 1, across = 1, axis = {1, 0}}
+}
+
+// one-shot squash pulse when a body sets off and when it stops, oriented to
+// the movement axis (art-revamp tickets 07, 08). Reverses ticket 01's
+// continuous Variant A: held squash keyed off *intent* left every enemy -
+// whose steering is nearly never exactly zero - and a player pushing into a
+// wall permanently squished. `displacement` is how far the body actually
+// moved this frame, never intent; below ACTOR_MOVE_MIN_SPEED it is at rest,
+// the verdict has to hold for ACTOR_MOVE_SETTLE_SECONDS to count, and the
+// start pulse waits until the body has netted ACTOR_PULSE_TRAVEL - a body
+// that never gets that far pulses at neither end. Starting stretches the
+// body along its axis and thins it across; stopping is the swap, a plant.
+// Snap to the peak, exp_approach back to rest otherwise. Called once per
+// frame per actor after its position has been resolved (update_game_state
+// for Player, update_enemies for Enemy); the draw only ever reads the
+// already-eased result through actor_squash_matrix.
+update_actor_squash :: proc(squash: ^Actor_Squash, displacement: Vec2, dt: f32) {
+	raw := actor_moved(displacement, dt)
+	if raw != squash.moving {
+		squash.contrary_seconds += dt
+		if squash.contrary_seconds >= ACTOR_MOVE_SETTLE_SECONDS {
+			squash.moving = raw
+			squash.contrary_seconds = 0
+			if raw {
+				squash.travel = {}
+				squash.pulsed = false
+			} else if squash.pulsed {
+				squash.along, squash.across = ACTOR_PULSE_ACROSS, ACTOR_PULSE_ALONG
+				return
+			}
+		}
+	} else {
+		squash.contrary_seconds = 0
+	}
+
+	if squash.moving {
+		squash.travel += displacement
+		if !squash.pulsed && linalg.length2(squash.travel) >= ACTOR_PULSE_TRAVEL * ACTOR_PULSE_TRAVEL {
+			squash.pulsed = true
+			squash.axis = linalg.normalize(squash.travel)
+			squash.along, squash.across = ACTOR_PULSE_ALONG, ACTOR_PULSE_ACROSS
+			return
+		}
+		if raw {
+			turn_actor_squash_axis(squash, linalg.normalize(displacement), dt)
+		}
+	}
+	squash.along = exp_approach(squash.along, 1, ACTOR_SQUASH_RATE, dt)
+	squash.across = exp_approach(squash.across, 1, ACTOR_SQUASH_RATE, dt)
+}
+
+actor_moved :: proc(displacement: Vec2, dt: f32) -> bool {
+	floor := ACTOR_MOVE_MIN_SPEED * dt
+	return linalg.length2(displacement) > floor * floor
+}
+
+// eases the axis toward `toward` (unit) and re-normalises. A reversal eases
+// through a near-zero vector that cannot be normalised, so that one snaps
+@(private = "file")
+turn_actor_squash_axis :: proc(squash: ^Actor_Squash, toward: Vec2, dt: f32) {
+	mix := 1 - math.exp(-ACTOR_SQUASH_AXIS_RATE * dt)
+	eased := squash.axis + (toward - squash.axis) * mix
+	if linalg.length2(eased) < 0.01 {
+		squash.axis = toward
+	} else {
+		squash.axis = linalg.normalize(eased)
+	}
+}
+
+// the 2D scale `along` the axis and `across` it, with no net rotation:
+// R(axis) * diag(along, across) * R(axis)^T. At rest it is exactly the
+// identity whatever the axis, so a square body eases back to a square rather
+// than snapping out of a rotated frame - the reason the body is not drawn as
+// a rotated rectangle. A zero axis (a hand-built body that never moved) reads
+// as {1,0}, which for a rest pulse changes nothing.
+actor_squash_matrix :: proc(squash: Actor_Squash) -> matrix[2, 2]f32 {
+	c, s := squash.axis.x, squash.axis.y
+	if squash.axis == {} {
+		c, s = 1, 0
+	}
+	a, b := squash.along, squash.across
+	return {c * c * a + s * s * b, c * s * (a - b), c * s * (a - b), s * s * a + c * c * b}
+}
+
+// the shop and the run-ended screen return out of update_game_state before
+// anything moves, so a pulse in flight would otherwise freeze mid-squash for
+// as long as they are up. Nothing moves there, so a zero displacement is exact.
+decay_actor_squashes :: proc(dt: f32) {
+	update_actor_squash(&game.player.squash, {}, dt)
+	for &enemy in game.enemies {
+		update_actor_squash(&enemy.squash, {}, dt)
+	}
 }
 
 // t: 0 -> 1, decelerating toward 1 - the codebase's other general-purpose
@@ -1392,18 +1513,31 @@ draw_game :: proc() {
 		draw_rectangle(full_rect, rl.Fade(rl.BLACK, BLUR_DIM_ALPHA_MAX * strength))
 	}
 
-	// player body: a rectangle (ACTOR_SIZE), continuously squashed in place
-	// by `scale` while moving - no rotation/tilt, see update_actor_squash
-	// (art-revamp ticket 01). Enemies have their own draw_enemy below.
-	draw_actor :: proc(rect: Rect, scale: Vec2) {
-		dest := Rect{rect.x, rect.y, ACTOR_SIZE.x * scale.x, ACTOR_SIZE.y * scale.y}
-		origin := Vec2{dest.width / 2, dest.height}
-		draw_rectangle(dest, ACTOR_PLAYER_COLOR, origin, 0)
+	// player body: a rectangle (ACTOR_SIZE), squashed in place on a
+	// rest<->moving pulse along the axis it moved on - see update_actor_squash
+	// (art-revamp tickets 01, 07, 08). Enemies have their own draw_enemy below.
+	draw_actor :: proc(rect: Rect, squash: Actor_Squash) {
+		draw_actor_body({rect.x, rect.y}, ACTOR_SIZE, squash, ACTOR_PLAYER_COLOR)
+	}
+
+	// a body's rectangle about its feet anchor, its four corners scaled about
+	// the body's centre by the squash's axis matrix and drawn as a quad. The
+	// centre rather than the feet: the axis scale is not axis-aligned, so
+	// scaling about the feet would swing the body sideways about its base.
+	draw_actor_body :: proc(feet: Vec2, size: Vec2, squash: Actor_Squash, color: Color) {
+		centre := feet - Vec2{0, size.y / 2}
+		half := size / 2
+		m := actor_squash_matrix(squash)
+		a := centre + m * Vec2{-half.x, -half.y}
+		b := centre + m * Vec2{half.x, -half.y}
+		c := centre + m * Vec2{half.x, half.y}
+		d := centre + m * Vec2{-half.x, half.y}
+		draw_quad(a, b, c, d, color)
 	}
 
 	// every enemy is a square: sized by its Kind's max health
 	// (enemy_body_size), coloured by its Kind's own hue, continuously
-	// squashed in place while moving like the player, and faded toward
+	// squashed in place on a movement pulse like the player, and faded toward
 	// ENEMY_MIN_OPACITY as its remaining health drops - replaces the old
 	// per-movement-style shape (rect/circle/triangle) and the separate enemy
 	// Health bar, which the fade now stands in for. Size reads the body's own
@@ -1422,9 +1556,7 @@ draw_game :: proc() {
 			color = tell_flash_color(color, progress)
 		}
 
-		dest := Rect{enemy.x, enemy.y, size * enemy.squash.x, size * enemy.squash.y}
-		origin := Vec2{dest.width / 2, dest.height}
-		draw_rectangle(dest, color, origin, 0)
+		draw_actor_body({enemy.x, enemy.y}, {size, size}, enemy.squash, color)
 	}
 
 	// flat fill for both floor and wall, walls get a darker inset bevel

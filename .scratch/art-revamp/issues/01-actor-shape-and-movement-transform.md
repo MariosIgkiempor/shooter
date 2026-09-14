@@ -36,3 +36,7 @@ Base shapes, held constant across all three prototyped variants and implicitly v
 Colors used in the prototype (SKYBLUE player, RED grounded, VIOLET floater, ORANGE swarmer) were placeholder/first-pass only, not locked by this ticket — real palette is separate follow-on work, not raised as fog here since it's a content-authoring detail, not a structural decision.
 
 This sets the shape vocabulary (rect/circle/triangle by entity type) and the transform mechanics (continuous squash, `exp_approach`-eased, no rotation) that [weapon shapes](02-weapon-shape-and-reconcile-weapon-action-feel.md), [bullets/pickups](03-bullets-and-pickups-shape-treatment.md), [tilemap](04-tilemap-shape-treatment.md), and the [shape-vocabulary consistency pass](05-shape-vocabulary-consistency-pass.md) all now build on.
+
+## Comments
+
+- Variant A's *continuous* squash was reversed to a one-shot pulse on rest↔moving transitions by [07](07-squash-pulse-on-movement-transitions.md): keyed off intent, "moving" was nearly always true for enemies, so every body sat permanently squished. Shape vocabulary and the `exp_approach`-eased, no-rotation mechanics stand.
