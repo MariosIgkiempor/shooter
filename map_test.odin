@@ -572,7 +572,7 @@ test_every_baked_maps_time_limit_clears_its_own_timeline :: proc(t: ^testing.T) 
 // (.scratch/content-expansion/issues/04-enemy-catalog.md). Authored here
 // rather than on the preset: it is a fact about the ladder, not about the
 // Kind, and the preset table has no business knowing how many rungs there
-// are. Nothing debuts on rung 5 until the boss does.
+// are. Rung 5 debuts the Boss and nothing else.
 @(private = "file")
 kind_debut_rung := [Enemy_Kind]int {
 	.Grunt   = 1,
@@ -583,6 +583,7 @@ kind_debut_rung := [Enemy_Kind]int {
 	.Breaker = 3,
 	.Mite    = 4,
 	.Gazer   = 4,
+	.Warden  = 5,
 }
 
 @(private = "file")

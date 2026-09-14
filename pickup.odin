@@ -51,9 +51,15 @@ reset_pickups :: proc() {
 }
 
 // rolls PICKUP_DROP_CHANCE; on a hit, picks one of the kinds uniformly
-// and spawns it. `kind` is the dying enemy's Enemy_Kind, used only to price a
-// Gold drop (enemy_gold_value) - the roll itself is unaffected by it.
+// and spawns it. `kind` is the dying enemy's Enemy_Kind, used to price a
+// Gold drop (enemy_gold_value) and to read the one preset fact that changes
+// the roll: the Boss always drops, and drops Gold - a minute spent killing
+// it that paid out one time in eight would read as a bug.
 maybe_spawn_pickup :: proc(position: Vec2, kind: Enemy_Kind) {
+	if enemy_kind_is_boss(kind) {
+		append(&game.pickups, Pickup{position = position, kind = .Gold, gold = enemy_gold_value(kind)})
+		return
+	}
 	if rand.float32() >= PICKUP_DROP_CHANCE {
 		return
 	}

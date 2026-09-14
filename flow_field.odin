@@ -1,5 +1,6 @@
 package shooter
 
+import "core:math"
 import "core:math/linalg"
 
 // The shared flow field: one flood outward from the player's cell that every
@@ -112,7 +113,32 @@ Flow_Cell :: struct {
 	distance: u32,       // path cost from the source cell in FLOW_COST_* units; FLOW_UNREACHED if never filled
 	step:     Flow_Step, // toward distance-1; .None at the source and in unfilled cells
 	collides: bool,      // an authored colliding Tile sits here
-	inflated: bool,      // inside some wall's (2r+1)^2 envelope at `radius`
+	inflated: bool,      // inside some wall's (2r+1)^2 envelope at `radius`, or inside an obstacle's grown disc
+	obstacle: bool,      // inside a Flow_Obstacle's disc this build; always also `inflated`, so flow_can_enter needs no rule of its own
+}
+
+// a body the flood routes around rather than through - the Boss's bulk
+// (ticket 21). Its centre and its own half-extent in px; the field grows
+// the disc by its own inflation radius, exactly as it grows a wall's
+// envelope, so the caller need not know what radius the field was built at.
+// Stamped as `inflated` rather than `collides`: the cells are not walls
+// (move_actor must not stop the Boss on its own body, nor the player), they
+// are ground the flood will not step onto from open ground. A body standing
+// inside the stamp - the Boss itself, an add it walked over - reads an
+// unfilled cell and takes flow_field_step_target's neighbour fallback out.
+Flow_Obstacle :: struct {
+	centre: Vec2,
+	radius: f32,
+}
+
+// what a rebuild stamped, remembered so flow_field_ensure can tell whether
+// an obstacle has crossed a cell. Stamped about the obstacle's *cell
+// centre*, so the cell set is a pure function of (cell, radius) and "moved
+// within a cell" is exactly "nothing changed" - the same cell-granular
+// rebuild rule the source already has.
+Flow_Obstacle_Stamp :: struct {
+	cell:   Vec2i,
+	radius: f32,
 }
 
 Flow_Field :: struct {
@@ -140,6 +166,8 @@ Flow_Field :: struct {
 	// Owned by the field rather than made per rebuild so the backing arrays
 	// are allocated once and reused for the life of the map.
 	buckets:       [FLOW_BUCKET_COUNT][dynamic]Vec2i,
+	// the obstacles the last rebuild stamped, in the order they were given
+	obstacles:     [dynamic]Flow_Obstacle_Stamp,
 }
 
 // how far a wall's influence is stamped outward, in cells, so a body with
@@ -147,6 +175,20 @@ Flow_Field :: struct {
 // Tunable, and stored on the field, so dragging it re-floods on the next
 // frame against the debug overlay.
 FLOW_FIELD_INFLATION_RADIUS: int = 1
+
+// the radius a body of `body_size` px needs so its route is never threaded
+// through a gap it cannot fit: the inverse of the envelope the preset test
+// holds the roster inside (2 * (r * tile + tile / 2)). The roster's <= 48px
+// bodies come out at the shipped FLOW_FIELD_INFLATION_RADIUS; the Boss's
+// 72px asks for one more, and gets a field of its own at it (ADR-0025:
+// "built lazily for the radii in use"). A degenerate tile size falls back to
+// the shipped radius rather than dividing by zero.
+flow_field_radius_for_body :: proc(body_size, tile: f32) -> i32 {
+	if tile <= 0 {
+		return i32(FLOW_FIELD_INFLATION_RADIUS)
+	}
+	return i32(max(0, math.ceil((body_size / 2 - tile / 2) / tile)))
+}
 
 // the tilemap's authored extent in cell coords - the integer sibling of
 // tilemap_world_bounds, which the field needs because it must *enumerate*
@@ -241,6 +283,7 @@ flow_field_ensure :: proc(
 	tilemap: ^Tilemap,
 	source_world: Vec2,
 	radius: i32,
+	obstacles: []Flow_Obstacle = {},
 ) -> (
 	rebuilt: bool,
 ) {
@@ -248,7 +291,7 @@ flow_field_ensure :: proc(
 	   field.radius != radius ||
 	   field.tile_size != tilemap.tile_size ||
 	   field.tile_count != len(tilemap.tiles) {
-		flow_field_rebuild(field, tilemap, source_world, radius)
+		flow_field_rebuild(field, tilemap, source_world, radius, obstacles)
 		return true
 	}
 
@@ -258,11 +301,28 @@ flow_field_ensure :: proc(
 		return false
 	}
 
-	if world_to_cell_coord(source_world, tilemap.tile_size) != field.source {
-		flow_field_rebuild(field, tilemap, source_world, radius)
+	if world_to_cell_coord(source_world, tilemap.tile_size) != field.source ||
+	   !flow_obstacles_match(field, obstacles) {
+		flow_field_rebuild(field, tilemap, source_world, radius, obstacles)
 		return true
 	}
 	return false
+}
+
+// whether `obstacles` would stamp the same cells the last rebuild did: the
+// same bodies, each in the same cell at the same radius
+@(private = "file")
+flow_obstacles_match :: proc(field: ^Flow_Field, obstacles: []Flow_Obstacle) -> bool {
+	if len(obstacles) != len(field.obstacles) {
+		return false
+	}
+	for obstacle, i in obstacles {
+		stamp := field.obstacles[i]
+		if stamp.radius != obstacle.radius || world_to_cell_coord(obstacle.centre, field.tile_size) != stamp.cell {
+			return false
+		}
+	}
+	return true
 }
 
 // drops the field's answers while keeping its allocation, so the next
@@ -276,6 +336,7 @@ flow_field_destroy :: proc(field: ^Flow_Field) {
 	for &bucket in field.buckets {
 		delete(bucket)
 	}
+	delete(field.obstacles)
 	field^ = {}
 }
 
@@ -283,13 +344,14 @@ flow_field_destroy :: proc(field: ^Flow_Field) {
 // unchanged, but always clears every cell: skipping the clear leaves the
 // previous map's walls and distances behind, which is silent and shows up only
 // as enemies refusing to enter a room.
-flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: Vec2, radius: i32) {
+flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: Vec2, radius: i32, obstacles: []Flow_Obstacle = {}) {
 	field.tile_size = tilemap.tile_size
 	field.radius = radius
 	field.tile_count = len(tilemap.tiles)
 	field.built = true
 	field.max_distance = 0
 	field.filled_count = 0
+	clear(&field.obstacles)
 
 	min_cell, max_cell, has_tiles := tilemap_cell_bounds(tilemap)
 	has_size := tilemap.tile_size.x > 0 && tilemap.tile_size.y > 0
@@ -339,6 +401,29 @@ flow_field_rebuild :: proc(field: ^Flow_Field, tilemap: ^Tilemap, source_world: 
 			for dy in -radius ..= radius {
 				if index, ok := flow_field_index(field, tile.world_coords + {dx, dy}); ok {
 					field.cells[index].inflated = true
+				}
+			}
+		}
+	}
+
+	// an obstacle is a disc about its cell's centre, grown by the field's
+	// radius the way a wall's envelope is, so a body steered by this field
+	// is kept its own half-width off the obstacle's edge
+	for obstacle in obstacles {
+		cell := world_to_cell_coord(obstacle.centre, tilemap.tile_size)
+		append(&field.obstacles, Flow_Obstacle_Stamp{cell = cell, radius = obstacle.radius})
+		centre := cell_center_to_world(cell, tilemap.tile_size)
+		reach := obstacle.radius + f32(radius) * tilemap.tile_size.x
+		span := i32(math.ceil(reach / tilemap.tile_size.x))
+		for dx in -span ..= span {
+			for dy in -span ..= span {
+				coord := cell + {dx, dy}
+				if linalg.distance(cell_center_to_world(coord, tilemap.tile_size), centre) > reach {
+					continue
+				}
+				if index, ok := flow_field_index(field, coord); ok {
+					field.cells[index].inflated = true
+					field.cells[index].obstacle = true
 				}
 			}
 		}

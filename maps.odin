@@ -10399,8 +10399,8 @@ maps: [Map_Name]Map = {
 		Tile{world_coords = {52, 47}, collides = true},
 		Tile{world_coords = {53, 47}, collides = true},
 	}}, spawn_triggers = {
+		Spawn_Trigger{condition = Time_Elapsed{seconds = 0}, mode = One_Shot{}, composition = {Spawn_Composition_Entry{kind = .Warden, count = 1}}},
 		Spawn_Trigger{condition = Time_Elapsed{seconds = 0}, mode = Repeating{interval = 5, duration = 180}, composition = {Spawn_Composition_Entry{kind = .Grunt, count = 1}, Spawn_Composition_Entry{kind = .Mite, count = 2}}},
-		Spawn_Trigger{condition = Time_Elapsed{seconds = 15}, mode = Repeating{interval = 30, duration = 150}, composition = {Spawn_Composition_Entry{kind = .Breaker, count = 2}}},
 	}, time_limit = 210, victory_multiplier = 2.5, rung = 5, floor_color = Color{46, 46, 50, 255}, wall_color = Color{160, 156, 148, 255}, ambient = {.Motes, .Floor_Patches, .Light_Wash}},
 	.Root_Warren = Map{name = "Root Warren", player_start = {392, 328}, tilemap = Tilemap{tile_size = {16, 16}, tiles = {
 		Tile{world_coords = {0, 0}, collides = true},

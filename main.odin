@@ -110,6 +110,13 @@ game: struct {
 	// definition. Never persisted - it is re-flooded from current_map on the
 	// first frame after any load anyway.
 	flow_field:             Flow_Field `json:"-"`,
+	// the Boss's own field (ADR-0025: "built lazily for the radii in use"):
+	// flooded from the same cell at the Boss's size-derived inflation radius
+	// and with no obstacles, since the shared field above stamps the Boss's
+	// own bulk as ground to route around and a body cannot steer by a field
+	// it is stamped into. Ensured only while a Boss is alive; unbuilt and
+	// unread otherwise.
+	boss_flow_field:        Flow_Field `json:"-"`,
 
 	// the live Map theme's ambient effects - the mote field and the floor
 	// patches (ambience.odin, ADR-0024). Here and not on Map for the flow
@@ -370,6 +377,7 @@ initialize_program :: proc() -> runtime.Context {
 
 deinitialize_program :: proc() {
 	flow_field_destroy(&game.flow_field)
+	flow_field_destroy(&game.boss_flow_field)
 	deinit_tunables()
 	deinitialize_renderer()
 	deinitialize_logger()
@@ -519,11 +527,18 @@ update_game :: proc() {
 		// next frame, so without it the first step on a new Map would be
 		// resolved against the previous Map's walls. On every other frame it
 		// is a handful of compares that find nothing changed.
+		//
+		// The Boss's bulk is the one obstacle the shared field routes around.
+		// Read once and handed to both ensures below: given to only one, each
+		// would see the other's stamp as a change and the field would
+		// re-flood twice a frame.
+		obstacles := enemy_flow_obstacles(game.enemies[:])
 		flow_field_ensure(
 			&game.flow_field,
 			&game.current_map.tilemap,
 			Vec2{game.player.x, game.player.y},
 			i32(FLOW_FIELD_INFLATION_RADIUS),
+			obstacles,
 		)
 		move_actor(&game.player.rect, &game.flow_field, input * rl.GetFrameTime() * game.player.move_speed)
 
@@ -538,6 +553,7 @@ update_game :: proc() {
 			&game.current_map.tilemap,
 			Vec2{game.player.x, game.player.y},
 			i32(FLOW_FIELD_INFLATION_RADIUS),
+			obstacles,
 		)
 
 		// blocked mid-Windup: a manually-triggered reload would otherwise
@@ -603,8 +619,12 @@ update_game :: proc() {
 		update_particles(rl.GetFrameTime())
 		update_damage_numbers(rl.GetFrameTime())
 		update_player_resource_indicators(rl.GetFrameTime())
+		update_boss_resource_indicator(game.enemies[:], rl.GetFrameTime())
 
 		update_spawn_triggers(rl.GetFrameTime())
+		// after the triggers, so the frame the Boss spawns already has its
+		// field; before the enemies, so it steers by one this frame
+		ensure_boss_flow_field()
 		update_enemies(rl.GetFrameTime())
 
 		// last, so a kill landing this frame is already reflected in
@@ -1091,16 +1111,27 @@ TELL_FLASH_PULSE_MIX: f32 = 0.65 // how much further the pulse pushes it at full
 TELL_FLASH_PULSE_HZ: f32 = 3 // pulses per Tell at its start...
 TELL_FLASH_PULSE_HZ_GAIN: f32 = 6 // ...and how many more it gains by the end
 
-// a quickening pulse toward white while a Tell runs. It moves *value* only:
-// hue still means Movement Style family and alpha still means remaining
-// health (enemy_body_color), so the target keeps the base's own alpha and
-// the blend never touches it. White rather than the zone's amber on purpose
-// - green pulsed most of the way toward amber lands on Swarmer yellow, so a
-// telling Breaker would read as a Mite at the peak of every pulse.
+// a body lighter than this (0..255 luma) pulses toward dark instead of
+// white: the Boss's near-white sits at ~235, the palest roster colour
+// (ENEMY_GROUNDED_PALE_COLOR) at ~196
+TELL_FLASH_LIGHT_BODY_LUMA :: f32(215)
+TELL_FLASH_DARK :: Color{40, 40, 44, 255}
+
+// a quickening pulse away from the body's own value while a Tell runs. It
+// moves *value* only: hue still means Movement Style family and alpha still
+// means remaining health (enemy_body_color), so the target keeps the base's
+// own alpha and the blend never touches it. Toward white for the roster
+// rather than the zone's amber on purpose - green pulsed most of the way
+// toward amber lands on Swarmer yellow, so a telling Breaker would read as
+// a Mite at the peak of every pulse. Toward dark for a body already near
+// white (the Boss), which a pulse toward white would leave exactly as it
+// was - and a Tell nobody can see is not a Tell.
 tell_flash_color :: proc(base: Color, progress: f32) -> Color {
 	pulse := 0.5 + 0.5 * math.sin(progress * math.TAU * (TELL_FLASH_PULSE_HZ + progress * TELL_FLASH_PULSE_HZ_GAIN))
 	mix := TELL_FLASH_BASE_MIX + TELL_FLASH_PULSE_MIX * pulse * progress
-	return color_lerp(base, Color{255, 255, 255, base.a}, mix)
+	target := color_luma(base) > TELL_FLASH_LIGHT_BODY_LUMA ? TELL_FLASH_DARK : Color{255, 255, 255, 255}
+	target.a = base.a
+	return color_lerp(base, target, mix)
 }
 
 // weapon-animation feel. Hoisted out of draw_game so Tunables can hold their
@@ -1315,6 +1346,7 @@ draw_game :: proc() {
 		draw_damage_numbers(game.damage_numbers[:])
 		if game.program_mode == .Playing {
 			draw_player_resource_indicators(game.player)
+			draw_boss_resource_indicator(game.enemies[:])
 		}
 
 		if game.program_mode == .Editing {
@@ -1449,6 +1481,7 @@ draw_game :: proc() {
 	FLOW_FIELD_DEBUG_BAND_TINT :: Color{255, 255, 255, 230}
 	FLOW_FIELD_DEBUG_SOURCE :: Color{120, 255, 140, 230}
 	FLOW_FIELD_DEBUG_INFLATED :: Color{200, 140, 60, 45}
+	FLOW_FIELD_DEBUG_OBSTACLE :: Color{240, 240, 235, 70} // the Boss's stamp, in its own near-white
 	FLOW_FIELD_DEBUG_UNREACHED :: Color{220, 40, 40, 55}
 
 	// F8 debug panel visualizer: the shared flow field itself. A filled cell
@@ -1491,7 +1524,7 @@ draw_game :: proc() {
 				center := cell_center_to_world(coord, field.tile_size)
 
 				if cell.distance == FLOW_UNREACHED {
-					tint := cell.inflated ? FLOW_FIELD_DEBUG_INFLATED : FLOW_FIELD_DEBUG_UNREACHED
+					tint := cell.obstacle ? FLOW_FIELD_DEBUG_OBSTACLE : cell.inflated ? FLOW_FIELD_DEBUG_INFLATED : FLOW_FIELD_DEBUG_UNREACHED
 					draw_rectangle(
 						{
 							center.x - field.tile_size.x / 2,

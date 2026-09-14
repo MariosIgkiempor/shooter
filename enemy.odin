@@ -9,8 +9,11 @@ import rl "vendor:raylib"
 // is authored against: the swarm rung is authored at 150-250 concurrent, a
 // number set by screen legibility, and fire_spawn_composition silently
 // truncates a batch here so a broken timeline fills the field rather than
-// the heap
+// the heap. The last ENEMY_BOSS_RESERVED_SLOTS of it are the Boss's: an
+// ordinary Kind stops short of them, so a Map full of adds cannot crowd out
+// the one body its Run cannot be Cleared without.
 MAX_ENEMIES: int = 4096
+ENEMY_BOSS_RESERVED_SLOTS :: 1
 
 // -- the movement-family palette -------------------------------------------
 //
@@ -89,6 +92,19 @@ Enemy_Kind :: enum {
 	// would out-earn every other Kind.
 	Mite,
 	Gazer,
+	// the Boss (roster row 9): the one body a Run ends on. Appended last
+	// because Player.kills is indexed by this enum and persisted
+	// positionally - an ordinal contract ADR-0028 would reject, predating
+	// this Kind and not fixed with it; a reorder above this line silently
+	// re-attributes a save's kill counts. Grounded and slow,
+	// so it never catches a player who keeps moving; what it does is claim
+	// ground in three phases (66% / 33%), each a longer rotation on a shorter
+	// recovery (1.5 -> 1.15 -> 0.8s) so the fight visibly quickens as the
+	// bar crosses a notch. Every attack reaches past its body, since at
+	// 28 px/s a contact-only attack would never start. Its health puts it at
+	// ENEMY_SIZE_MAX; its near-white is a licence on value, not hue; its
+	// 250 is paid above the anchor and always dropped.
+	Warden,
 }
 
 // the authored facts of one Enemy Kind - deliberately not a full Enemy,
@@ -100,8 +116,15 @@ Enemy_Preset :: struct {
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	max_health: f32, // also what the body's drawn size derives from (enemy_body_size)
-	color:      Color, // always one of the family constants above
+	color:      Color, // one of the family constants above, except the Boss, whose licence is on value (near-white) rather than hue
 	gold:       int, // Gold this Kind's death is worth before Fortune scaling
+	// the Boss (CONTEXT.md): the one Kind that holds a reserved slot against
+	// MAX_ENEMIES, keeps a world-space Health indicator, always drops its
+	// Gold, is stamped into the shared flow field as an obstacle and steers by
+	// a field of its own at its size-derived radius. A flag rather than a
+	// derivation from phases or size so the seams all read one fact; the
+	// radii themselves stay derived from max_health (enemy_body_size).
+	boss:       bool,
 }
 
 // Gold anchors at this fraction of a Kind's max health: health is what the
@@ -249,28 +272,47 @@ Area_Attack :: struct {
 	tell_seconds: f32, // absolute seconds (ADR-0023), never a fraction of anything
 }
 
-// backs a fixed-size array, so it stays a compile-time constant (the same
-// exclusion ADR-0020 makes for SWORD_ECHO_COUNT). Rotations are stamped by
-// copy with the rest of the preset; a slice would alias the table.
+// back fixed-size arrays, so a preset stays a compile-time constant (the
+// same exclusion ADR-0020 makes for SWORD_ECHO_COUNT). Rotations and phases
+// are stamped by copy with the rest of the preset; a slice would alias the
+// table. Three phases is what the Boss entry in CONTEXT.md promises - "three
+// recognisable stretches" - and the ordinary roster authors one.
 TELL_AREA_MAX_ROTATION :: 4
+TELL_AREA_MAX_PHASES :: 3
 
-// the Tell-carrying Attack Style: a rotation of committed area attacks, each
-// shown on the ground for its own authored seconds before it lands. Once a
-// Tell starts it always resolves (ADR-0023) - the running branch never reads
-// the player - so the only way not to be hit is to have left the disc. The
-// authored half is what a preset writes; the runtime half is zero on a fresh
-// stamp (Melee.attack_timer's "runtime countdown, not editor-set"), which is
-// why spawn_enemy_at needs no init for it and a body still compares equal
-// to its preset. Ticket 21's boss stacks phases on top of this shape.
-Tell_Area :: struct {
+// one stretch of a Tell-carrying body's life: the rotation it cycles and the
+// recovery it takes between resolves. A body is born in phase 0 and enters
+// phase n once its health fraction drops strictly below phases[n].enter_below
+// (phase 0's threshold is ignored). Recovery is per phase, not per Kind,
+// because pacing is what makes a phase change legible alongside the bar
+// (boss-telegraph-and-phase-feel): the body visibly gets busier at the
+// moment the threshold is crossed.
+Tell_Phase :: struct {
+	enter_below:      f32, // health fraction this phase is entered below; ignored on phase 0
 	rotation:         [TELL_AREA_MAX_ROTATION]Area_Attack, // cycled in order
 	rotation_count:   int, // live entries of `rotation`, 1..TELL_AREA_MAX_ROTATION; 0 makes the body inert rather than a panic
 	cooldown_seconds: f32, // seconds from a resolve until the next Tell may start (Melee's attack_cooldown analogue)
+}
 
-	rotation_index:   int, // runtime: the entry the running (or next) Tell uses; advances on resolve, so mid-Tell it is the attack in flight
-	tell_remaining:   f32, // runtime: > 0 while a Tell is running; counted down in raw dt seconds, scaled by nothing
-	tell_centre:      Vec2, // runtime: the claimed disc's centre, locked at Tell start and never re-read
-	cooldown_timer:   f32, // runtime countdown between Tells, not editor-set
+// the Tell-carrying Attack Style: phases of committed area attacks, each
+// attack shown on the ground for its own authored seconds before it lands.
+// Once a Tell starts it always resolves (ADR-0023) - the running branch never
+// reads the player - so the only way not to be hit is to have left the disc,
+// and a phase change waits for the Tell in flight for the same reason. The
+// authored half is what a preset writes; the runtime half is zero on a fresh
+// stamp (Melee.attack_timer's "runtime countdown, not editor-set"), which is
+// why spawn_enemy_at needs no init for it and a body still compares equal
+// to its preset. The Boss is this shape with phase_count above one; nothing
+// about phases is boss-only.
+Tell_Area :: struct {
+	phases:         [TELL_AREA_MAX_PHASES]Tell_Phase,
+	phase_count:    int, // live entries of `phases`, 1..TELL_AREA_MAX_PHASES; 0 makes the body inert
+
+	phase_index:    int, // runtime: the phase the body is in; only ever advances (health is never regained), and only between Tells
+	rotation_index: int, // runtime: the entry the running (or next) Tell uses; advances on resolve, so mid-Tell it is the attack in flight
+	tell_remaining: f32, // runtime: > 0 while a Tell is running; counted down in raw dt seconds, scaled by nothing
+	tell_centre:    Vec2, // runtime: the claimed disc's centre, locked at Tell start and never re-read
+	cooldown_timer: f32, // runtime countdown between Tells, not editor-set
 }
 
 // one entry in a Map's spawn timeline, replacing the old fixed-position
@@ -540,9 +582,14 @@ default_attack_style :: proc(family: Attack_Style_Kind) -> Attack_Style {
 		}
 	case .Tell_Area:
 		return Tell_Area {
-			rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
-			rotation_count = 1,
-			cooldown_seconds = 1.5,
+			phases = {
+				0 = {
+					rotation = {0 = {radius = 28, reach = 40, damage = 18, tell_seconds = 0.6}},
+					rotation_count = 1,
+					cooldown_seconds = 1.5,
+				},
+			},
+			phase_count = 1,
 		}
 	case .None:
 		return nil
@@ -911,6 +958,7 @@ update_spawn_triggers :: proc(dt: f32) {
 // per-enemy (not all-or-nothing), so a batch that partially fits still
 // spawns what it can (ticket 03: "One_Shot's batch may come up short")
 fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
+	_, boss_alive := find_boss(game.enemies[:])
 	visible_rect := camera_visible_world_rect(game.camera)
 	player_pos := Vec2{game.player.x, game.player.y}
 	// the tilemap doesn't change mid-batch, so this is computed once per
@@ -928,14 +976,97 @@ fire_spawn_composition :: proc(composition: []Spawn_Composition_Entry) {
 		style := movement_style_kind(enemy_presets[entry.kind].movement)
 		must_reach := movement_style_collides_with_terrain[style]
 
+		// per entry rather than per batch, so an ordinary entry that fills
+		// the field does not drop a Boss entry behind it in the same batch.
+		// Once a Boss is on the field it occupies its slot and the
+		// reservation is spent: ordinary Kinds may then fill to the cap.
+		cap := MAX_ENEMIES
+		if !enemy_kind_is_boss(entry.kind) && !boss_alive {
+			cap -= ENEMY_BOSS_RESERVED_SLOTS
+		}
 		for _ in 0 ..< entry.count {
-			if len(game.enemies) >= MAX_ENEMIES {
-				return
+			if len(game.enemies) >= cap {
+				break
 			}
 			point := pick_offscreen_spawn_point(player_pos, visible_rect, map_bounds, &game.flow_field, must_reach)
 			spawn_enemy_at(point, entry.kind)
 		}
 	}
+}
+
+// -- the Boss's seams ------------------------------------------------------
+
+enemy_kind_is_boss :: proc(kind: Enemy_Kind) -> bool {
+	return enemy_presets[kind].boss
+}
+
+enemy_is_boss :: proc(enemy: Enemy) -> bool {
+	return enemy_kind_is_boss(enemy.kind)
+}
+
+// remaining health as 0..1 - what a phase threshold is read against and
+// what the Boss's Health indicator fills to. A body with no max_health is a
+// test fixture, and reads as untouched rather than dead.
+enemy_health_fraction :: proc(enemy: Enemy) -> f32 {
+	if enemy.max_health <= 0 {
+		return 1
+	}
+	return clamp(enemy.health / enemy.max_health, 0, 1)
+}
+
+// the first Boss body alive, for the seams that want one: its field, its
+// Health indicator. The roster authors exactly one Boss Kind and a Map places
+// one, but nothing here assumes it - a second would simply go without.
+find_boss :: proc(enemies: []Enemy) -> (index: int, found: bool) {
+	for enemy, i in enemies {
+		if enemy_is_boss(enemy) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// what the shared flow field routes around: every Boss body, at half its
+// drawn size, about the centre of its collision box (the point move_actor
+// keeps for it, rather than its feet). Temp-allocated - read once per frame
+// by update_game_state and handed to both of its ensures.
+enemy_flow_obstacles :: proc(enemies: []Enemy, allocator := context.temp_allocator) -> []Flow_Obstacle {
+	obstacles := make([dynamic]Flow_Obstacle, allocator)
+	for enemy in enemies {
+		if !enemy_is_boss(enemy) {
+			continue
+		}
+		box := actor_collision_rect(enemy.rect)
+		append(
+			&obstacles,
+			Flow_Obstacle{centre = {box.x + box.width / 2, box.y + box.height / 2}, radius = enemy_body_size(enemy.max_health) / 2},
+		)
+	}
+	return obstacles[:]
+}
+
+// the field a body steers by: the Boss cannot read the shared field it is
+// stamped into, so it reads its own (ensure_boss_flow_field). Walls are the
+// same solid set in both, so move_actor stays on the shared one.
+enemy_steering_field :: proc(enemy: Enemy) -> ^Flow_Field {
+	return enemy_is_boss(enemy) ? &game.boss_flow_field : &game.flow_field
+}
+
+// floods game.boss_flow_field while a Boss is alive, at the radius its body
+// size asks for and with no obstacles; with none alive the field is left as
+// it is, unbuilt or stale, and nothing reads it
+ensure_boss_flow_field :: proc() {
+	boss_index, has_boss := find_boss(game.enemies[:])
+	if !has_boss {
+		return
+	}
+	tilemap := &game.current_map.tilemap
+	flow_field_ensure(
+		&game.boss_flow_field,
+		tilemap,
+		Vec2{game.player.x, game.player.y},
+		flow_field_radius_for_body(enemy_body_size(game.enemies[boss_index].max_health), tilemap.tile_size.x),
+	)
 }
 
 // stamps one Enemy from its Kind's preset. The union values are *copied*
@@ -1116,7 +1247,7 @@ update_enemies :: proc(dt: f32) {
 		case Grounded:
 			intent := movement_intent(pos, player_pos, enemy.attack)
 			goal := movement_goal_point(pos, player_pos, intent)
-			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			chase_dir := field_chase_direction(enemy_steering_field(enemy), pos, intent, goal)
 			final_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			delta = final_dir * m.speed * dt
 		case Charger:
@@ -1124,7 +1255,7 @@ update_enemies :: proc(dt: f32) {
 			// nowhere else, so a body on its lane cannot be pushed off it
 			intent := movement_intent(pos, player_pos, enemy.attack)
 			goal := movement_goal_point(pos, player_pos, intent)
-			chase_dir := field_chase_direction(&game.flow_field, pos, intent, goal)
+			chase_dir := field_chase_direction(enemy_steering_field(enemy), pos, intent, goal)
 			approach_dir := linalg.normalize0(chase_dir + separation_dir * SEPARATION_STRENGTH[kind])
 			tick := update_charger(&m, pos, player_pos, approach_dir, dt)
 			delta = tick.delta
@@ -1179,7 +1310,7 @@ update_enemies :: proc(dt: f32) {
 				a.fire_timer = 1.0 / a.fire_rate
 			}
 		case Tell_Area:
-			tick := update_tell_area(&a, pos, game.player.rect, dt)
+			tick := update_tell_area(&a, pos, game.player.rect, enemy_health_fraction(enemy), dt)
 			if tick.planted {
 				delta = {}
 			}
@@ -1230,13 +1361,31 @@ Tell_Area_Tick :: struct {
 	damage:   f32, // > 0 only when the resolve caught the player's collision rect
 }
 
-// the attack the running (or next) Tell uses; false when the rotation is
-// empty, which makes a mis-authored preset inert rather than a modulo by zero
-tell_area_current_attack :: proc(a: Tell_Area) -> (Area_Attack, bool) {
-	if a.rotation_count <= 0 {
+// the live phases, 0..TELL_AREA_MAX_PHASES - the one place phase_count is
+// clamped, so a slider or a hand edit past the array cannot index off it
+tell_area_phase_count :: proc(a: Tell_Area) -> int {
+	return clamp(a.phase_count, 0, TELL_AREA_MAX_PHASES)
+}
+
+// the phase the body is in; false when no phase is authored, which makes
+// a mis-authored preset inert rather than an index out of range
+tell_area_current_phase :: proc(a: Tell_Area) -> (Tell_Phase, bool) {
+	count := tell_area_phase_count(a)
+	if count <= 0 || a.phase_index < 0 || a.phase_index >= count {
 		return {}, false
 	}
-	return a.rotation[a.rotation_index % a.rotation_count], true
+	return a.phases[a.phase_index], true
+}
+
+// the attack the running (or next) Tell uses; false when the phase's
+// rotation is empty, which makes a mis-authored preset inert rather than a
+// modulo by zero
+tell_area_current_attack :: proc(a: Tell_Area) -> (Area_Attack, bool) {
+	phase, ok := tell_area_current_phase(a)
+	if !ok || phase.rotation_count <= 0 {
+		return {}, false
+	}
+	return phase.rotation[a.rotation_index % phase.rotation_count], true
 }
 
 // where the disc lands: the player's feet at Tell start, clamped to `reach`
@@ -1277,28 +1426,44 @@ tell_area_progress :: proc(a: Tell_Area) -> (progress: f32, telling: bool) {
 // runs nothing here reads the player - leaving reach, god mode or dying does
 // not stop it (ADR-0023: a committed Tell always resolves). The only thing
 // that ends one early is the body's own death, which is not a bluff.
-update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: f32) -> (tick: Tell_Area_Tick) {
+//
+// `health_fraction` is the phase machine's one input: between Tells the body
+// advances into whichever authored phase its health has fallen below - all
+// the way, so one hit through two thresholds lands in the last - and never
+// back. The new phase's rotation starts from its head, but the recovery
+// still owed from the last resolve carries over: a phase change is not a
+// free attack.
+update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, health_fraction: f32, dt: f32) -> (tick: Tell_Area_Tick) {
+	if a.tell_remaining <= 0 {
+		count := tell_area_phase_count(a^)
+		for a.phase_index + 1 < count && health_fraction < a.phases[a.phase_index + 1].enter_below {
+			a.phase_index += 1
+			a.rotation_index = 0
+		}
+	}
+
+	phase, has_phase := tell_area_current_phase(a^)
 	attack, ok := tell_area_current_attack(a^)
-	if !ok {
+	if !has_phase || !ok {
 		return
 	}
 	player_box := actor_collision_rect(player_rect)
 
-	resolve := proc(a: ^Tell_Area, attack: Area_Attack, player_box: Rect, tick: ^Tell_Area_Tick) {
+	resolve := proc(a: ^Tell_Area, phase: Tell_Phase, attack: Area_Attack, player_box: Rect, tick: ^Tell_Area_Tick) {
 		tick.resolved = true
 		if rl.CheckCollisionCircleRec(a.tell_centre, attack.radius, player_box) {
 			tick.damage = attack.damage
 		}
 		a.tell_remaining = 0
-		a.cooldown_timer = a.cooldown_seconds
-		a.rotation_index = (a.rotation_index + 1) % a.rotation_count
+		a.cooldown_timer = phase.cooldown_seconds
+		a.rotation_index = (a.rotation_index + 1) % phase.rotation_count
 	}
 
 	if a.tell_remaining > 0 {
 		a.tell_remaining -= dt
 		tick.planted = true
 		if a.tell_remaining <= 0 {
-			resolve(a, attack, player_box, &tick)
+			resolve(a, phase, attack, player_box, &tick)
 		}
 		return
 	}
@@ -1323,7 +1488,7 @@ update_tell_area :: proc(a: ^Tell_Area, enemy_pos: Vec2, player_rect: Rect, dt: 
 	if a.tell_remaining <= 0 {
 		// a zero-length Tell resolves the instant it starts, the way a
 		// zero-length Windup does (weapon.odin) - no frame of dead time
-		resolve(a, attack, player_box, &tick)
+		resolve(a, phase, attack, player_box, &tick)
 	}
 	return
 }
