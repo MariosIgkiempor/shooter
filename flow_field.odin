@@ -777,6 +777,16 @@ flow_field_reaches :: proc(field: ^Flow_Field, world_pos: Vec2) -> bool {
 // last resort for a caller whose own retries all failed rather than a
 // placement strategy in its own right.
 //
+// A filled cell inside the inflation envelope is named only when no filled
+// cell outside it exists. The envelope is the body's own half-width around
+// every wall, so a body set down on the centre of a cell outside it stands
+// clear of every wall, while one set down inside it is inside the wall it
+// hugs - and the flood does fill the envelope whenever the player stands in
+// it (flow_can_enter), which is exactly when a body is most likely to be
+// placed by this fallback. The envelope is named at all only for a flood
+// that never left it (a player sealed in a passage no wider than the
+// envelope), where it is still the only ground the player can reach.
+//
 // ok=false where the field has no answers - there is genuinely no reachable
 // cell to name then, and the caller must fall back to whatever it did before
 // the field existed.
@@ -785,7 +795,9 @@ flow_field_nearest_reachable :: proc(field: ^Flow_Field, world_pos: Vec2) -> (ta
 		return {}, false
 	}
 
-	best_distance := max(f32)
+	best_open, best_envelope: Vec2
+	best_open_distance, best_envelope_distance := max(f32), max(f32)
+	found_open, found_envelope: bool
 	for cell, index in field.cells {
 		if cell.distance == FLOW_UNREACHED {
 			continue
@@ -795,13 +807,22 @@ flow_field_nearest_reachable :: proc(field: ^Flow_Field, world_pos: Vec2) -> (ta
 		// squared, since only the ordering is used
 		offset := center - world_pos
 		distance := offset.x * offset.x + offset.y * offset.y
-		if distance < best_distance {
-			best_distance = distance
-			target = center
-			ok = true
+		if cell.inflated {
+			if distance < best_envelope_distance {
+				best_envelope_distance = distance
+				best_envelope = center
+				found_envelope = true
+			}
+		} else if distance < best_open_distance {
+			best_open_distance = distance
+			best_open = center
+			found_open = true
 		}
 	}
-	return target, ok
+	if found_open {
+		return best_open, true
+	}
+	return best_envelope, found_envelope
 }
 
 // which end of the distance ramp a neighbour scan wants: closing on the
