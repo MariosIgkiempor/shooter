@@ -142,7 +142,7 @@ ENEMY_GOLD_PER_MAX_HEALTH :: f32(0.6)
 
 Enemy :: struct {
 	using rect: Rect, // bottom-center "feet" anchor, same convention as Player
-	squash:     Vec2, // continuous isotropic squash while moving, eased back to {1,1} at rest (draw_actor)
+	squash:     Actor_Squash, // squash pulse on rest<->moving transitions, eased back to rest (update_actor_squash, draw_enemy)
 	movement:   Movement_Style,
 	attack:     Attack_Style,
 	health:     f32,
@@ -1091,7 +1091,7 @@ spawn_enemy_at :: proc(position: Vec2, kind: Enemy_Kind) {
 
 	enemy := Enemy {
 		rect       = {position.x, position.y, 0, 0},
-		squash     = {1, 1},
+		squash     = actor_squash_at_rest(),
 		movement   = movement,
 		attack     = preset.attack,
 		health     = preset.max_health,
@@ -1365,7 +1365,7 @@ update_enemies :: proc(dt: f32) {
 		// nil: no attack
 		}
 
-		update_actor_squash(&enemy.squash, delta.x != 0 || delta.y != 0, dt)
+		before := Vec2{enemy.x, enemy.y}
 
 		// Floater ignores tilemap collision entirely (see the Floater
 		// movement design ticket), so it skips move_actor's collision
@@ -1383,6 +1383,8 @@ update_enemies :: proc(dt: f32) {
 			enemy.x += delta.x
 			enemy.y += delta.y
 		}
+
+		update_actor_squash(&enemy.squash, Vec2{enemy.x, enemy.y} - before, dt)
 	}
 }
 

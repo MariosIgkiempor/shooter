@@ -207,6 +207,23 @@ draw_rectangle :: proc(rect: Rect, color: Color, origin: Vec2 = {}, rotation: f3
 	rl.DrawRectanglePro(rect, origin, rotation, color)
 }
 
+// winding-safe: raylib culls back-facing triangles and the sign of "front"
+// in y-down screen space is the empirically pinned one in
+// icon_triangle_front_facing, so a caller may hand corners in either order
+draw_triangle :: proc(a, b, c: Vec2, color: Color) {
+	if icon_triangle_front_facing(a, b, c) {
+		rl.DrawTriangle(a, b, c, color)
+	} else {
+		rl.DrawTriangle(a, c, b, color)
+	}
+}
+
+// four corners in order round the shape, convex
+draw_quad :: proc(a, b, c, d: Vec2, color: Color) {
+	draw_triangle(a, b, c, color)
+	draw_triangle(a, c, d, color)
+}
+
 draw_rectangle_lines :: proc(rect: Rect, color: Color, thickness: f32 = 1) {
 	rl.DrawRectangleLinesEx(rect, thickness, color)
 }
