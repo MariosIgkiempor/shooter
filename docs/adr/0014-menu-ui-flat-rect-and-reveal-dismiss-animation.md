@@ -13,3 +13,7 @@ See [Flat-Rect Menu UI: Transitions & Animation](../../.scratch/menu-ui-polish/m
 ## Update (ADR-0020)
 
 The nine-slice remnant this ADR left behind is gone. `debug.odin`'s F8 panel was its last consumer; it now draws through the same flat-rect render-command backend the editor uses, `draw_nine_slice`/`draw_nine_slice_tiled` and the `Ui_9square_*` source art have been deleted, and `HUD_THEME` survives only as a flat palette that keeps the F8 panel visually distinct from the editor. No nine-slice rendering remains anywhere in the game.
+
+## Update (2026-09-14)
+
+`HUD_THEME` is gone too. The F8 panel no longer swaps a custom palette into `vendor/ui`'s theme global; it uses the library's default theme exactly as the editor does, so the two `vendor/ui` surfaces now render identically. `MENU_THEME` remains the only first-party theme, and it belongs to the six Screens alone.

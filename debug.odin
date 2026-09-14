@@ -48,10 +48,6 @@ DEBUG_GOLD_GRANT: int = 500 // gold added to the player per click of the panel's
 // two can't drift. That's why the weapon_visual_scale slider that used to sit
 // here is gone: it's a Tunable now.
 draw_debug_panel_ui :: proc() {
-	previous_theme := ui.theme
-	ui.theme = HUD_THEME
-	defer ui.theme = previous_theme
-
 	ui.set_pointer_state(game.mouse, is_mouse_button_down(.LEFT))
 	ui.begin_frame(game.window_width, game.window_height)
 
