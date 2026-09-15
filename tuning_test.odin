@@ -69,16 +69,16 @@ test_every_label_uses_only_glyphs_the_font_has :: proc(t: ^testing.T) {
 	with_registry()
 	defer teardown_registry()
 
-	// data/font.ttf bakes a deliberately small glyph set (see atlas_glyphs).
-	// A character outside it doesn't fail loudly - it draws as `?`, which is
+	// every Font bakes a deliberately small glyph set (LETTERS_IN_FONT). A
+	// character outside it doesn't fail loudly - it draws as `?`, which is
 	// how "Size / Max Health" and "Player (1)" shipped looking like
-	// "Size ? Max Health" and "Player ?1?". Checked against the real atlas so
-	// it stays honest if the font's coverage ever changes.
-	has_glyph :: proc(r: rune) -> bool {
+	// "Size ? Max Health" and "Player ?1?". Checked against the real atlas,
+	// per Font, so it stays honest if any typeface's coverage ever changes.
+	has_glyph :: proc(f: Font, r: rune) -> bool {
 		if r == ' ' {
 			return true // no baked glyph; raylib advances past it
 		}
-		for glyph in atlas_glyphs {
+		for glyph in atlas_fonts[f].glyphs {
 			if glyph.value == r {
 				return true
 			}
@@ -86,30 +86,54 @@ test_every_label_uses_only_glyphs_the_font_has :: proc(t: ^testing.T) {
 		return false
 	}
 
-	for tunable in tunables {
-		for r in tunable.label {
-			testing.expectf(
-				t,
-				has_glyph(r),
-				"Tunable %q\'s label %q contains %q, which has no glyph in the font and will draw as `?`",
-				tunable.slug,
-				tunable.label,
-				r,
-			)
+	for f in Font {
+		for tunable in tunables {
+			for r in tunable.label {
+				testing.expectf(
+					t,
+					has_glyph(f, r),
+					"Tunable %q\'s label %q contains %q, which has no glyph in Font %v and will draw as `?`",
+					tunable.slug,
+					tunable.label,
+					r,
+					f,
+				)
+			}
+		}
+
+		for group in Tuning_Group {
+			for r in tuning_group_display_name[group] {
+				testing.expectf(
+					t,
+					has_glyph(f, r),
+					"Tuning Group %v\'s name %q contains %q, which has no glyph in Font %v",
+					group,
+					tuning_group_display_name[group],
+					r,
+					f,
+				)
+			}
 		}
 	}
+}
 
-	for group in Tuning_Group {
-		for r in tuning_group_display_name[group] {
-			testing.expectf(
-				t,
-				has_glyph(r),
-				"Tuning Group %v\'s name %q contains %q, which has no glyph in the font",
-				group,
-				tuning_group_display_name[group],
-				r,
-			)
-		}
+@(test)
+test_every_font_bakes_the_whole_charset :: proc(t: ^testing.T) {
+	// the atlas builder refuses to bake a typeface missing any LETTERS_IN_FONT
+	// rune, so a Font with fewer glyphs than the charset means atlas.odin is
+	// stale or was hand-edited
+	expected := len(LETTERS_IN_FONT)
+	for f in Font {
+		af := atlas_fonts[f]
+		testing.expectf(
+			t,
+			len(af.glyphs) == expected,
+			"Font %v has %v glyphs but LETTERS_IN_FONT has %v runes - rerun the atlas builder",
+			f,
+			len(af.glyphs),
+			expected,
+		)
+		testing.expectf(t, af.size > 0, "Font %v has no bake size", f)
 	}
 }
 

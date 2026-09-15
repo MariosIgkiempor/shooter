@@ -6,7 +6,7 @@ import rl "vendor:raylib"
 
 DAMAGE_NUMBER_LIFETIME: f32 = 0.6
 DAMAGE_NUMBER_RISE_SPEED: f32 = 40.0 // px/s, world-space upward drift
-DAMAGE_NUMBER_FONT_SIZE: f32 = 10
+DAMAGE_NUMBER_FONT :: Font.Mini_Square_16
 
 Damage_Number :: struct {
 	position:     Vec2,
@@ -48,8 +48,8 @@ draw_damage_numbers :: proc(damage_numbers: []Damage_Number) {
 	for dn in damage_numbers {
 		t := dn.lifetime / dn.max_lifetime // 1 -> 0 over life
 		text := fmt.tprintf("{}", int(dn.amount))
-		size := rl.MeasureTextEx(font, strings.clone_to_cstring(text, context.temp_allocator), DAMAGE_NUMBER_FONT_SIZE, 0)
+		size := measure_text(DAMAGE_NUMBER_FONT, text)
 		pos := Vec2{dn.position.x - size.x / 2, dn.position.y - size.y / 2}
-		draw_text(text, pos, DAMAGE_NUMBER_FONT_SIZE, 0, rl.Fade(dn.color, t))
+		draw_text(DAMAGE_NUMBER_FONT, text, pos, 0, rl.Fade(dn.color, t))
 	}
 }

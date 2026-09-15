@@ -1,6 +1,3 @@
-[submodule "vendor/atlas-builder"]
-	path = vendor/atlas-builder
-	url = https://github.com/karl-zylinski/atlas-builder.git
 [submodule "vendor/ui"]
 	path = vendor/ui
 	url = git@github.com:MariosIgkiempor/ui.git

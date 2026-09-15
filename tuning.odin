@@ -38,9 +38,9 @@ Tunable :: struct {
 	// what does, and it is load-bearing rather than cosmetic.
 	slug:    string,
 	group:   Tuning_Group,
-	// shown in the editor. data/font.ttf only bakes A-Za-z0-9 and ?!&.,_:[]-+
-	// (see atlas_glyphs) - anything else, notably ( ) / % *, draws as `?`.
-	// tuning_test.odin asserts every label and group name stays inside that set.
+	// shown in the editor. Every Font bakes only LETTERS_IN_FONT (atlas.odin)
+	// - anything else, notably * and #, draws as `?`. tuning_test.odin asserts
+	// every label and group name stays inside that set.
 	label:   string,
 	value:   Tunable_Value,
 	// hand-authored, per *field* rather than per field-per-kind: every weapon's
@@ -768,7 +768,6 @@ register_feel_tunables :: proc() {
 
 	register_tunable(.Damage_Numbers, "damage_number.lifetime", "Lifetime", &DAMAGE_NUMBER_LIFETIME, 0.05, 4)
 	register_tunable(.Damage_Numbers, "damage_number.rise_speed", "Rise Speed", &DAMAGE_NUMBER_RISE_SPEED, 0, 200)
-	register_tunable(.Damage_Numbers, "damage_number.font_size", "Font Size", &DAMAGE_NUMBER_FONT_SIZE, 4, 40)
 
 	register_tunable(.World_Render, "world.wall_bevel_inset", "Wall Bevel Inset", &TILEMAP_WALL_BEVEL_INSET, 0, 8)
 	register_tunable(.World_Render, "world.wall_bevel_thickness", "Wall Bevel Thickness", &TILEMAP_WALL_BEVEL_THICKNESS, 0, 8)

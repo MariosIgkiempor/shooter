@@ -1,5 +1,6 @@
 package shooter
 
+import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "core:slice"
@@ -8,13 +9,16 @@ import rl "vendor:raylib"
 
 Color :: rl.Color
 Texture :: rl.Texture
-Font :: rl.Font
 Camera :: rl.Camera2D
 RenderTexture2D :: rl.RenderTexture2D
 
 ATLAS_DATA :: #load("data/atlas.png")
 atlas: Texture
-font: Font
+
+// one raylib font per baked Font, all sharing the atlas texture (see
+// load_atlased_font). Text is only ever drawn through draw_text with a Font,
+// never at a free size - a size that isn't baked doesn't exist.
+fonts: [Font]rl.Font
 
 // two-pass separable Gaussian blur (renderer.odin's begin_blur_shader_mode/
 // ensure_blur_textures) backing the menu backdrop blur - see ADR-0015 and
@@ -36,7 +40,9 @@ initialize_renderer :: proc() {
 	atlas_image := rl.LoadImageFromMemory(".png", raw_data(ATLAS_DATA), i32(len(ATLAS_DATA)))
 	atlas = rl.LoadTextureFromImage(atlas_image)
 	rl.UnloadImage(atlas_image)
-	font = load_atlased_font()
+	for f in Font {
+		fonts[f] = load_atlased_font(f)
+	}
 	rl.SetShapesTexture(atlas, SHAPES_TEXTURE_RECT)
 
 	blur_fs_cstring := strings.clone_to_cstring(BLUR_FS_SOURCE, context.temp_allocator)
@@ -47,7 +53,9 @@ initialize_renderer :: proc() {
 
 deinitialize_renderer :: proc() {
 	rl.UnloadTexture(atlas)
-	delete_atlased_font(font)
+	for f in Font {
+		delete_atlased_font(fonts[f])
+	}
 	rl.UnloadShader(blur_shader)
 	if blur_scene_texture.id != 0 {
 		rl.UnloadRenderTexture(blur_scene_texture)
@@ -250,15 +258,35 @@ draw_flash :: proc(position: Vec2, radius: f32, color: Color) {
 	rl.DrawCircleGradient(i32(position.x), i32(position.y), radius, color, rl.Fade(color, 0))
 }
 
-draw_text :: proc(text: string, pos: Vec2, size: f32, spacing: f32 = 0, tint: Color = rl.WHITE) {
+draw_text :: proc(f: Font, text: string, pos: Vec2, spacing: f32 = 0, tint: Color = rl.WHITE) {
 	rl.DrawTextEx(
-		font,
+		fonts[f],
 		strings.clone_to_cstring(text, context.temp_allocator),
 		pos,
-		size,
+		f32(atlas_fonts[f].size),
 		spacing,
 		tint,
 	)
+}
+
+measure_text :: proc(f: Font, text: string, spacing: f32 = 0) -> Vec2 {
+	return rl.MeasureTextEx(
+		fonts[f],
+		strings.clone_to_cstring(text, context.temp_allocator),
+		f32(atlas_fonts[f].size),
+		spacing,
+	)
+}
+
+// vendor/ui themes carry a numeric font_size; this is the only place that
+// number turns into a Font. Every size a theme uses must be baked - an
+// unlisted one is a bug in the theme, not something to scale around.
+font_for_ui_size :: proc(font_size: i32) -> Font {
+	switch font_size {
+	case 18:
+		return .Debug_18
+	}
+	panic(fmt.tprintf("no Font is baked at ui size %v; bake it in atlas_builder's TYPEFACES or fix the theme", font_size))
 }
 
 delete_atlased_font :: proc(font: rl.Font) {
@@ -271,14 +299,15 @@ delete_atlased_font :: proc(font: rl.Font) {
 // rl.UnloadFont() to destroy this font, instead use `delete_atlased_font`, since we've set up the
 // memory ourselves.
 //
-// The set of available glyphs is governed by `LETTERS_IN_FONT` in `atlas_builder.odin`
-// The font used is governed by `FONT_FILENAME` in `atlas_builder.odin`
-load_atlased_font :: proc() -> rl.Font {
-	num_glyphs := len(atlas_glyphs)
+// The set of available glyphs is governed by `LETTERS_IN_FONT` in `atlas_builder.odin`;
+// which typefaces exist and at what sizes by its `TYPEFACES` table.
+load_atlased_font :: proc(f: Font) -> rl.Font {
+	af := atlas_fonts[f]
+	num_glyphs := len(af.glyphs)
 	font_rects := make([]Rect, num_glyphs)
 	glyphs := make([]rl.GlyphInfo, num_glyphs)
 
-	for ag, idx in atlas_glyphs {
+	for ag, idx in af.glyphs {
 		font_rects[idx] = ag.rect
 		glyphs[idx] = {
 			value    = ag.value,
@@ -289,7 +318,7 @@ load_atlased_font :: proc() -> rl.Font {
 	}
 
 	return {
-		baseSize = ATLAS_FONT_SIZE,
+		baseSize = i32(af.size),
 		glyphCount = i32(num_glyphs),
 		glyphPadding = 0,
 		texture = atlas,

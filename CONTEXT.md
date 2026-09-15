@@ -187,6 +187,22 @@ A shape-drawn glyph identifying a thing in the UI — a Weapon kind, an Upgrade,
 Weapon Icons are per-`Weapon_Kind`, not per-**Weapon family**, and the *same* geometry is what `draw_weapon` renders in the world — an **Icon frame** decides where a glyph's unit square lands, either upright in a menu slot or anchored at the weapon's grip and rotated to the player's aim (mirrored past vertical, so a grip never hangs in the air). Per-kind sizes and effect magnitudes live in `weapon_visuals`, derived from `kind` at draw time and never stored on **Weapon**. See [ADR-0018](docs/adr/0018-weapon-visual-identity-is-per-kind-not-per-family.md).
 _Avoid_: Sprite, texture, atlas tile (all imply the retired art pipeline — an Icon is geometry, not an image), Glyph on its own (collides with the font's own character glyphs)
 
+**Atlas**:
+The single packed texture every drawn image comes from — textures, tiles, every Font's Glyphs, and the white square raylib's shapes sample. Baked ahead of time by the atlas builder and embedded in the binary; nothing is loaded from disk at runtime.
+_Avoid_: Sprite sheet, texture atlas (fine informally, but there is only one, so "the Atlas" is unambiguous)
+
+**Typeface**:
+A `.ttf` file in `fonts/`, identified by its file stem. A Typeface is never drawn with directly — it is the *source* a **Font** is baked from. Two exist: the game's pixel typeface (menus, HUD readouts, damage numbers) and a proportional debug typeface (editor and F8 panel), kept separate so dense tool text never has to read in a pixel grid.
+_Avoid_: Font for the file (a Font is a Typeface *at a size*, see below), font family
+
+**Font**:
+A **Typeface** baked into the **Atlas** at one nominal pixel height, and the only thing text can be drawn with. Every Font is a named, compile-time constant; there is no drawing text "at a size" — a size that has not been baked does not exist, and nothing rescales a Font at runtime. The game typeface is baked at a pixel-grid-aligned pair of sizes (body and title); the debug typeface at one. Every Font covers exactly the same **Glyph** set.
+_Avoid_: Font size as a free number in drawing code (retired — it was how every size ended up a blurry resample of one bake, see [ADR-0029](docs/adr/0029-fonts-are-baked-per-typeface-and-size.md)), text style
+
+**Glyph**:
+One character of one **Font** as it sits in the **Atlas** — its image plus the offset and advance needed to place it. The Glyph set is one deliberately small charset shared by every Font; a Typeface missing any of it cannot be baked at all, and a label using a character outside it draws `?`. Distinct from an **Icon**, which is geometry drawn from code and not in the Atlas.
+_Avoid_: Character (the rune is the character; the Glyph is its baked image), Icon (see **Icon**'s own _Avoid_)
+
 **Screen**:
 One of the six full-window menu UI states the game can be in — Splash, Main Menu, Run Start, Map Selection, Run End, Shop — each with its own draw function in `hud.odin`. Distinct from **Run**: a Run is a play attempt; several Screens are shown before a Run starts and after it ends, but none of them are the Run itself, and none are shown while actually Playing. The gameplay HUD (**Resource indicator**) is not a Screen — it's a persistent world-space overlay shown continuously while Playing, not a full-window state the player enters and leaves. A **Screen change** — switching which Screen is current — Dismisses every Menu element on the outgoing Screen and Reveals every Menu element on the incoming one; see **Reveal** / **Dismiss**.
 _Avoid_: Menu (ambiguous — a Screen is the whole window state, not the panel/dropdown sense "menu" usually implies), Mode (the underlying code enum is `ProgramMode`, but "Mode" alone is too generic for the glossary)
