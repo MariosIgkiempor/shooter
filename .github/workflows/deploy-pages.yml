@@ -35,8 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # vendor/ui and vendor/atlas-builder - both pins must exist on
-          # their remotes or this step fails (see the ticket's checklist)
+          # vendor/ui - its pin must exist on its remote, reachable over
+          # https, or this step fails (see the ticket's checklist)
           submodules: true
 
       - name: Install Odin ${{ env.ODIN_RELEASE }}
