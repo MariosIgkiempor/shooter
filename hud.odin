@@ -42,14 +42,7 @@ draw_ui_render_commands :: proc(commands: layout.RenderCommands) {
 		case .Rectangle:
 			rl.DrawRectangleV(rl.Vector2(cmd.pos), rl.Vector2(cmd.size), rl.Color(cmd.color))
 		case .Text:
-			rl.DrawTextEx(
-				font,
-				strings.clone_to_cstring(cmd.text, context.temp_allocator),
-				rl.Vector2(cmd.pos),
-				f32(cmd.font_size),
-				0,
-				rl.Color(cmd.color),
-			)
+			draw_text(font_for_ui_size(cmd.font_size), cmd.text, Vec2(cmd.pos), 0, rl.Color(cmd.color))
 		}
 
 		if clipped {
@@ -340,7 +333,10 @@ Menu_Theme :: struct {
 	border_color:                                  Color,
 	border_width:                                  f32,
 	text, text_disabled:                           Color,
-	font_size, padding, gap:                       f32,
+	// font/title_font are what text is drawn with; font_size/title_font_size
+	// mirror their bake sizes for layout math (line heights, centring)
+	font, title_font:                              Font,
+	font_size, title_font_size, padding, gap:      f32,
 	duration:                                       f32,
 	ease:                                           proc(t: f32) -> f32,
 	scale_from:                                     f32,
@@ -360,7 +356,10 @@ MENU_THEME :: Menu_Theme {
 	border_width  = 2,
 	text          = rl.WHITE,
 	text_disabled = {130, 130, 130, 255},
-	font_size     = 18,
+	font          = .Mini_Square_16,
+	title_font    = .Mini_Square_32,
+	font_size     = 16,
+	title_font_size = 32,
 	padding       = 24,
 	gap           = 8,
 	duration      = 0.20,
@@ -418,8 +417,8 @@ draw_menu_stacked_icon :: proc(
 // horizontally centers `text` in `width` and draws it - the caption half of
 // a stacked icon row
 draw_menu_centered_text :: proc(text: string, x, y, width: f32, color: Color) {
-	size := rl.MeasureTextEx(font, strings.clone_to_cstring(text, context.temp_allocator), MENU_THEME.font_size, 0)
-	draw_text(text, Vec2{x + (width - size.x) / 2, y}, MENU_THEME.font_size, 0, color)
+	size := measure_text(MENU_THEME.font, text)
+	draw_text(MENU_THEME.font, text, Vec2{x + (width - size.x) / 2, y}, 0, color)
 }
 
 // the Run End receipt's inline treatment: a glyph in the left gutter, the
@@ -525,11 +524,11 @@ draw_menu_button :: proc(
 	draw_rectangle_lines(dest, menu_with_alpha(MENU_THEME.border_color, anim.alpha), MENU_THEME.border_width)
 
 	text_color := disabled ? MENU_THEME.text_disabled : MENU_THEME.text
-	text_size := rl.MeasureTextEx(font, strings.clone_to_cstring(label, context.temp_allocator), MENU_THEME.font_size, 0)
+	text_size := measure_text(MENU_THEME.font, label)
 
 	if icon == nil {
 		text_pos := Vec2{dest.x + (dest.width - text_size.x) / 2, dest.y + (dest.height - text_size.y) / 2}
-		draw_text(label, text_pos, MENU_THEME.font_size, 0, menu_with_alpha(text_color, anim.alpha))
+		draw_text(MENU_THEME.font, label, text_pos, 0, menu_with_alpha(text_color, anim.alpha))
 		return clicked, state
 	}
 
@@ -549,9 +548,9 @@ draw_menu_button :: proc(
 
 	icon(icon_frame_rect({dest.x + (dest.width - icon_size) / 2, top, icon_size, icon_size}), tint, anim.alpha)
 	draw_text(
+		MENU_THEME.font,
 		label,
 		Vec2{dest.x + (dest.width - text_size.x) / 2, top + icon_size + MENU_ICON_GAP},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(text_color, anim.alpha),
 	)
@@ -664,28 +663,26 @@ draw_main_menu_ui :: proc() {
 	// to the left rather than stacked above (see the MENU_ICON_SIZE block)
 	text_x := draw_menu_inline_icon(icon_level, progression_rect.x + pad, y, nil, panel_anim.alpha)
 	draw_text(
+		MENU_THEME.font,
 		fmt.tprintf("Account Lv. {}", game.player.level),
 		Vec2{text_x, y},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
 	)
 	y += MENU_TEXT_LINE_HEIGHT
-	// no slash in the HUD font's glyph set (atlas.odin's LETTERS_IN_FONT) -
-	// it renders as "?", hence "of" instead
 	text_x = draw_menu_inline_icon(icon_gold, progression_rect.x + pad, y, nil, panel_anim.alpha)
 	draw_text(
-		fmt.tprintf("Banked: {} of {}", game.player.banked_progress, gold_required_for_level(game.player.level)),
+		MENU_THEME.font,
+		fmt.tprintf("Banked: {}/{}", game.player.banked_progress, gold_required_for_level(game.player.level)),
 		Vec2{text_x, y},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
 	)
 	y += MENU_TEXT_LINE_HEIGHT
 	draw_text(
+		MENU_THEME.font,
 		fmt.tprintf("Gold: {}", game.player.gold),
 		Vec2{progression_rect.x + pad, y},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
 	)
@@ -697,9 +694,9 @@ draw_main_menu_ui :: proc() {
 
 	ry := relics_rect.y + pad
 	draw_text(
+		MENU_THEME.font,
 		"Relics",
 		Vec2{relics_rect.x + pad, ry},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, panel_anim.alpha),
 	)
@@ -808,23 +805,23 @@ draw_relic_row :: proc(kind: Relic_Kind, x, y, width: f32, anim: Menu_Element_An
 	cursor := y
 
 	label := fmt.tprintf("{} [{} of {}]", preset.display_name, stack, preset.max_stack)
-	draw_text(label, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
+	draw_text(MENU_THEME.font, label, Vec2{x, cursor}, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
 	switch {
 	case !relic_unlocked(kind):
 		draw_text(
+			MENU_THEME.font,
 			fmt.tprintf("Unlocks at Lv. {}", preset.unlock_level),
 			Vec2{x, cursor},
-			MENU_THEME.font_size,
 			0,
 			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
 		)
 	case relic_maxed(kind):
 		draw_text(
+			MENU_THEME.font,
 			"MAXED",
 			Vec2{x, cursor},
-			MENU_THEME.font_size,
 			0,
 			menu_with_alpha(MENU_THEME.text_disabled, anim.alpha),
 		)
@@ -854,9 +851,9 @@ draw_confirm_new_run_dialog :: proc() {
 
 	draw_menu_panel(rect, anim)
 	draw_text(
+		MENU_THEME.font,
 		"Your weapon tier and Upgrades will be lost. Gold is kept.",
 		Vec2{rect.x + pad, rect.y + pad},
-		MENU_THEME.font_size,
 		0,
 		MENU_THEME.text,
 	)
@@ -903,29 +900,29 @@ draw_run_start_ui :: proc() {
 	// one row per column: the family's name, then its single free weapon
 	col_content_h := MENU_TEXT_LINE_HEIGHT + MENU_ICON_BUTTON_LINE_HEIGHT
 	panel_w := col_w * f32(family_count) + col_gap * f32(family_count - 1) + pad * 2
-	panel_h := pad * 2 + (MENU_THEME.font_size + 4) + MENU_THEME.gap + col_content_h
+	panel_h := pad * 2 + MENU_THEME.title_font_size + MENU_THEME.gap + col_content_h
 
 	rect := Rect{(game.window_width - panel_w) / 2, (game.window_height - panel_h) / 2, panel_w, panel_h}
 	anim := menu_element_anim(0, 0)
 	draw_menu_panel(rect, anim)
 
 	draw_text(
+		MENU_THEME.title_font,
 		"Choose a Weapon",
 		Vec2{rect.x + pad, rect.y + pad},
-		MENU_THEME.font_size + 4,
 		0,
 		menu_with_alpha(MENU_THEME.text, anim.alpha),
 	)
 
 	col_x := rect.x + pad
-	col_y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
+	col_y := rect.y + pad + MENU_THEME.title_font_size + MENU_THEME.gap
 
 	for family in Weapon_Family {
 		y := col_y
 		draw_text(
+			MENU_THEME.font,
 			weapon_family_display_name[family],
 			Vec2{col_x, y},
-			MENU_THEME.font_size,
 			0,
 			menu_with_alpha(MENU_THEME.text, anim.alpha),
 		)
@@ -981,7 +978,7 @@ draw_map_selection_ui :: proc() {
 	w: f32 = 360 // wide enough for "Clear <Map> to open" at MENU_THEME.font_size
 	h :=
 		pad * 2 +
-		(MENU_THEME.font_size + 4) +
+		MENU_THEME.title_font_size +
 		MENU_THEME.gap +
 		f32(len(order)) * MENU_ICON_BUTTON_LINE_HEIGHT +
 		f32(locked_count) * MENU_TEXT_LINE_HEIGHT
@@ -991,14 +988,14 @@ draw_map_selection_ui :: proc() {
 	draw_menu_panel(rect, anim)
 
 	draw_text(
+		MENU_THEME.title_font,
 		"Select a Map",
 		Vec2{rect.x + pad, rect.y + pad},
-		MENU_THEME.font_size + 4,
 		0,
 		menu_with_alpha(MENU_THEME.text, anim.alpha),
 	)
 
-	y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
+	y := rect.y + pad + MENU_THEME.title_font_size + MENU_THEME.gap
 	for name in order {
 		chosen := maps[name]
 		open := map_rung_open(name)
@@ -1080,7 +1077,7 @@ draw_run_end_ui :: proc() {
 	w: f32 = 320
 	h :=
 		pad * 2 +
-		(MENU_THEME.font_size + 4) +
+		MENU_THEME.title_font_size +
 		MENU_THEME.gap +
 		f32(line_count) * MENU_TEXT_LINE_HEIGHT +
 		MENU_THEME.gap +
@@ -1091,14 +1088,14 @@ draw_run_end_ui :: proc() {
 	draw_menu_panel(rect, anim)
 
 	draw_text(
+		MENU_THEME.title_font,
 		run_end_title(game.last_run_outcome),
 		Vec2{rect.x + pad, rect.y + pad},
-		MENU_THEME.font_size + 4,
 		0,
 		menu_with_alpha(MENU_THEME.text, anim.alpha),
 	)
 
-	y := rect.y + pad + (MENU_THEME.font_size + 4) + MENU_THEME.gap
+	y := rect.y + pad + MENU_THEME.title_font_size + MENU_THEME.gap
 	text_color := menu_with_alpha(MENU_THEME.text, anim.alpha)
 
 	// a receipt is read left-to-right as a sentence, so its glyphs stay
@@ -1106,7 +1103,7 @@ draw_run_end_ui :: proc() {
 	// the exception to the icon-above-label rule the browsable screens use
 	line :: proc(icon: Icon_Proc, text: string, x: f32, y: ^f32, color: Color, alpha: f32) {
 		text_x := draw_menu_inline_icon(icon, x, y^, nil, alpha)
-		draw_text(text, Vec2{text_x, y^}, MENU_THEME.font_size, 0, color)
+		draw_text(MENU_THEME.font, text, Vec2{text_x, y^}, 0, color)
 		y^ += MENU_TEXT_LINE_HEIGHT
 	}
 
@@ -1165,9 +1162,9 @@ draw_shop_ui :: proc() {
 	draw_menu_panel(rect, anim)
 
 	draw_text(
+		MENU_THEME.font,
 		fmt.tprintf("Shop - Gold: {}", game.player.gold),
 		Vec2{rect.x + pad, rect.y + pad},
-		MENU_THEME.font_size,
 		0,
 		menu_with_alpha(MENU_THEME.text, anim.alpha),
 	)
@@ -1209,7 +1206,7 @@ draw_shop_weapon_ladder :: proc(x, y, width: f32, anim: Menu_Element_Anim) {
 	cursor := y
 	text_color := menu_with_alpha(MENU_THEME.text, anim.alpha)
 
-	draw_text("Weapon Ladder", Vec2{x, cursor}, MENU_THEME.font_size, 0, text_color)
+	draw_text(MENU_THEME.font, "Weapon Ladder", Vec2{x, cursor}, 0, text_color)
 	cursor += MENU_TEXT_LINE_HEIGHT
 
 	// the equipped weapon's own glyph above its name - the same mark the
@@ -1279,7 +1276,7 @@ draw_shop_upgrade_block :: proc(header: string, gated: bool, x, y, width: f32, a
 	family := weapon_kind_family[game.player.weapon.kind]
 	cursor := y
 
-	draw_text(header, Vec2{x, cursor}, MENU_THEME.font_size, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
+	draw_text(MENU_THEME.font, header, Vec2{x, cursor}, 0, menu_with_alpha(MENU_THEME.text, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
 	for kind in Upgrade_Kind {
@@ -1315,9 +1312,7 @@ draw_shop_upgrade_row :: proc(kind: Upgrade_Kind, x, y, width: f32, anim: Menu_E
 
 	cursor = draw_menu_stacked_icon(upgrade_icons[kind], x, cursor, width, MENU_SHOP_ICON_SIZE, tint, anim.alpha)
 
-	// parens/slash aren't in the HUD font's glyph set (atlas.odin's
-	// LETTERS_IN_FONT) and render as "?" - brackets/hyphen are
-	label := fmt.tprintf("{} [{}-{}]", preset.display_name, stack, preset.max_stack)
+	label := fmt.tprintf("{} ({}/{})", preset.display_name, stack, preset.max_stack)
 	draw_menu_centered_text(label, x, cursor, width, menu_with_alpha(text_color, anim.alpha))
 	cursor += MENU_TEXT_LINE_HEIGHT
 
@@ -1340,7 +1335,6 @@ draw_shop_upgrade_row :: proc(kind: Upgrade_Kind, x, y, width: f32, anim: Menu_E
 
 // -- live Run-scoped meta-stats ---------------------------------------------
 
-HUD_COUNTER_FONT_SIZE :: 10
 HUD_COUNTER_MARGIN :: 10 // mirrors the top-left "Editing" text's margin
 
 // matches RESOURCE_BAR_ICON_SIZE - the Resource indicator's glyph slot is
@@ -1350,6 +1344,20 @@ HUD_COUNTER_ICON_SIZE :: 9
 HUD_COUNTER_ICON_GAP :: 3 // between a counter's glyph and its number
 HUD_COUNTER_GAP :: 10 // between counters
 
+// the counters draw 1:1 in screen space (no scaling camera - a Font is only
+// crisp at its bake size), so on a tall window the 8px glyphs of
+// Mini_Square_16 get lost. From this window height up the row steps to the
+// next baked size, Mini_Square_32, and doubles its icon and gaps with it.
+// Still no runtime scaling: it's a choice between two baked Fonts.
+HUD_COUNTER_LARGE_MIN_WINDOW_HEIGHT :: 900
+
+hud_counter_font :: proc() -> (font: Font, scale: f32) {
+	if game.window_height >= HUD_COUNTER_LARGE_MIN_WINDOW_HEIGHT {
+		return .Mini_Square_32, 2
+	}
+	return .Mini_Square_16, 1
+}
+
 // one top-right Run-scoped readout: a glyph and a bare number, no label.
 // The glyph carries what the words used to.
 Hud_Counter :: struct {
@@ -1358,7 +1366,7 @@ Hud_Counter :: struct {
 }
 
 // top-right Kills / Time / Gold readout, drawn every frame while Playing
-// (main.odin's game.ui_camera block). Reads the existing Run-scoped Player
+// in screen space (main.odin's draw_game). Reads the existing Run-scoped Player
 // fields directly - see CONTEXT.md's Run entry and the enemy-spawn-revamp
 // map's ticket 01 - the same total_kills/survival_seconds the Run End screen
 // and Spawn Trigger Kills_Reached/Time_Elapsed conditions use, plus the same
@@ -1389,33 +1397,31 @@ draw_hud_counters :: proc() {
 	// measured up front so the whole row can be right-aligned as a unit -
 	// otherwise a counter growing a digit would push the others sideways
 	// rather than the row growing leftward off its fixed right edge
+	font, scale := hud_counter_font()
+	icon_size := HUD_COUNTER_ICON_SIZE * scale
+	icon_gap := HUD_COUNTER_ICON_GAP * scale
+	gap := HUD_COUNTER_GAP * scale
+
 	text_widths: [len(counters)]f32
 	row_width: f32
 	for counter, i in counters {
-		text_widths[i] =
-			rl.MeasureTextEx(
-				font,
-				strings.clone_to_cstring(counter.text, context.temp_allocator),
-				HUD_COUNTER_FONT_SIZE,
-				0,
-			).x
-		row_width += HUD_COUNTER_ICON_SIZE + HUD_COUNTER_ICON_GAP + text_widths[i]
+		text_widths[i] = measure_text(font, counter.text).x
+		row_width += icon_size + icon_gap + text_widths[i]
 	}
-	row_width += HUD_COUNTER_GAP * f32(len(counters) - 1)
+	row_width += gap * f32(len(counters) - 1)
 
-	virtual_width := game.window_width / game.ui_camera.zoom
-	x := virtual_width - row_width - HUD_COUNTER_MARGIN
+	x := game.window_width - row_width - HUD_COUNTER_MARGIN
 	y: f32 = HUD_COUNTER_MARGIN
 
 	// glyphs centered against the text line's height, not their own, so they
 	// sit on the same optical baseline as the numbers beside them
-	icon_y := y + (HUD_COUNTER_FONT_SIZE - HUD_COUNTER_ICON_SIZE) / 2
+	icon_y := y + (f32(atlas_fonts[font].size) - icon_size) / 2
 
 	for counter, i in counters {
-		counter.icon(icon_frame_rect({x, icon_y, HUD_COUNTER_ICON_SIZE, HUD_COUNTER_ICON_SIZE}), nil, 1)
-		x += HUD_COUNTER_ICON_SIZE + HUD_COUNTER_ICON_GAP
+		counter.icon(icon_frame_rect({x, icon_y, icon_size, icon_size}), nil, 1)
+		x += icon_size + icon_gap
 
-		draw_text(counter.text, Vec2{x, y}, HUD_COUNTER_FONT_SIZE, 0, rl.WHITE)
-		x += text_widths[i] + HUD_COUNTER_GAP
+		draw_text(font, counter.text, Vec2{x, y}, 0, rl.WHITE)
+		x += text_widths[i] + gap
 	}
 }

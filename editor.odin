@@ -129,8 +129,7 @@ initialize_editor :: proc() {
 }
 
 editor_measure_text :: proc(text: string, font_size: i32) -> f32 {
-	c := strings.clone_to_cstring(text, context.temp_allocator)
-	return rl.MeasureTextEx(font, c, f32(font_size), 0).x
+	return measure_text(font_for_ui_size(font_size), text).x
 }
 
 // -- world interaction -------------------------------------------------------

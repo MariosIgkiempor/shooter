@@ -12,7 +12,6 @@ Vec2 :: rl.Vector2
 Vec2i :: [2]i32
 Rect :: rl.Rectangle
 
-PIXEL_WINDOW_HEIGHT :: 180
 
 // the inset bevel drawn inside a colliding tile, so walls read as solid
 // blocks rather than flat fills
@@ -67,7 +66,6 @@ game: struct {
 	window_height:          f32,
 	window_title:           cstring,
 	camera:                 Camera,
-	ui_camera:              Camera,
 	player:                 Player,
 
 	// Playing mode's live map state, instantiated (via clone_map) from the
@@ -1323,38 +1321,26 @@ draw_game :: proc() {
 		end_using_camera()
 	}
 
-	game.ui_camera = Camera {
-		zoom = game.window_height / PIXEL_WINDOW_HEIGHT,
+	// screen-space overlays, drawn 1:1 in window pixels like every Screen in
+	// hud.odin - not under a scaling camera. The old ui_camera (zoom =
+	// window_height / 180) resampled its 8px pixel-font glyphs by a fractional
+	// factor at any window height that wasn't a multiple of 180, which read as
+	// blur; a Font is only crisp drawn at its bake size.
+	switch game.program_mode {
+	case .Splash, .Main_Menu, .Run_Start, .Selecting:
+	// no-op: each Screen's own draw_*_ui (below, alongside the other
+	// modals) draws its full-screen content
+	case .Playing:
+		// Run-scoped meta-stats (CONTEXT.md's Run entry), not an entity's
+		// own Resource indicator (ADR-0011) - screen-space text is right
+		// for this, unlike the world-space indicators drawn above. Reads
+		// the same Player fields the Run End screen already shows
+		// (hud.odin's draw_run_end_ui) and Spawn Trigger Kills_Reached
+		// conditions check - no separate counter state.
+		draw_hud_counters()
+	case .Editing:
+		draw_text(.Mini_Square_16, "Editing", 10, 0, rl.ORANGE)
 	}
-
-	begin_using_camera(game.ui_camera)
-	{
-		switch game.program_mode {
-		case .Splash:
-		// no-op: draw_splash_ui (below, alongside the other modals) draws
-		// its own full-screen content
-		case .Main_Menu:
-		// no-op: draw_main_menu_ui (below, alongside the other modals)
-		// draws its own full-screen content
-		case .Run_Start:
-		// no-op: draw_run_start_ui (below, alongside the other modals)
-		// draws its own full-screen content
-		case .Selecting:
-		// no-op: draw_map_selection_ui (below, alongside the other modals)
-		// draws its own full-screen content
-		case .Playing:
-			// Run-scoped meta-stats (CONTEXT.md's Run entry), not an entity's
-			// own Resource indicator (ADR-0011) - screen-space text is right
-			// for this, unlike the world-space indicators drawn above. Reads
-			// the same Player fields the Run End screen already shows
-			// (hud.odin's draw_run_end_ui) and Spawn Trigger Kills_Reached
-			// conditions check - no separate counter state.
-			draw_hud_counters()
-		case .Editing:
-			draw_text("Editing", 10, 10, 0, rl.ORANGE)
-		}
-	}
-	end_using_camera()
 
 	// cleared here rather than inside each surface's own draw: a surface that
 	// isn't drawn this frame can't clear anything, so a panel closed (or an
