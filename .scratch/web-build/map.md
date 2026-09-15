@@ -1,0 +1,52 @@
+# Web build
+
+Label: wayfinder:map
+
+## Destination
+
+A spec and a set of locked decisions for a **browser build** of the game — the same Odin source compiled to WebAssembly through Emscripten against raylib's web backend, deployed to GitHub Pages, with the player's progress persisted in browser-local storage — such that nothing is left to decide before build sessions start. Shipping the build is a separate follow-on effort.
+
+The desktop binary stays primary and untouched in spirit: web is a second Target of one codebase, not a port.
+
+## Notes
+
+- **Decisions only.** Wayfinder's plan-don't-do default stands: tickets close decisions, they do not land the wasm build. Research tickets *do* capture findings as Markdown on a throwaway `research/<name>` branch; task tickets do the provisioning they name and nothing more.
+- Domain: see `CONTEXT.md`'s `## Language`. Grilling tickets call the Skill tool twice ("grilling" + "domain-modeling"); research tickets call "research"; prototype tickets call "prototype".
+- **Glossary terms this effort introduces**, to be written into `CONTEXT.md` by the ticket that first pins each one down (never restated here): **Target** — Desktop or Web, one source, two builds; **Save store** — where the save blob lives (a file on Desktop, browser storage on Web), the seam game code writes through; **Save point** — a game moment at which the save is written.
+- **Locked by charting** (the grilling that named the destination; not steps on the route, so not in Decisions so far):
+  - No backend, ever, for this map. Single-player progress on the player's own machine is correctly served by browser-local storage; the real risks are host-origin instability and the player wiping site data, mitigated by a stable origin (GitHub Pages) and an export/import of the save file — which is the same ~1.5 KB JSON blob desktop writes, so it doubles as desktop↔web save portability. Storage sits behind a seam so a backend could slot in later without touching game code.
+  - Everything `game_save.json` holds persists on web with identical semantics, mid-run Continue included (ADR-0013).
+  - Toolchain is Emscripten + raylib's web build; a hand-written WebGL/input layer is a different project.
+  - Keyboard + mouse, desktop browsers (Chrome, Firefox, Safari). No audio gate is needed — the game has no audio.
+  - Saves fire at explicit Save points on **both** Targets (the source of truth — today `save_game` runs only at process exit, `main.odin:184`, which a browser tab never reaches), plus a web-only `visibilitychange`/`beforeunload` hook as belt-and-braces.
+  - Escape stops being raylib's exit key on both Targets (`SetExitKey(.KEY_NULL)`); window close remains on desktop.
+  - The **editor is compiled out on web**. The **F8 debug panel ships on web** — it does no disk I/O (`debug.odin`); strike this line if you disagree.
+  - The canvas fills the browser viewport; the saved `window_width`/`window_height` is ignored on web.
+  - Deploy is GitHub Actions → Pages on push to `main`.
+  - Save export/import lives in the main menu; lower priority than everything above.
+- **Audit facts** (portability sweep, 2026-09-14) tickets lean on: `core:os` is used at `main.odin:190,329` (save/load), `tuning.odin:163,176`, `map.odin:186,292`, `editor.odin:862`, `enemy_presets_source.odin:26`, and indirectly by `logger.odin:7`; no `core:thread`/`core:time`/`core:sync` in game code. Assets are already embedded (`#load` of `data/atlas.png` and `data/shaders/blur.fs` in `renderer.odin`; maps and enemy presets are generated source; the font is rasterised into the atlas) — only `game_save.json` and `tuning.json` (currently `{}`) are runtime reads. The one shader is `#version 330`; the menu blur uses two render textures and scissor mode. `main.odin:173-185` already splits init/update/draw/deinit cleanly. Nothing is gated by `when ODIN_OS`, build tags or `-define` yet. Tests run with `odin test . -define:ODIN_TEST_THREADS=1`, desktop only. Two blockers surfaced by Web toolchain recipe: `core:testing` does not compile on `js_wasm32` and `odin build` compiles every `*_test.odin`, so all 29 game test files plus `vendor/ui`'s two need `#+build !js`; and the one remaining submodule pin (`vendor/ui`; `vendor/atlas-builder` was vendored into the tree on 2026-09-15) is a commit that exists only in the main checkout's `.git/modules`, not on its remote — `git submodule update --init` fails in a fresh worktree and will fail in CI until it is pushed.
+- `vendor/ui` is a git submodule and may be empty in a fresh worktree — `git submodule update --init` before building. (`vendor/atlas-builder` is plain vendored source since 2026-09-15.)
+
+## Decisions so far
+
+<!-- one line per closed ticket: gist, then the link for the detail the ticket holds -->
+
+- [Web toolchain recipe](issues/01-web-toolchain-recipe.md): **`-target:js_wasm32 -build-mode:obj` against the raylib 5.5 `libraylib.a` Odin already ships in `vendor/raylib/wasm/`, linked by `emcc -sUSE_GLFW=3` with no ASYNCIFY and no preload** — not `freestanding_wasm32` (nil temp allocator, no console logger, RNG panics). The shell page is ours (`--shell-file`); it drives `main_start`/`main_update`/`main_end` exports with `requestAnimationFrame`, so `main` moves to a `#+build !js` file and `program_should_exit` is false on web. `main_start` must install an Emscripten-`malloc` allocator before the temp allocator. Save-store bridge is a bare `foreign {}` of `proc "c"`s in a `--js-library`. Only `blur.fs` changes (a `#version 100` twin); render textures, scissor and canvas resize already work. Proven by a throwaway compile of the whole game to a wasm object; the `emcc` link half is unexecuted here. Findings on `research/web-toolchain`.
+- [Browser save store](issues/02-browser-save-store.md): **`localStorage`, one namespaced key `shooter:game_save:v1`, the JSON blob as a string behind the Save-store seam** — four `contextless` foreign procs with `core:sys/wasm/js`'s `(ptr, len)`-in / caller-buffer-out convention; belt-and-braces hook is `visibilitychange`→`hidden` + `pagehide` (never `beforeunload`), which only a synchronous store can honour. Safari ITP wipes *all* script-writable storage after 7 days without a tap, so IndexedDB buys nothing there and export/import is the real mitigation; `<owner>.github.io` is one shared origin, hence the namespaced key; `core:os` panics on `js_wasm32`, so IDBFS's premise is void. Findings on `research/browser-save-store`.
+- [Save points](issues/03-save-points.md): **A Save point is a Screen change** — `apply_screen_kind`, the existing single writer, saves the whole `game` on both Targets after applying the change; purchases ride along with the panel close, no timer. Desktop's process-exit save stays as its belt-and-braces, the twin of Web's unload hook. Mid-Run Continue is promised across a clean exit only. `run_started` flips in `end_run` at settle (tightening ADR-0013) so a save at Run End never persists a Continue-able dead Run. `save_game` returns `bool`; Web's failure UX joins the failed-read fog. **Save point** and **Save store** written into `CONTEXT.md`.
+- [Target seam and gating](issues/04-target-seam-and-gating.md): **Odin's own `#+build js`/`!js` file tags and `when ODIN_OS == .JS`, no custom define; siblings named `*_desktop.odin`/`*_web.odin`.** The editor is compiled out by a null editor (`editor_null.odin` no-ops the six procs `main.odin` calls; one `when` on F1); every other `core:os` use collapses into `desktop_io.odin`; `tuning.json` ships on web via `#load` through a `tuning_source` pair; the Save store is `save_store_read -> (data, Ok|Absent|Failed)` / `save_store_write -> bool`. Test files carry `#+build !js`, guarded by a grep. `build.sh` stays the one script — builds by default, `--run` to play, positional `web` target — and CI calls `./build.sh web`. **Target** written into `CONTEXT.md`.
+
+## Not yet specified
+
+- **Verifying a web build** — what "it works" means: a manual smoke in three browsers, a headless-browser check in CI, or both. Can't be phrased until the toolchain and the CI shape are known.
+- **Save failures on web** (read *and* write) — ADR-0028's fail-the-load posture resets progress and says why in the log, and Save points made `save_game` return `bool` with a write failure Desktop only logs; a browser player never sees a log. Whether web needs a visible "your save couldn't be read / couldn't be saved" state, and what it offers — the natural answer in both directions is export the blob, so the shape follows the Save export/import prototype. Browser save store adds: an *empty* store (Safari's 7-day wipe, or a first launch before Splash→Main Menu writes the default save) must read as "no save yet", never as an error — only an unparseable blob is a failure.
+- **Desktop side of export/import** — raylib has no file dialog; what the same main-menu buttons do on Desktop. Shape follows the Save export/import prototype.
+
+## Out of scope
+
+- **Backend, cloud saves, leaderboards, anti-cheat** — a fresh effort if ever wanted; this map's storage seam is the only concession to it.
+- **Touch and gamepad input** — twin-stick on touch is its own design effort.
+- **The editor on web** — reversed during charting once its three write paths (map JSON, tuning JSON, `enemy_presets.odin` source) were on the table: a browser-side write can't feed the build, and giving it a runtime data format is exactly what ADR-0027 avoids.
+- **itch.io or any second host** — a distribution question for after the Pages build exists; its shared-origin storage caveats would reopen the save-store decision.
+- **Audio** — none exists to port.
+- **Continue re-firing passed Spawn Triggers** — a pre-existing Desktop bug in Continue's resume (latches reset while the clock is restored), surfaced by Save points; independent of the web build, so filed as its own issue: [Continue re-fires every passed Spawn Trigger at once](../continue-trigger-burst/issues/01-continue-refires-passed-triggers.md).

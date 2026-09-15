@@ -1,0 +1,76 @@
+# Builds the Web Target and deploys it to GitHub Pages on every push to main.
+# Decided by the Web build map's "Pages deploy pipeline" ticket
+# (.scratch/web-build/issues/05-pages-deploy-pipeline.md); the build entry
+# it calls, `./build.sh web`, is "Target seam and gating"'s.
+#
+# Pins: Odin is the exact release this repo builds with locally
+# (`odin version` = dev-2026-05-nightly:ea5175d, which *is* the dev-2026-05
+# tag), chosen because its vendor/raylib/wasm/libraylib.a matches its 5.5
+# bindings - dev-2026-09 already ships 6.0 bindings as libraylib.web.a, so
+# bumping Odin here means re-checking "Web toolchain recipe" first.
+name: Deploy web build to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# one deploy at a time, and a newer push supersedes an in-flight one
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ODIN_RELEASE: dev-2026-05
+  EMSDK_VERSION: 6.0.9
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # vendor/ui - its pin must exist on its remote, reachable over
+          # https, or this step fails (see the ticket's checklist)
+          submodules: true
+
+      - name: Install Odin ${{ env.ODIN_RELEASE }}
+        uses: laytan/setup-odin@v2
+        with:
+          release: ${{ env.ODIN_RELEASE }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the pinned Odin ships raylib's wasm lib
+        run: |
+          odin version
+          test -f "$(odin root)/vendor/raylib/wasm/libraylib.a" || {
+            echo "::error::$(odin root)/vendor/raylib/wasm/libraylib.a is missing - the pinned Odin release no longer matches Web toolchain recipe"
+            exit 1
+          }
+
+      - name: Install Emscripten ${{ env.EMSDK_VERSION }}
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+
+      - name: Build the Web Target
+        run: ./build.sh web
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
