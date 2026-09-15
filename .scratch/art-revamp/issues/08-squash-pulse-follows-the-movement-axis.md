@@ -1,0 +1,22 @@
+Type: grilling
+Status: resolved
+
+## Question
+
+Ticket [07](07-squash-pulse-on-movement-transitions.md)'s pulse snaps every body to `{scale_x = 1.15, scale_y = 0.85}` whichever way it moves — wide and short, a "landing" shape even for a body setting off sideways — and at 12/s it reads as a flicker. What should the pulse look like, oriented to the body's movement, and how fast?
+
+## Answer
+
+**The pulse is oriented to the movement axis, and its two edges are distinct.** A body that *starts* moving stretches along the axis it set off on (`ACTOR_PULSE_ALONG = 1.15`) and thins across it (`ACTOR_PULSE_ACROSS = 0.85`) — it leans into the run. A body that *stops* gets the swap: thin along the axis it was travelling, wide across it — a plant. Both then `exp_approach` back to rest at `ACTOR_SQUASH_RATE`, now **6/s** (≈0.5 s to settle, from 12/s ≈0.25 s). The F8 knobs are `player.pulse_along`, `player.pulse_across`, `player.squash_rate`; the along/across pair stays independent (not volume-preserving).
+
+**The axis is the frame's actual displacement**, normalised, remembered on the body (`Actor_Squash.axis`) every moving frame so the stop edge — where displacement is zero — squashes along the direction the body was last going. A turn mid-run re-aims the axis without re-peaking. Before a body has ever moved the axis is `{1,0}`, which for a rested body changes nothing.
+
+**Drawn as an axis scale with no net rotation, not a rotated rectangle.** Every body is a square, so "rotate the rect to the movement angle and scale it" leaves a rested body a *diamond* until the rotation snaps back — a visible pop at whatever threshold is chosen. Instead the four corners are transformed by `R(axis)·diag(along, across)·R(axis)ᵀ` (`actor_squash_matrix`) about the body's centre and drawn as a quad (`draw_quad`, two winding-safe triangles — `icon_tri_pts`'s logic promoted to `draw_triangle` in renderer.odin). At rest that matrix is exactly the identity for any axis; at 45° a stretched square is a rhombus elongated along the diagonal. Scaling is about the **centre** rather than the feet anchor: an off-axis scale about the feet would swing the body sideways about its base; on a 24px body the feet drift ±~2px, imperceptible. The collision rect is, as in 07, untouched.
+
+Diagonal alternatives rejected: decomposing along/across onto x/y without rotation collapses to a near-uniform scale at exact diagonals (the pulse vanishes); snapping to the dominant axis was the fallback if a rotated player looked wrong, moot now nothing rotates.
+
+`Actor_Squash` replaces the `squash: Vec2` + `was_moving: bool` pair on Player and Enemy; `actor_squash_at_rest()` is the stamp where bodies are made. `actor_squash_test.odin` pins the two edges' orientation, the axis following a turn, the stop edge using the remembered axis, no-re-peak decay, and the matrix (identity at rest for any axis, x/y for horizontal/vertical, the diagonal scaled without rotation).
+
+## Comments
+
+- **Jitter on pinned bodies, fixed.** In play the pulse fired every frame or two on enemies stuck against a wall. Recording a wall-pinned crowd headlessly (16 bodies, 20 s) showed why: a pinned body is shoved by separation and pulled back by the field at 15–40 px/s in runs of up to 11 frames — real speed, no net travel — so any per-frame displacement verdict flickered, and 42 of its 49 edges came with under 4 px of movement. Three gates now sit on the verdict (`update_actor_squash`): a speed floor (`ACTOR_MOVE_MIN_SPEED` 8 px/s, replacing the 0.01 px epsilon), a settle time before the settled verdict flips (`ACTOR_MOVE_SETTLE_SECONDS` 0.05), and — the one that mattered — a **net-travel gate**: the start pulse waits until the body has netted `ACTOR_PULSE_TRAVEL` (6 px) since leaving rest, and a stint that never got that far ends with no stop pulse either. Net rather than path length so a shove and the shove back cancel. Low-pass-filtering the velocity vector and net-travel-over-a-window detectors were both tried offline on the recording and were *worse* (hundreds of edges: pinned bodies hover around any speed threshold). Result on the same recording: 11 pulses across the 16 pinned bodies in 14 s (worst body 2), each a real ≥6 px shuffle; player start lag 3 frames, stop 2. The axis is also eased toward the frame's direction (`ACTOR_SQUASH_AXIS_RATE` 15/s) rather than snapped, so a jostle mid-pulse swings the body a little instead of flipping it. All four are F8 tunables.

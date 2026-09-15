@@ -256,7 +256,7 @@ test_update_enemies_lets_a_dash_through_melees_hold_and_ends_it_on_a_wall :: pro
 		&game.enemies,
 		Enemy {
 			rect = {24, 16, 0, 0},
-			squash = {1, 1},
+			squash = actor_squash_at_rest(),
 			movement = charger,
 			attack = Melee{attack_damage = 10, attack_range = 10, attack_cooldown = 1},
 			max_health = 60,

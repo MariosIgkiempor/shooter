@@ -38,9 +38,9 @@ Tunable :: struct {
 	// what does, and it is load-bearing rather than cosmetic.
 	slug:    string,
 	group:   Tuning_Group,
-	// shown in the editor. data/font.ttf only bakes A-Za-z0-9 and ?!&.,_:[]-+
-	// (see atlas_glyphs) - anything else, notably ( ) / % *, draws as `?`.
-	// tuning_test.odin asserts every label and group name stays inside that set.
+	// shown in the editor. Every Font bakes only LETTERS_IN_FONT (atlas.odin)
+	// - anything else, notably * and #, draws as `?`. tuning_test.odin asserts
+	// every label and group name stays inside that set.
 	label:   string,
 	value:   Tunable_Value,
 	// hand-authored, per *field* rather than per field-per-kind: every weapon's
@@ -533,8 +533,12 @@ register_player_tunables :: proc() {
 	register_tunable(.Player, "player.actor_size_x", "Actor Width", &ACTOR_SIZE.x, 4, 64)
 	register_tunable(.Player, "player.actor_size_y", "Actor Height", &ACTOR_SIZE.y, 4, 64)
 	register_tunable(.Player, "player.squash_rate", "Squash Rate", &ACTOR_SQUASH_RATE, 1, 40)
-	register_tunable(.Player, "player.moving_scale_x", "Moving Scale X", &ACTOR_MOVING_SCALE.x, 0.5, 2)
-	register_tunable(.Player, "player.moving_scale_y", "Moving Scale Y", &ACTOR_MOVING_SCALE.y, 0.5, 2)
+	register_tunable(.Player, "player.pulse_along", "Pulse Along", &ACTOR_PULSE_ALONG, 0.5, 2)
+	register_tunable(.Player, "player.pulse_across", "Pulse Across", &ACTOR_PULSE_ACROSS, 0.5, 2)
+	register_tunable(.Player, "player.move_min_speed", "Pulse Min Speed", &ACTOR_MOVE_MIN_SPEED, 0, 40)
+	register_tunable(.Player, "player.move_settle_seconds", "Pulse Settle Seconds", &ACTOR_MOVE_SETTLE_SECONDS, 0, 0.5)
+	register_tunable(.Player, "player.pulse_travel", "Pulse Travel", &ACTOR_PULSE_TRAVEL, 0, 32)
+	register_tunable(.Player, "player.squash_axis_rate", "Pulse Axis Rate", &ACTOR_SQUASH_AXIS_RATE, 1, 60)
 
 	register_tunable(.Pickups, "pickup.drop_chance", "Drop Chance", &PICKUP_DROP_CHANCE, 0, 1)
 	register_tunable(.Pickups, "pickup.magnet_radius", "Magnet Radius", &PICKUP_MAGNET_RADIUS, 0, 200)
@@ -768,7 +772,6 @@ register_feel_tunables :: proc() {
 
 	register_tunable(.Damage_Numbers, "damage_number.lifetime", "Lifetime", &DAMAGE_NUMBER_LIFETIME, 0.05, 4)
 	register_tunable(.Damage_Numbers, "damage_number.rise_speed", "Rise Speed", &DAMAGE_NUMBER_RISE_SPEED, 0, 200)
-	register_tunable(.Damage_Numbers, "damage_number.font_size", "Font Size", &DAMAGE_NUMBER_FONT_SIZE, 4, 40)
 
 	register_tunable(.World_Render, "world.wall_bevel_inset", "Wall Bevel Inset", &TILEMAP_WALL_BEVEL_INSET, 0, 8)
 	register_tunable(.World_Render, "world.wall_bevel_thickness", "Wall Bevel Thickness", &TILEMAP_WALL_BEVEL_THICKNESS, 0, 8)

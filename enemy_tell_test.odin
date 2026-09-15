@@ -439,7 +439,7 @@ test_update_enemies_shakes_on_a_tell_resolve_and_damages_only_a_player_still_ins
 		game.player.rect = {30, 0, 0, 0}
 		game.player.health = 100
 		game.screen_shake_trauma = 0
-		append(&game.enemies, Enemy{rect = {0, 0, 0, 0}, squash = {1, 1}, attack = a_tell(28, 40, 0.3, 1, damage = 18)})
+		append(&game.enemies, Enemy{rect = {0, 0, 0, 0}, squash = actor_squash_at_rest(), attack = a_tell(28, 40, 0.3, 1, damage = 18)})
 
 		update_enemies(STEP) // starts the Tell, locks the disc on {30, 0}
 		if !player_stays {
@@ -473,7 +473,7 @@ test_update_enemies_feeds_a_bodys_health_fraction_to_its_tell :: proc(t: ^testin
 	}
 	game.enemies = {}
 	game.player.rect = {300, 0, 0, 0}
-	append(&game.enemies, Enemy{rect = {0, 0, 0, 0}, squash = {1, 1}, max_health = 100, health = 30, attack = a_phased_tell()})
+	append(&game.enemies, Enemy{rect = {0, 0, 0, 0}, squash = actor_squash_at_rest(), max_health = 100, health = 30, attack = a_phased_tell()})
 
 	update_enemies(STEP)
 

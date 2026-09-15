@@ -152,11 +152,7 @@ icon_triangle_front_facing :: proc(a, b, c: Vec2) -> bool {
 
 @(private = "file")
 icon_tri_pts :: proc(a, b, c: Vec2, color: Color) {
-	if icon_triangle_front_facing(a, b, c) {
-		rl.DrawTriangle(a, b, c, color)
-	} else {
-		rl.DrawTriangle(a, c, b, color)
-	}
+	draw_triangle(a, b, c, color)
 }
 
 // a unit-space quad, given its four corners in order
