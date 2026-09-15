@@ -53,6 +53,13 @@ jobs:
             exit 1
           }
 
+      # the atlas builder (a native `odin run`) imports vendor:stb/image,
+      # rect_pack and truetype; the Linux release tarball ships their C
+      # sources but not the compiled .a files, so the first CI run died at
+      # `#panic("Could not find the compiled STB libraries")`
+      - name: Build Odin's vendored STB libraries
+        run: make -C "$(odin root)/vendor/stb/src"
+
       - name: Install Emscripten ${{ env.EMSDK_VERSION }}
         uses: mymindstorm/setup-emsdk@v14
         with:
