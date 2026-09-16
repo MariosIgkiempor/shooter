@@ -37,3 +37,7 @@ Consequences worth knowing before the build session:
 - Files this touches for the record: `main.odin:8,190,329,373,408-435`, `map.odin:4,186,292`, `tuning.odin:6,163,176`, `enemy_presets_source.odin:4,26`, `editor.odin:6,862`, `build.sh`, every `*_test.odin`.
 
 Records **Target** in `CONTEXT.md` (**Save store** was written by Save points).
+
+## Comments
+
+- 2026-09-16 — Superseded in part by [Save failures on web](09-save-failures-on-web.md): the seam gains a `Save_Slot` parameter (`Current` / `Rejected`) on read, write and a now-needed `save_store_delete`. Everything else in the answer stands.

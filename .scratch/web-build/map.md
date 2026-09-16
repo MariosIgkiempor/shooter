@@ -1,6 +1,7 @@
 # Web build
 
 Label: wayfinder:map
+Status: complete — every ticket resolved and the fog empty as of 2026-09-16; the build sessions start from Decisions so far.
 
 ## Destination
 
@@ -39,6 +40,7 @@ The desktop binary stays primary and untouched in spirit: web is a second Target
 - [Shell page and loading](issues/06-shell-page-and-loading.md): **The page is the game's splash tile at `cover` with a real progress bar; the canvas fades in over it.** Progress comes from our own `instantiateWasm` fetch stream against `Content-Length`, clamped at 100% (Pages gzips) with an indeterminate fallback. WebGL failure is a menu-styled panel over the splash with approved copy, probed before the wasm is fetched. Nothing else on the page. Prototype on `prototype/shell-page`.
 - [Save export/import](issues/07-save-export-import.md): **Four small buttons under *Start New Run* in the navigation panel — *Export save* / *Import save…* (Web only: Blob download, `<input type=file>`) and *Copy save* / *Paste save…* (both Targets: raylib clipboard on Desktop, a paste box on Web).** Import parses into a scratch struct, shows a now-vs-file table before replacing, and a rejected file shows ADR-0028's reason verbatim with the current save untouched. Desktop hides the file pair — `data/game_save.json` is already the file. Prototype on `prototype/shell-page`.
 - [Verifying a web build](issues/08-verifying-a-web-build.md): **A Playwright smoke in headless Chrome (the runner's own, SwiftShader for WebGL) gates the deploy** — four assertions: no console errors, the shell reaches `data-state="ready"` in 15 s, one keypress puts `shooter:game_save:v1` in `localStorage` (Save store + Save points end to end), the canvas isn't uniform. Lives in `web/smoke/`, run as its own workflow step, not in `build.sh`. Firefox and Safari are a manual checklist recorded in the ticket, Safari being where the file-picker question gets answered.
+- [Save failures on web](issues/09-save-failures-on-web.md): **A failed read moves the blob to a second Save-store slot (`Save_Slot.Rejected`) before the default save lands, and the next Main Menu shows a modal with the reason and Export old save / Discard; a failed write shows a red "Couldn't save — export a copy" line on the navigation panel until a write succeeds.** Both Targets, same code; the seam gains a slot parameter and its delete. **Rejected save** written into `CONTEXT.md`.
 
 ## Not yet specified
 

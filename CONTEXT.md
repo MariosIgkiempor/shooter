@@ -98,6 +98,10 @@ _Avoid_: Autosave (implies a timer), checkpoint (implies a place in a Map), save
 Where the save blob lives and the seam game code writes it through — a file on Desktop, browser-local storage on Web. The blob is the same on both, so a save exported from one Target loads on the other. See [Browser save store](.scratch/web-build/issues/02-browser-save-store.md).
 _Avoid_: Backend, cloud save, save file (Desktop's implementation, not the seam), storage (too generic)
 
+**Rejected save**:
+A save the **Save store** held that this build could not read — malformed, or naming an **Identity string** no case carries — moved to the store's second slot the moment the load fails, and kept there until the player exports or discards it from the Main Menu. Distinct from an *absent* save, which is simply "no save yet" and never an error. See [Save failures on web](.scratch/web-build/issues/09-save-failures-on-web.md).
+_Avoid_: Corrupt save (malformed is only one of the two causes), backup (it is not a copy of anything current), stale save
+
 **Target**:
 One of the two builds of the one codebase: **Desktop** (the native binary, with the editor) or **Web** (the same source compiled to WebAssembly and run in a browser, without it). Game code is Target-blind; the few things that differ — the **Save store**, the editor's presence, how the main loop is driven — sit behind a proc with one implementation per Target, and the Target is chosen by the compiler's own target, never by a flag of ours. See [Target seam and gating](.scratch/web-build/issues/04-target-seam-and-gating.md).
 _Avoid_: Platform (raylib's word for the OS/backend underneath a Target, and the name of `platform.odin`, which wraps input rather than the Target), port (implies a second codebase), build (ambiguous with the artifact)

@@ -29,3 +29,7 @@ Locked:
 7. **Copy approved as written** in the prototype for the confirm and rejected modals and the four button labels.
 
 Consequences: the Save-store seam (Target seam and gating) gains nothing — export/import read and write the same blob through `save_store_read`/`save_store_write`; the two file procs and the two clipboard procs are Web-Target foreign procs beside them, and `save_store_delete` is still not needed. The scratch-struct parse (5) is new machinery `load_game` doesn't have today and is the one non-trivial piece of the build.
+
+## Comments
+
+- 2026-09-16 — [Save failures on web](09-save-failures-on-web.md) adds the *Export old save* / *Discard* modal that reuses this ticket's rejected-import shape, and brings `save_store_delete` back for the `Rejected` slot.
